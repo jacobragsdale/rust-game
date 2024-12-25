@@ -27,22 +27,20 @@ fn main() {
 }
 
 struct MyGame {
-    player: Player,
-    npc: Player
+    player: Player
 }
 
 impl MyGame {
     pub fn new(_ctx: &mut Context) -> MyGame {
         // Load/create resources such as entities
         MyGame {
-            player: Player::new(Point2 { x: 0.0, y: 0.0, }, 200.0, Vector2 { x: 0.0, y: 0.0, }),
-            npc: Player::new(Point2 { x: 1000.0, y: 880.0, }, 200.0, Vector2 { x: 0.0, y: 0.0, })
+            player: Player::new(Point2 { x: 0.0, y: 0.0, }, 200.0, Vector2 { x: 0.0, y: 0.0, })
         }
     }
 
     fn handle_player_input(&mut self, _ctx: &mut Context) {
         self.player.apply_gravity();
-        self.npc.apply_gravity();
+        
         // Jump
         if _ctx.keyboard.is_key_pressed(VirtualKeyCode::Up) && !_ctx.keyboard.is_key_pressed(VirtualKeyCode::Down)  {
             self.player.jump();
@@ -68,8 +66,7 @@ impl MyGame {
 impl EventHandler for MyGame {
 
     fn update(&mut self, _ctx: &mut Context) -> GameResult {
-        self.player.update_position(_ctx, &self.npc);
-        // self.npc.update_position(_ctx, &self.player);
+        self.player.update_position(_ctx);
         self.handle_player_input(_ctx);
 
         Ok(())
@@ -78,7 +75,6 @@ impl EventHandler for MyGame {
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::BLACK);
         self.player.draw(ctx, &mut canvas)?;
-        self.npc.draw(ctx, &mut canvas)?;
 
         canvas.finish(ctx)
     }

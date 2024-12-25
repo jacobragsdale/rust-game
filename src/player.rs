@@ -29,9 +29,9 @@ impl Player {
             entity: graphics::Rect::new(position.x, position.y, size, size),
             color: Color::BLUE,
             max_speed: 20.0,
-            acceleration: 2.0,
+            acceleration: 20.0,
             jump_speed: 40.0,
-            gravity: 2.5,
+            gravity: 2.0,
             friction: 1.0,
             grounded_time: Duration::new(0, 0),
             jump_delay: Duration::new(0, 100_000_000),
@@ -40,12 +40,12 @@ impl Player {
         }
     }
 
-    pub fn update_position(&mut self, ctx: &mut Context, _other: &Player) {
-        let delta_time = ctx.time.delta().as_secs_f32();
+    pub fn update_position(&mut self, ctx: &mut Context) {
+        let delta_time = ctx.time.delta();
         
         // Update position based on velocity
-        self.position.x += self.velocity.x * delta_time;
-        self.position.y += self.velocity.y * delta_time;
+        self.position.x += self.velocity.x;
+        self.position.y += self.velocity.y;
 
         // Update the entity rectangle position
         self.entity.x = self.position.x;
@@ -58,12 +58,20 @@ impl Player {
             self.is_grounded = true;
         }
         
+        if self.is_grounded {
+            self.grounded_time += delta_time;
+        }
+        
         if self.position.x < 0.0 {
             self.position.x = 0.0;
             self.velocity.x = 0.0;
         } else if self.position.x > 1920.0 - self.size {
             self.position.x = 1920.0 - self.size;
             self.velocity.x = 0.0;
+        }
+        
+        if self.grounded_time >= Duration::new(0, 250_000_000) {
+            self.can_jump = true;
         }
     }
 
