@@ -1,16 +1,21 @@
+mod player;
+mod config;
 mod entity;
 
 use ggez::{Context, ContextBuilder, GameResult};
 use ggez::graphics::{self, Color};
 use ggez::event::{self, EventHandler};
 use ggez::mint::{Point2, Vector2};
-use crate::entity::Entity;
+use ggez::winit::event::VirtualKeyCode;
+use crate::player::Player;
 
 fn main() {
+    let conf = config::Config::new("config.toml");
     // Make a Context.
-    let (mut ctx, event_loop) = ContextBuilder::new("my_game", "Cool Game Author")
-        .build()
-        .expect("aieee, could not create ggez context!");
+    let (mut ctx, event_loop) = ContextBuilder::new("jacobs_game", "Jacob Ragsdale")
+        .window_setup(ggez::conf::WindowSetup::default().title("Jacob's game"))
+        .window_mode(ggez::conf::WindowMode::default().dimensions(1920.0, 1080.0))
+        .build().expect("Failed to create game context");
 
     // Create an instance of your event handler.
     // Usually, you should provide it with the Context object to
@@ -22,40 +27,58 @@ fn main() {
 }
 
 struct MyGame {
-    // Your state here...
-    entity: Entity
+    player: Player,
+    npc: Player
 }
 
 impl MyGame {
     pub fn new(_ctx: &mut Context) -> MyGame {
-        // Load/create resources such as images here.
+        // Load/create resources such as entities
         MyGame {
-            entity: Entity::new(Point2 { x: 0.0, y: 0.0, }, 200.0, Vector2 { x: 2.0, y: 2.0, })
+            player: Player::new(Point2 { x: 0.0, y: 0.0, }, 200.0, Vector2 { x: 0.0, y: 0.0, }),
+            npc: Player::new(Point2 { x: 1000.0, y: 880.0, }, 200.0, Vector2 { x: 0.0, y: 0.0, })
         }
     }
 
     fn handle_player_input(&mut self, _ctx: &mut Context) {
-        let currently_pressed = _ctx.keyboard.pressed_keys();
-        if currently_pressed.len() > 0 {
-            let x = 1;
+        self.player.apply_gravity();
+        self.npc.apply_gravity();
+        // Jump
+        if _ctx.keyboard.is_key_pressed(VirtualKeyCode::Up) && !_ctx.keyboard.is_key_pressed(VirtualKeyCode::Down)  {
+            self.player.jump();
         }
-        for key in currently_pressed {
 
+        // Move left and right
+        if _ctx.keyboard.is_key_pressed(VirtualKeyCode::Left) && !_ctx.keyboard.is_key_pressed(VirtualKeyCode::Right) {
+            self.player.move_left();
+        }
+        else if _ctx.keyboard.is_key_pressed(VirtualKeyCode::Right) && !_ctx.keyboard.is_key_pressed(VirtualKeyCode::Left) {
+            self.player.move_right();
+        } else {
+            self.player.apply_friction();
+        }
+
+        // Change colors
+        if _ctx.keyboard.is_key_just_pressed(VirtualKeyCode::Space){
+            self.player.update_color();
         }
     }
 }
 
 impl EventHandler for MyGame {
+
     fn update(&mut self, _ctx: &mut Context) -> GameResult {
-        // Update code here...
-        self.entity.update_position();
+        self.player.update_position(_ctx, &self.npc);
+        // self.npc.update_position(_ctx, &self.player);
         self.handle_player_input(_ctx);
+
         Ok(())
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        let mut canvas = graphics::Canvas::from_frame(ctx, Color::WHITE);
-        self.entity.draw(&mut canvas).unwrap();
+        let mut canvas = graphics::Canvas::from_frame(ctx, Color::BLACK);
+        self.player.draw(ctx, &mut canvas)?;
+        self.npc.draw(ctx, &mut canvas)?;
 
         canvas.finish(ctx)
     }
