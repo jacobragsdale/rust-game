@@ -2,11 +2,12 @@ use std::time::Duration;
 use ggez::{self, Context, GameResult, graphics};
 use ggez::graphics::{Canvas, Color};
 use ggez::mint::{Point2, Vector2};
+use ggez::winit::event::VirtualKeyCode;
 
 pub(super) struct Player {
-    position: Point2<f32>,
-    size: f32,
     entity: graphics::Rect,
+    size: f32,
+    position: Point2<f32>,
     velocity: Vector2<f32>,
     color: Color,
     max_speed: f32,
@@ -16,18 +17,34 @@ pub(super) struct Player {
     friction: f32,
     grounded_time: Duration,
     jump_delay: Duration,
+    color_delay: Duration,
+    color_time: Duration,
     can_jump: bool,
-    is_grounded: bool
+    is_grounded: bool,
+    colors: Vec<Color>,
 }
 
 impl Player {
-    pub fn new(position: Point2<f32>, size: f32, velocity: Vector2<f32>) -> Self{
+    pub fn new() -> Self{
+        let colors = vec![
+            Color::BLUE,
+            Color::RED,
+            Color::YELLOW,
+            Color::GREEN,
+            Color::MAGENTA,
+            Color::CYAN,
+            Color::WHITE,
+        ];
+        let position = Point2{ x: 0.0, y: 0.0, };
+        let velocity = Vector2{ x: 0.0, y: 0.0 };
+        let entity = graphics::Rect::new(0.0, 0.0, 10.0, 10.0);
+        
         Player {
+            entity,
             position,
             velocity,
-            size,
-            entity: graphics::Rect::new(position.x, position.y, size, size),
-            color: Color::BLUE,
+            size: 100.0,
+            color: colors[0],
             max_speed: 20.0,
             acceleration: 20.0,
             jump_speed: 40.0,
@@ -35,9 +52,36 @@ impl Player {
             friction: 1.0,
             grounded_time: Duration::new(0, 0),
             jump_delay: Duration::new(0, 100_000_000),
+            color_delay: Duration::new(0, 100_000_000),
+            color_time: Duration::new(0, 0),
             can_jump: false,
-            is_grounded: false
+            is_grounded: false,
+            colors
         }
+    }
+    
+    pub fn handle_player_input(&mut self, ctx: &mut Context) {
+        if ctx.keyboard.is_key_pressed(VirtualKeyCode::Up) && !ctx.keyboard.is_key_pressed(VirtualKeyCode::Down)  {
+            self.jump();
+        }
+        // Move left and right
+        if ctx.keyboard.is_key_pressed(VirtualKeyCode::Left) && !ctx.keyboard.is_key_pressed(VirtualKeyCode::Right) {
+            self.move_left();
+        }
+        else if ctx.keyboard.is_key_pressed(VirtualKeyCode::Right) && !ctx.keyboard.is_key_pressed(VirtualKeyCode::Left) {
+            self.move_right();
+        }
+        
+
+        if ctx.keyboard.is_key_just_pressed(VirtualKeyCode::Space){
+            self.update_color();
+        }
+    }
+    
+    pub fn update(&mut self, ctx: &mut Context) {
+        self.handle_player_input(ctx);
+        self.apply_friction();
+        self.update_position(ctx);
     }
 
     pub fn update_position(&mut self, ctx: &mut Context) {
@@ -50,16 +94,15 @@ impl Player {
         // Update the entity rectangle position
         self.entity.x = self.position.x;
         self.entity.y = self.position.y;
+        
+        // Apply gravity
+        self.velocity.y += self.gravity;
 
         // Basic screen bounds checking
         if self.position.y >= 1080.0 - self.size {
             self.position.y = 1080.0 - self.size;
             self.velocity.y = 0.0;
             self.is_grounded = true;
-        }
-        
-        if self.is_grounded {
-            self.grounded_time += delta_time;
         }
         
         if self.position.x < 0.0 {
@@ -69,10 +112,14 @@ impl Player {
             self.position.x = 1920.0 - self.size;
             self.velocity.x = 0.0;
         }
-        
-        if self.grounded_time >= Duration::new(0, 250_000_000) {
+
+        if self.is_grounded {
+            self.grounded_time += delta_time;
+        }
+        if self.grounded_time >= self.jump_delay {
             self.can_jump = true;
         }
+        self.color_time += delta_time;
     }
 
     pub fn apply_friction(&mut self){
@@ -84,10 +131,6 @@ impl Player {
                 self.velocity.x += self.friction;
             }
         }
-    }
-
-    pub fn apply_gravity(&mut self){
-        self.velocity.y += self.gravity;
     }
 
     pub fn jump(&mut self){
@@ -113,30 +156,12 @@ impl Player {
         }
     }
 
-    pub fn update_color(&mut self){
-        if self.color == Color::BLUE {
-            self.color = Color::RED
+    pub fn update_color(&mut self) {
+        if self.color_time > self.color_delay {
+            let index = self.colors.iter().position(|&c| c == self.color).unwrap();
+            self.color = self.colors[(index + 1) % self.colors.len()];
+            self.color_time = Duration::new(0, 0);
         }
-        else if self.color == Color::RED {
-            self.color = Color::YELLOW
-        }
-        else if self.color == Color::YELLOW {
-            self.color = Color::GREEN
-        }
-        else if self.color == Color::GREEN {
-            self.color = Color::MAGENTA
-        }
-        else if self.color == Color::MAGENTA {
-            self.color = Color::CYAN
-        }
-        else if self.color == Color::CYAN {
-            self.color = Color::BLUE
-        }
-        else {
-            self.color = Color::BLUE
-        }
-
-        println!("{:?}", self.color);
     }
 
     pub fn draw(&self, ctx: &mut Context, canvas: &mut Canvas) -> GameResult {
@@ -149,7 +174,7 @@ impl Player {
                 self.size,
                 self.size
             ),
-            Color::WHITE,
+            self.color,
         )?;
         
         canvas.draw(&rect, graphics::DrawParam::default());
