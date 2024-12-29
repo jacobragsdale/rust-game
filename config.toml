@@ -1,25 +1,6 @@
+[debug]
+debug = false
+
 [display]
-height = 1080
-width = 1920
-fps = 60
-
-[paddle]
-height = 200
-width = 10
-speed_x = 0
-speed_y = 15
-
-[player_location]
-x = 1890
-y = 410
-
-[bot_location]
-x = 20
-y = 420
-
-[ball]
-radius = 15
-speed_x = 5
-speed_y = 5
-x = 400
-y = 200
+height = 1080.0
+width = 1920.0

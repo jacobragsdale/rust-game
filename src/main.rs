@@ -13,7 +13,8 @@ fn main() {
     let (ctx, event_loop) =
         ContextBuilder::new("jacobs_game", "Jacob Ragsdale")
             .window_setup(ggez::conf::WindowSetup::default().title("Jacob's game"))
-            .window_mode(ggez::conf::WindowMode::default().dimensions(1920.0, 1080.0))
+            .window_mode(ggez::conf::WindowMode::default().dimensions(conf.display.width, 
+                                                                      conf.display.height))
             .build().expect("Failed to create game context");
 
     let my_game = Game::new();
