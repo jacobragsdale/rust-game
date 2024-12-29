@@ -3,6 +3,7 @@ use ggez::{self, Context, GameResult, graphics};
 use ggez::graphics::{Canvas, Color};
 use ggez::mint::{Point2, Vector2};
 use ggez::winit::event::VirtualKeyCode;
+use crate::entity::Entity;
 
 pub(super) struct Player {
     entity: graphics::Rect,
@@ -24,8 +25,34 @@ pub(super) struct Player {
     colors: Vec<Color>,
 }
 
+impl Entity for Player {
+    fn update(&mut self, ctx: &mut Context) {
+        self.handle_player_input(ctx);
+        self.apply_friction();
+        self.update_position(ctx);
+    }
+
+    
+    fn draw(&mut self, ctx: &mut Context, canvas: &mut Canvas) -> GameResult {
+        let rect = graphics::Mesh::new_rectangle(
+            ctx,
+            graphics::DrawMode::fill(),
+            graphics::Rect::new(
+                self.position.x,
+                self.position.y,
+                self.size,
+                self.size
+            ),
+            self.color,
+        )?;
+        
+        canvas.draw(&rect, graphics::DrawParam::default());
+        Ok(())
+    }
+}
+
 impl Player {
-    pub fn new() -> Self{
+    pub(crate) fn new() -> Self{
         let colors = vec![
             Color::BLUE,
             Color::RED,
@@ -38,7 +65,7 @@ impl Player {
         let position = Point2{ x: 0.0, y: 0.0, };
         let velocity = Vector2{ x: 0.0, y: 0.0 };
         let entity = graphics::Rect::new(0.0, 0.0, 10.0, 10.0);
-        
+
         Player {
             entity,
             position,
@@ -59,11 +86,7 @@ impl Player {
             colors
         }
     }
-    
-    pub fn handle_player_input(&mut self, ctx: &mut Context) {
-        if ctx.keyboard.is_key_pressed(VirtualKeyCode::Up) && !ctx.keyboard.is_key_pressed(VirtualKeyCode::Down)  {
-            self.jump();
-        }
+    fn handle_player_input(&mut self, ctx: &mut Context) {
         // Move left and right
         if ctx.keyboard.is_key_pressed(VirtualKeyCode::Left) && !ctx.keyboard.is_key_pressed(VirtualKeyCode::Right) {
             self.move_left();
@@ -72,21 +95,18 @@ impl Player {
             self.move_right();
         }
         
-
+        // Jump!
+        if ctx.keyboard.is_key_pressed(VirtualKeyCode::Up) && !ctx.keyboard.is_key_pressed(VirtualKeyCode::Down)  {
+            self.jump();
+        }
+        
+        // Change Color
         if ctx.keyboard.is_key_just_pressed(VirtualKeyCode::Space){
             self.update_color();
         }
     }
     
-    pub fn update(&mut self, ctx: &mut Context) {
-        self.handle_player_input(ctx);
-        self.apply_friction();
-        self.update_position(ctx);
-    }
-
     pub fn update_position(&mut self, ctx: &mut Context) {
-        let delta_time = ctx.time.delta();
-        
         // Update position based on velocity
         self.position.x += self.velocity.x;
         self.position.y += self.velocity.y;
@@ -94,17 +114,16 @@ impl Player {
         // Update the entity rectangle position
         self.entity.x = self.position.x;
         self.entity.y = self.position.y;
-        
+
         // Apply gravity
         self.velocity.y += self.gravity;
 
-        // Basic screen bounds checking
+        // Keep player on the screen
         if self.position.y >= 1080.0 - self.size {
             self.position.y = 1080.0 - self.size;
             self.velocity.y = 0.0;
             self.is_grounded = true;
         }
-        
         if self.position.x < 0.0 {
             self.position.x = 0.0;
             self.velocity.x = 0.0;
@@ -113,13 +132,14 @@ impl Player {
             self.velocity.x = 0.0;
         }
 
+        let delta_time = ctx.time.delta();
+        self.color_time += delta_time;
         if self.is_grounded {
             self.grounded_time += delta_time;
         }
         if self.grounded_time >= self.jump_delay {
             self.can_jump = true;
         }
-        self.color_time += delta_time;
     }
 
     pub fn apply_friction(&mut self){
@@ -162,22 +182,5 @@ impl Player {
             self.color = self.colors[(index + 1) % self.colors.len()];
             self.color_time = Duration::new(0, 0);
         }
-    }
-
-    pub fn draw(&self, ctx: &mut Context, canvas: &mut Canvas) -> GameResult {
-        let rect = graphics::Mesh::new_rectangle(
-            ctx,
-            graphics::DrawMode::fill(),
-            graphics::Rect::new(
-                self.position.x,
-                self.position.y,
-                self.size,
-                self.size
-            ),
-            self.color,
-        )?;
-        
-        canvas.draw(&rect, graphics::DrawParam::default());
-        Ok(())
     }
 }
