@@ -12,7 +12,6 @@ pub struct Game {
     config: Config,
     entities: Vec<Box<dyn Entity>>,
     player_index: usize,
-    platform_indices: Vec<usize>,
     camera: Camera,
 }
 
@@ -63,12 +62,8 @@ impl Game {
         entities.push(Box::new(Player::new(world_width, spawn_position)));
 
         // Add static platforms the player can interact with
-        let mut platform_indices = Vec::new();
-
         for &(x, y, w, h) in &platform_specs {
-            let idx = entities.len();
             entities.push(Box::new(Platform::new(x, y, w, h)));
-            platform_indices.push(idx);
         }
 
         // Return the created struct
@@ -76,7 +71,6 @@ impl Game {
             config,
             entities,
             player_index,
-            platform_indices,
             camera,
         }
     }
@@ -150,31 +144,33 @@ impl EventHandler for Game {
 
 impl Game {
     fn handle_collisions(&mut self, delta_time: Duration) {
+        let player_is_dead = self.entities[self.player_index]
+            .as_any()
+            .downcast_ref::<Player>()
+            .map(|player| player.is_dead())
+            .unwrap_or(true);
+
+        if player_is_dead {
+            return;
+        }
+
         let platform_rects: Vec<graphics::Rect> = self
-            .platform_indices
+            .entities
             .iter()
-            .map(|&idx| {
-                self.entities[idx]
-                    .as_any()
-                    .downcast_ref::<Platform>()
-                    .expect("Entity at index is not a Platform")
-                    .rect()
-            })
+            .filter_map(|entity| entity.as_any().downcast_ref::<Platform>().map(|p| p.rect()))
             .collect();
 
         if let Some(player) = self.entities[self.player_index]
             .as_any_mut()
             .downcast_mut::<Player>()
         {
-            if !player.is_dead() {
-                player.resolve_collisions(&platform_rects);
-                player.finalize_update(delta_time);
+            player.resolve_collisions(&platform_rects);
+            player.finalize_update(delta_time);
 
-                if player.bottom() > self.camera.world_height() {
-                    player.mark_dead();
-                } else {
-                    self.camera.follow_player(player);
-                }
+            if player.bottom() > self.camera.world_height() {
+                player.mark_dead();
+            } else {
+                self.camera.follow_player(player);
             }
         }
     }

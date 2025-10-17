@@ -6,8 +6,6 @@ use ggez::{self, graphics, Context, GameResult};
 use std::time::Duration;
 
 pub(super) struct Player {
-    entity: graphics::Rect,
-    size: f32,
     position: Point2<f32>,
     previous_position: Point2<f32>,
     velocity: Vector2<f32>,
@@ -38,13 +36,12 @@ impl Entity for Player {
             self.previous_position = self.position;
             self.velocity.y += self.gravity;
             self.position.y += self.velocity.y;
-            self.sync_entity_rect();
             return;
         }
         self.was_grounded_last_frame = self.is_grounded;
         self.handle_player_input(ctx);
         self.apply_friction();
-        self.update_position(ctx);
+        self.update_position();
     }
 
     fn draw(
@@ -59,8 +56,8 @@ impl Entity for Player {
             graphics::Rect::new(
                 self.position.x - camera_offset.x,
                 self.position.y - camera_offset.y,
-                self.size,
-                self.size,
+                Self::SIZE,
+                Self::SIZE,
             ),
             self.color,
         )?;
@@ -94,14 +91,11 @@ impl Player {
         let position = spawn_position;
         let previous_position = position;
         let velocity = Vector2 { x: 0.0, y: 0.0 };
-        let entity = graphics::Rect::new(position.x, position.y, Self::SIZE, Self::SIZE);
 
         Player {
-            entity,
             position,
             previous_position,
             velocity,
-            size: Self::SIZE,
             color: colors[0],
             max_speed: 18.0,
             ground_acceleration: 18.0,
@@ -152,14 +146,13 @@ impl Player {
         }
     }
 
-    pub fn update_position(&mut self, _ctx: &mut Context) {
+    pub fn update_position(&mut self) {
         self.previous_position = self.position;
         self.is_grounded = false;
 
         // Update position based on velocity
         self.position.x += self.velocity.x;
         self.position.y += self.velocity.y;
-        self.sync_entity_rect();
 
         // Apply gravity for the next frame
         self.velocity.y += self.gravity;
@@ -168,16 +161,14 @@ impl Player {
         if self.position.x < 0.0 {
             self.position.x = 0.0;
             self.velocity.x = 0.0;
-        } else if self.position.x > self.world_width - self.size {
-            self.position.x = self.world_width - self.size;
+        } else if self.position.x > self.world_width - Self::SIZE {
+            self.position.x = self.world_width - Self::SIZE;
             self.velocity.x = 0.0;
         }
-
-        self.sync_entity_rect();
     }
 
     pub fn apply_friction(&mut self) {
-        if self.is_grounded && !self.is_dead && self.horizontal_input == 0.0 {
+        if self.is_grounded && self.horizontal_input == 0.0 {
             if self.velocity.x > 0.0 {
                 self.velocity.x -= self.friction;
                 if self.velocity.x < self.friction {
@@ -242,13 +233,13 @@ impl Player {
         let previous_rect = graphics::Rect::new(
             self.previous_position.x,
             self.previous_position.y,
-            self.size,
-            self.size,
+            Self::SIZE,
+            Self::SIZE,
         );
 
         for platform_rect in platforms {
             let current_rect =
-                graphics::Rect::new(self.position.x, self.position.y, self.size, self.size);
+                graphics::Rect::new(self.position.x, self.position.y, Self::SIZE, Self::SIZE);
 
             if !current_rect.overlaps(platform_rect) {
                 continue;
@@ -260,7 +251,7 @@ impl Player {
             let from_right = previous_rect.x >= platform_rect.x + platform_rect.w;
 
             if from_top {
-                self.position.y = platform_rect.y - self.size;
+                self.position.y = platform_rect.y - Self::SIZE;
                 self.velocity.y = 0.0;
                 self.is_grounded = true;
                 landed_on_platform = true;
@@ -268,7 +259,6 @@ impl Player {
                     self.grounded_time = Duration::new(0, 0);
                     self.can_jump = false;
                 }
-                self.sync_entity_rect();
                 continue;
             }
 
@@ -277,16 +267,14 @@ impl Player {
                 if self.velocity.y < 0.0 {
                     self.velocity.y = 0.0;
                 }
-                self.sync_entity_rect();
                 continue;
             }
 
             if from_left {
-                self.position.x = platform_rect.x - self.size;
+                self.position.x = platform_rect.x - Self::SIZE;
                 if self.velocity.x > 0.0 {
                     self.velocity.x = 0.0;
                 }
-                self.sync_entity_rect();
                 continue;
             }
 
@@ -295,7 +283,6 @@ impl Player {
                 if self.velocity.x < 0.0 {
                     self.velocity.x = 0.0;
                 }
-                self.sync_entity_rect();
                 continue;
             }
         }
@@ -323,23 +310,15 @@ impl Player {
             }
         }
     }
-
-    fn sync_entity_rect(&mut self) {
-        self.entity.x = self.position.x;
-        self.entity.y = self.position.y;
-        self.entity.w = self.size;
-        self.entity.h = self.size;
-    }
-
     pub(crate) fn center(&self) -> Point2<f32> {
         Point2 {
-            x: self.position.x + self.size / 2.0,
-            y: self.position.y + self.size / 2.0,
+            x: self.position.x + Self::SIZE / 2.0,
+            y: self.position.y + Self::SIZE / 2.0,
         }
     }
 
     pub(crate) fn bottom(&self) -> f32 {
-        self.position.y + self.size
+        self.position.y + Self::SIZE
     }
 
     pub(crate) fn is_dead(&self) -> bool {
