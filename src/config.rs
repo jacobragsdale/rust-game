@@ -7,7 +7,7 @@ use toml;
 #[derive(Deserialize)]
 pub(super) struct Config {
     pub display: DisplayConfig,
-    pub debug: DebugConfig
+    pub debug: DebugConfig,
 }
 
 impl Config {
