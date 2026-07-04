@@ -1,3 +1,6 @@
+//! SQLite-backed persistence. Currently just run scores; this grows into the
+//! full save system (progress, inventory, quest flags) in Phase 4.
+
 use rusqlite::{params, Connection, Result};
 use std::path::Path;
 
@@ -35,10 +38,28 @@ impl ScoreStore {
             Ok(value as f32)
         })?;
 
-        let mut scores = Vec::new();
-        for row in rows {
-            scores.push(row?);
+        rows.collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stores_and_ranks_scores() {
+        let store = ScoreStore::new(":memory:").unwrap();
+        for score in [12.5, 99.0, 3.25, 47.0] {
+            store.add_score(score).unwrap();
         }
-        Ok(scores)
+
+        let top = store.top_scores(3).unwrap();
+        assert_eq!(top, vec![99.0, 47.0, 12.5]);
+    }
+
+    #[test]
+    fn top_scores_on_empty_store() {
+        let store = ScoreStore::new(":memory:").unwrap();
+        assert!(store.top_scores(3).unwrap().is_empty());
     }
 }

@@ -1,26 +1,28 @@
+mod app;
 mod config;
-mod entity;
-mod game;
-mod platform;
-mod player;
-mod score;
-mod spike_ball;
+mod ecs;
+mod physics;
+mod save;
+mod scenes;
+mod systems;
 
-use crate::game::Game;
-use ggez::event::{self};
+use ggez::event;
 use ggez::ContextBuilder;
 
-fn main() {
-    let conf = config::Config::new("config.toml");
+use crate::app::App;
+use crate::config::Config;
 
-    let (ctx, event_loop) = ContextBuilder::new("jacobs_game", "Jacob Ragsdale")
-        .window_setup(ggez::conf::WindowSetup::default().title("Jacob's game"))
+fn main() -> anyhow::Result<()> {
+    let config = Config::load("config.toml")?;
+
+    let (ctx, event_loop) = ContextBuilder::new("supergame", "Jacob Ragsdale")
+        .window_setup(ggez::conf::WindowSetup::default().title("SuperGame"))
         .window_mode(
-            ggez::conf::WindowMode::default().dimensions(conf.display.width, conf.display.height),
+            ggez::conf::WindowMode::default()
+                .dimensions(config.display.width, config.display.height),
         )
-        .build()
-        .expect("Failed to create game context");
+        .build()?;
 
-    let my_game = Game::new();
-    event::run(ctx, event_loop, my_game);
+    let app = App::new(config);
+    event::run(ctx, event_loop, app)
 }

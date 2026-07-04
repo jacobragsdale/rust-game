@@ -5,7 +5,9 @@ edition = "2021"
 description = "2D side-scroller adventure RPG"
 
 [dependencies]
+anyhow = "1"
 ggez = "0.9.3"
+hecs = "0.10"
 serde = { version = "1.0.195", features = ["derive"] }
 toml = "0.5.11"
 rand = "0.8"

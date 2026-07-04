@@ -1,29 +1,30 @@
 use std::fs;
 
+use anyhow::Context as _;
 use serde::Deserialize;
-use toml;
 
-/// contain the game configurations from the config.toml file
-#[derive(Deserialize)]
-pub(super) struct Config {
+/// Game configuration loaded from `config.toml`.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Config {
     pub display: DisplayConfig,
     pub debug: DebugConfig,
 }
 
 impl Config {
-    pub fn new(filename: &str) -> Self {
-        let content = fs::read_to_string(filename).unwrap();
-        toml::from_str(&content).unwrap()
+    pub fn load(filename: &str) -> anyhow::Result<Self> {
+        let content = fs::read_to_string(filename)
+            .with_context(|| format!("failed to read config file `{filename}`"))?;
+        toml::from_str(&content).with_context(|| format!("failed to parse `{filename}`"))
     }
 }
 
-#[derive(Deserialize)]
-pub(super) struct DisplayConfig {
+#[derive(Clone, Debug, Deserialize)]
+pub struct DisplayConfig {
     pub height: f32,
     pub width: f32,
 }
 
-#[derive(Deserialize)]
-pub(super) struct DebugConfig {
+#[derive(Clone, Debug, Deserialize)]
+pub struct DebugConfig {
     pub debug: bool,
 }
