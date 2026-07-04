@@ -6,7 +6,7 @@ use ggez::graphics::{Canvas, Color, DrawParam, PxScale, Text, TextFragment};
 use ggez::winit::event::VirtualKeyCode;
 use ggez::{Context, GameResult};
 
-use crate::scenes::{Resources, Scene, Transition};
+use crate::scenes::{adventure::AdventureScene, Resources, Scene, Transition};
 
 pub struct MainMenuScene;
 
@@ -22,7 +22,7 @@ impl Scene for MainMenuScene {
                 .color(Color::from_rgb(240, 240, 240)),
         );
         let prompt = Text::new(
-            TextFragment::new("Press Up to Start")
+            TextFragment::new("Up — Endless Runner        Enter — Castle Adventure")
                 .scale(PxScale::from(40.0))
                 .color(Color::from_rgb(220, 220, 220)),
         );
@@ -48,12 +48,19 @@ impl Scene for MainMenuScene {
 
     fn key_down(
         &mut self,
-        _ctx: &mut Context,
-        _res: &mut Resources,
+        ctx: &mut Context,
+        res: &mut Resources,
         key: VirtualKeyCode,
     ) -> Transition {
         match key {
             VirtualKeyCode::Up => Transition::Pop,
+            VirtualKeyCode::Return => match AdventureScene::new(ctx, res, "maps/castle.ron") {
+                Ok(scene) => Transition::Push(Box::new(scene)),
+                Err(err) => {
+                    eprintln!("failed to start adventure: {err:#}");
+                    Transition::None
+                }
+            },
             _ => Transition::None,
         }
     }

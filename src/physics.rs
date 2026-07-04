@@ -35,10 +35,31 @@ impl Aabb {
 
 /// A solid rectangle a body can collide with, plus the horizontal speed it is
 /// moving at (px/sec, leftwards) so a body standing on it can ride along.
+/// `one_way` platforms only collide from above: land on them, pass through
+/// from below or the sides.
 #[derive(Clone, Copy, Debug)]
 pub struct SolidRect {
     pub rect: Aabb,
     pub speed: f32,
+    pub one_way: bool,
+}
+
+impl SolidRect {
+    pub fn solid(rect: Aabb, speed: f32) -> Self {
+        SolidRect {
+            rect,
+            speed,
+            one_way: false,
+        }
+    }
+
+    pub fn one_way(rect: Aabb) -> Self {
+        SolidRect {
+            rect,
+            speed: 0.0,
+            one_way: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -76,6 +97,8 @@ pub fn resolve_move(
             vel.y = 0.0;
             contact.grounded = true;
             contact.ride_speed = -solid.speed;
+        } else if solid.one_way {
+            // approached from below or the side: pass through
         } else if from_bottom {
             pos.y = solid.rect.bottom();
             if vel.y < 0.0 {
@@ -110,10 +133,7 @@ mod tests {
     use super::*;
 
     fn solid(x: f32, y: f32, w: f32, h: f32, speed: f32) -> SolidRect {
-        SolidRect {
-            rect: Aabb::new(x, y, w, h),
-            speed,
-        }
+        SolidRect::solid(Aabb::new(x, y, w, h), speed)
     }
 
     #[test]
@@ -160,6 +180,27 @@ mod tests {
         assert!(!contact.grounded);
         assert_eq!(pos.x, 40.0);
         assert_eq!(vel.x, 0.0);
+    }
+
+    #[test]
+    fn one_way_platform_lands_from_above_but_passes_from_below() {
+        let size = Vec2::new(10.0, 10.0);
+        let platform = SolidRect::one_way(Aabb::new(0.0, 50.0, 100.0, 8.0));
+
+        // falling onto it: lands
+        let mut pos = Vec2::new(20.0, 45.0);
+        let mut vel = Vec2::new(0.0, 30.0);
+        let contact = resolve_move(&mut pos, &mut vel, Vec2::new(20.0, 30.0), size, &[platform]);
+        assert!(contact.grounded);
+        assert_eq!(pos.y, 40.0);
+
+        // jumping up through it: passes clean
+        let mut pos = Vec2::new(20.0, 50.0);
+        let mut vel = Vec2::new(0.0, -30.0);
+        let contact = resolve_move(&mut pos, &mut vel, Vec2::new(20.0, 62.0), size, &[platform]);
+        assert!(!contact.grounded);
+        assert_eq!(pos.y, 50.0); // untouched
+        assert_eq!(vel.y, -30.0);
     }
 
     #[test]

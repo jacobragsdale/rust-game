@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::PathBuf;
 
 use anyhow::Context as _;
 use serde::Deserialize;
@@ -12,9 +13,15 @@ pub struct Config {
 
 impl Config {
     pub fn load(filename: &str) -> anyhow::Result<Self> {
-        let content = fs::read_to_string(filename)
-            .with_context(|| format!("failed to read config file `{filename}`"))?;
-        toml::from_str(&content).with_context(|| format!("failed to parse `{filename}`"))
+        // Look next to the current directory first, then the crate root, so
+        // the binary works no matter where it is launched from during dev.
+        let mut path = PathBuf::from(filename);
+        if !path.exists() {
+            path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(filename);
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read config file `{}`", path.display()))?;
+        toml::from_str(&content).with_context(|| format!("failed to parse `{}`", path.display()))
     }
 }
 

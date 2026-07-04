@@ -1,0 +1,20 @@
+// Castle tileset: 480x480 atlas, 15 columns of 32px tiles, magenta color key.
+// Tile indices are 0-based (Tiled gid - 1). The rule tiles were chosen to
+// match how the original SuperGame castle_level.tmx used this atlas; tweak
+// freely — this file is the only place tile indices exist.
+Tileset(
+    image: "tile_castle",
+    tile_size: 32,
+    columns: 15,
+    transparent_color: Some((255, 0, 255)),
+    rules: Rules(
+        solid_top_left: 4,
+        solid_top: 5,
+        solid_top_right: 6,
+        solid_left: 32,
+        solid_fill: 31,
+        solid_right: 30,
+        platform: 181,
+        background: [151, 152, 153],
+    ),
+)

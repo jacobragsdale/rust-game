@@ -5,7 +5,7 @@
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::ecs::components::{Dead, Player, Position, Size};
+use crate::ecs::components::{Avatar, Dead, Player, Position, Size};
 
 pub struct Camera {
     offset: Vec2,
@@ -38,6 +38,13 @@ impl Camera {
         let max_offset = (self.world - self.viewport).max(Vec2::ZERO);
         let desired = center - self.viewport / 2.0;
         self.offset = desired.clamp(Vec2::ZERO, max_offset);
+    }
+}
+
+/// Follow the adventure-mode avatar.
+pub fn follow_avatar(world: &mut World, camera: &mut Camera) {
+    for (_, (pos, size, _)) in world.query_mut::<(&Position, &Size, &Avatar)>() {
+        camera.follow(pos.0 + size.0 / 2.0);
     }
 }
 

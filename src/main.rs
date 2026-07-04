@@ -1,6 +1,8 @@
 mod app;
+mod assets;
 mod config;
 mod ecs;
+mod level;
 mod physics;
 mod save;
 mod scenes;
@@ -15,7 +17,7 @@ use crate::config::Config;
 fn main() -> anyhow::Result<()> {
     let config = Config::load("config.toml")?;
 
-    let (ctx, event_loop) = ContextBuilder::new("supergame", "Jacob Ragsdale")
+    let (mut ctx, event_loop) = ContextBuilder::new("supergame", "Jacob Ragsdale")
         .window_setup(ggez::conf::WindowSetup::default().title("SuperGame"))
         .window_mode(
             ggez::conf::WindowMode::default()
@@ -23,6 +25,6 @@ fn main() -> anyhow::Result<()> {
         )
         .build()?;
 
-    let app = App::new(config);
+    let app = App::new(&mut ctx, config);
     event::run(ctx, event_loop, app)
 }

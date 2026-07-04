@@ -11,9 +11,11 @@ pub fn resolve_player(world: &mut World, scroll_speed: f32) {
     let solids: Vec<SolidRect> = world
         .query_mut::<(&Position, &Size, &Solid)>()
         .into_iter()
-        .map(|(_, (pos, size, _))| SolidRect {
-            rect: Aabb::new(pos.0.x, pos.0.y, size.0.x, size.0.y),
-            speed: scroll_speed,
+        .map(|(_, (pos, size, _))| {
+            SolidRect::solid(
+                Aabb::new(pos.0.x, pos.0.y, size.0.x, size.0.y),
+                scroll_speed,
+            )
         })
         .collect();
 

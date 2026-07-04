@@ -1,0 +1,35 @@
+// Adventurer sprite sheet: 7 columns x 16 rows of 50x37 frames.
+// Frames are (col, row) grid cells. Clip names are what the animation
+// state machine selects; more clips (attacks, slide, wall-slide, ...)
+// get added here in Phase 3 without touching code.
+ClipSet(
+    sheet: "playerSpriteSheet",
+    frame_size: (50.0, 37.0),
+    clips: {
+        "idle": Clip(
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0)],
+            fps: 8.0,
+            looping: true,
+        ),
+        "run": Clip(
+            frames: [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1)],
+            fps: 12.0,
+            looping: true,
+        ),
+        "jump": Clip(
+            frames: [(0, 2), (1, 2), (2, 2), (3, 2)],
+            fps: 12.0,
+            looping: false,
+        ),
+        "fall": Clip(
+            frames: [(1, 3), (2, 3)],
+            fps: 8.0,
+            looping: true,
+        ),
+        "crouch": Clip(
+            frames: [(4, 0), (5, 0), (6, 0), (0, 1)],
+            fps: 8.0,
+            looping: true,
+        ),
+    },
+)

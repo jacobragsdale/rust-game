@@ -8,6 +8,7 @@ use ggez::input::keyboard::KeyInput;
 use ggez::winit::event::VirtualKeyCode;
 use ggez::{Context, GameResult};
 
+use crate::assets::Assets;
 use crate::config::Config;
 use crate::save::ScoreStore;
 use crate::scenes::{level::LevelScene, main_menu::MainMenuScene, Resources, Scene, Transition};
@@ -21,7 +22,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: Config) -> Self {
+    pub fn new(ctx: &mut Context, config: Config) -> Self {
         let score_store = ScoreStore::new("scores.db")
             .map(Some)
             .unwrap_or_else(|err| {
@@ -38,8 +39,22 @@ impl App {
             score_store,
             top_scores,
             clear_color: ggez::graphics::Color::BLACK,
+            assets: Assets::new(),
         };
-        let scenes = Self::initial_stack(&mut resources);
+        let mut scenes = Self::initial_stack(&mut resources);
+
+        // Dev shortcut: SUPERGAME_SCENE=adventure boots straight into the
+        // castle map, skipping the menu.
+        if std::env::var("SUPERGAME_SCENE").as_deref() == Ok("adventure") {
+            match crate::scenes::adventure::AdventureScene::new(
+                ctx,
+                &mut resources,
+                "maps/castle.ron",
+            ) {
+                Ok(scene) => scenes.push(Box::new(scene)),
+                Err(err) => eprintln!("failed to boot into adventure: {err:#}"),
+            }
+        }
 
         App { scenes, resources }
     }
@@ -96,8 +111,13 @@ impl EventHandler for App {
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        let mut canvas = Canvas::from_frame(ctx, self.resources.clear_color);
         let start = self.first_active(|s| s.draws_below());
+        // Offscreen passes must finish before the frame canvas opens.
+        for i in start..self.scenes.len() {
+            self.scenes[i].pre_draw(ctx, &mut self.resources)?;
+        }
+
+        let mut canvas = Canvas::from_frame(ctx, self.resources.clear_color);
         for i in start..self.scenes.len() {
             self.scenes[i].draw(ctx, &mut canvas, &mut self.resources)?;
         }

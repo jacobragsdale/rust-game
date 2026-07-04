@@ -2,6 +2,7 @@
 //! SuperGame: scenes can be transparent overlays that draw (and optionally
 //! update) the scene beneath them.
 
+pub mod adventure;
 pub mod game_over;
 pub mod level;
 pub mod main_menu;
@@ -11,6 +12,7 @@ use ggez::graphics::{Canvas, Color};
 use ggez::winit::event::VirtualKeyCode;
 use ggez::{Context, GameResult};
 
+use crate::assets::Assets;
 use crate::config::Config;
 use crate::save::ScoreStore;
 
@@ -21,6 +23,7 @@ pub struct Resources {
     pub top_scores: Vec<f32>,
     /// Frame clear color; the level scene keeps this in sync with its palette.
     pub clear_color: Color,
+    pub assets: Assets,
 }
 
 impl Resources {
@@ -54,6 +57,13 @@ pub enum Transition {
 pub trait Scene {
     /// Runs once per fixed tick while this scene is active.
     fn update(&mut self, ctx: &mut Context, res: &mut Resources) -> GameResult<Transition>;
+
+    /// Offscreen rendering hook, called before the frame canvas is created.
+    /// Scenes that render to an internal canvas (pixel-art scaling) do that
+    /// work here; `draw` then just composites into the frame.
+    fn pre_draw(&mut self, _ctx: &mut Context, _res: &mut Resources) -> GameResult {
+        Ok(())
+    }
 
     fn draw(&mut self, ctx: &mut Context, canvas: &mut Canvas, res: &mut Resources) -> GameResult;
 
