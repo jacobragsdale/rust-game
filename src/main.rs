@@ -3,6 +3,8 @@ mod entity;
 mod game;
 mod platform;
 mod player;
+mod score;
+mod spike_ball;
 
 use crate::game::Game;
 use ggez::event::{self};

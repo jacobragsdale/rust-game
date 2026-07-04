@@ -19,15 +19,13 @@ pub(super) struct Player {
     air_drag: f32,
     grounded_time: Duration,
     jump_delay: Duration,
-    color_delay: Duration,
-    color_time: Duration,
     can_jump: bool,
     is_grounded: bool,
     was_grounded_last_frame: bool,
-    colors: Vec<Color>,
     world_width: f32,
     horizontal_input: f32,
     is_dead: bool,
+    platform_velocity: f32,
 }
 
 impl Entity for Player {
@@ -41,7 +39,7 @@ impl Entity for Player {
         self.was_grounded_last_frame = self.is_grounded;
         self.handle_player_input(ctx);
         self.apply_friction();
-        self.update_position();
+        self.update_position(ctx);
     }
 
     fn draw(
@@ -78,16 +76,7 @@ impl Entity for Player {
 impl Player {
     pub(crate) const SIZE: f32 = 100.0;
 
-    pub(crate) fn new(world_width: f32, spawn_position: Point2<f32>) -> Self {
-        let colors = vec![
-            Color::BLUE,
-            Color::RED,
-            Color::YELLOW,
-            Color::GREEN,
-            Color::MAGENTA,
-            Color::CYAN,
-            Color::WHITE,
-        ];
+    pub(crate) fn new(world_width: f32, spawn_position: Point2<f32>, color: Color) -> Self {
         let position = spawn_position;
         let previous_position = position;
         let velocity = Vector2 { x: 0.0, y: 0.0 };
@@ -96,25 +85,23 @@ impl Player {
             position,
             previous_position,
             velocity,
-            color: colors[0],
-            max_speed: 18.0,
-            ground_acceleration: 18.0,
-            air_acceleration: 12.0,
+            color,
+            max_speed: 12.0,
+            ground_acceleration: 12.0,
+            air_acceleration: 8.0,
             jump_speed: 32.0,
             gravity: 1.3,
             friction: 3.0,
             air_drag: 0.85,
             grounded_time: Duration::new(0, 0),
             jump_delay: Duration::new(0, 100_000_000),
-            color_delay: Duration::new(0, 100_000_000),
-            color_time: Duration::new(0, 0),
             can_jump: true,
             is_grounded: true,
             was_grounded_last_frame: false,
-            colors,
             world_width,
             horizontal_input: 0.0,
             is_dead: false,
+            platform_velocity: 0.0,
         }
     }
     fn handle_player_input(&mut self, ctx: &mut Context) {
@@ -139,14 +126,9 @@ impl Player {
         {
             self.jump();
         }
-
-        // Change Color
-        if ctx.keyboard.is_key_just_pressed(VirtualKeyCode::Space) {
-            self.update_color();
-        }
     }
 
-    pub fn update_position(&mut self) {
+    pub fn update_position(&mut self, ctx: &mut Context) {
         self.previous_position = self.position;
         self.is_grounded = false;
 
@@ -154,8 +136,15 @@ impl Player {
         self.position.x += self.velocity.x;
         self.position.y += self.velocity.y;
 
+        let delta = ctx.time.delta().as_secs_f32();
+        self.position.x += self.platform_velocity * delta;
+
         // Apply gravity for the next frame
         self.velocity.y += self.gravity;
+
+        if !self.is_grounded {
+            self.platform_velocity = 0.0;
+        }
 
         // Keep player inside horizontal bounds
         if self.position.x < 0.0 {
@@ -217,15 +206,11 @@ impl Player {
         }
     }
 
-    pub fn update_color(&mut self) {
-        if self.color_time > self.color_delay {
-            let index = self.colors.iter().position(|&c| c == self.color).unwrap();
-            self.color = self.colors[(index + 1) % self.colors.len()];
-            self.color_time = Duration::new(0, 0);
-        }
+    pub(crate) fn set_color(&mut self, color: Color) {
+        self.color = color;
     }
 
-    pub(crate) fn resolve_collisions(&mut self, platforms: &[graphics::Rect]) {
+    pub(crate) fn resolve_collisions(&mut self, platforms: &[(graphics::Rect, f32)]) {
         if self.is_dead {
             return;
         }
@@ -237,11 +222,11 @@ impl Player {
             Self::SIZE,
         );
 
-        for platform_rect in platforms {
+        for &(platform_rect, platform_speed) in platforms {
             let current_rect =
                 graphics::Rect::new(self.position.x, self.position.y, Self::SIZE, Self::SIZE);
 
-            if !current_rect.overlaps(platform_rect) {
+            if !current_rect.overlaps(&platform_rect) {
                 continue;
             }
 
@@ -255,6 +240,7 @@ impl Player {
                 self.velocity.y = 0.0;
                 self.is_grounded = true;
                 landed_on_platform = true;
+                self.platform_velocity = -platform_speed;
                 if !self.was_grounded_last_frame {
                     self.grounded_time = Duration::new(0, 0);
                     self.can_jump = false;
@@ -296,7 +282,6 @@ impl Player {
         if self.is_dead {
             return;
         }
-        self.color_time += delta_time;
 
         if self.is_grounded {
             self.grounded_time += delta_time;
@@ -310,6 +295,10 @@ impl Player {
             }
         }
     }
+    pub(crate) fn rect(&self) -> graphics::Rect {
+        graphics::Rect::new(self.position.x, self.position.y, Self::SIZE, Self::SIZE)
+    }
+
     pub(crate) fn center(&self) -> Point2<f32> {
         Point2 {
             x: self.position.x + Self::SIZE / 2.0,
@@ -334,5 +323,6 @@ impl Player {
         self.is_grounded = false;
         self.velocity.x = 0.0;
         self.horizontal_input = 0.0;
+        self.platform_velocity = 0.0;
     }
 }
