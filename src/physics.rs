@@ -23,8 +23,7 @@ impl Aabb {
         self.y + self.h
     }
 
-    /// Inclusive overlap test (matches ggez `Rect::overlaps`, which the old
-    /// collision code relied on).
+    /// Inclusive overlap test.
     pub fn overlaps(&self, other: &Aabb) -> bool {
         self.x <= other.right()
             && self.right() >= other.x
@@ -33,22 +32,18 @@ impl Aabb {
     }
 }
 
-/// A solid rectangle a body can collide with, plus the horizontal speed it is
-/// moving at (px/sec, leftwards) so a body standing on it can ride along.
-/// `one_way` platforms only collide from above: land on them, pass through
-/// from below or the sides.
+/// A solid rectangle a body can collide with. `one_way` platforms only
+/// collide from above: land on them, pass through from below or the sides.
 #[derive(Clone, Copy, Debug)]
 pub struct SolidRect {
     pub rect: Aabb,
-    pub speed: f32,
     pub one_way: bool,
 }
 
 impl SolidRect {
-    pub fn solid(rect: Aabb, speed: f32) -> Self {
+    pub fn solid(rect: Aabb) -> Self {
         SolidRect {
             rect,
-            speed,
             one_way: false,
         }
     }
@@ -56,7 +51,6 @@ impl SolidRect {
     pub fn one_way(rect: Aabb) -> Self {
         SolidRect {
             rect,
-            speed: 0.0,
             one_way: true,
         }
     }
@@ -65,8 +59,6 @@ impl SolidRect {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Contact {
     pub grounded: bool,
-    /// Horizontal velocity (px/sec) imparted by the surface being stood on.
-    pub ride_speed: f32,
 }
 
 /// Swept AABB resolution: uses the previous position to decide which side the
@@ -96,7 +88,6 @@ pub fn resolve_move(
             pos.y = solid.rect.y - size.y;
             vel.y = 0.0;
             contact.grounded = true;
-            contact.ride_speed = -solid.speed;
         } else if solid.one_way {
             // approached from below or the side: pass through
         } else if from_bottom {
@@ -120,20 +111,12 @@ pub fn resolve_move(
     contact
 }
 
-pub fn circle_intersects_aabb(center: Vec2, radius: f32, rect: Aabb) -> bool {
-    let closest_x = center.x.clamp(rect.x, rect.right());
-    let closest_y = center.y.clamp(rect.y, rect.bottom());
-    let dx = center.x - closest_x;
-    let dy = center.y - closest_y;
-    dx * dx + dy * dy <= radius * radius
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn solid(x: f32, y: f32, w: f32, h: f32, speed: f32) -> SolidRect {
-        SolidRect::solid(Aabb::new(x, y, w, h), speed)
+    fn solid(x: f32, y: f32, w: f32, h: f32) -> SolidRect {
+        SolidRect::solid(Aabb::new(x, y, w, h))
     }
 
     #[test]
@@ -142,14 +125,13 @@ mod tests {
         let mut pos = Vec2::new(0.0, 60.0); // fell into the platform
         let mut vel = Vec2::new(0.0, 20.0);
         let size = Vec2::new(10.0, 10.0);
-        let solids = [solid(-50.0, 55.0, 200.0, 30.0, 420.0)];
+        let solids = [solid(-50.0, 55.0, 200.0, 30.0)];
 
         let contact = resolve_move(&mut pos, &mut vel, prev, size, &solids);
 
         assert!(contact.grounded);
         assert_eq!(pos.y, 45.0); // snapped on top
         assert_eq!(vel.y, 0.0);
-        assert_eq!(contact.ride_speed, -420.0); // rides the scrolling platform
     }
 
     #[test]
@@ -158,7 +140,7 @@ mod tests {
         let mut pos = Vec2::new(0.0, 85.0); // jumped up into the platform
         let mut vel = Vec2::new(0.0, -30.0);
         let size = Vec2::new(10.0, 10.0);
-        let solids = [solid(-50.0, 60.0, 200.0, 30.0, 0.0)];
+        let solids = [solid(-50.0, 60.0, 200.0, 30.0)];
 
         let contact = resolve_move(&mut pos, &mut vel, prev, size, &solids);
 
@@ -173,7 +155,7 @@ mod tests {
         let mut pos = Vec2::new(45.0, 0.0); // ran into the left face
         let mut vel = Vec2::new(15.0, 0.0);
         let size = Vec2::new(10.0, 10.0);
-        let solids = [solid(50.0, -50.0, 30.0, 100.0, 0.0)];
+        let solids = [solid(50.0, -50.0, 30.0, 100.0)];
 
         let contact = resolve_move(&mut pos, &mut vel, prev, size, &solids);
 
@@ -209,22 +191,12 @@ mod tests {
         let mut pos = Vec2::new(5.0, 0.0);
         let mut vel = Vec2::new(5.0, 0.0);
         let size = Vec2::new(10.0, 10.0);
-        let solids = [solid(100.0, 100.0, 30.0, 30.0, 0.0)];
+        let solids = [solid(100.0, 100.0, 30.0, 30.0)];
 
         let contact = resolve_move(&mut pos, &mut vel, prev, size, &solids);
 
         assert!(!contact.grounded);
         assert_eq!(pos, Vec2::new(5.0, 0.0));
         assert_eq!(vel.x, 5.0);
-    }
-
-    #[test]
-    fn circle_hits_rect_edge_and_misses_when_far() {
-        let rect = Aabb::new(0.0, 0.0, 100.0, 30.0);
-        assert!(circle_intersects_aabb(Vec2::new(50.0, -10.0), 15.0, rect));
-        assert!(!circle_intersects_aabb(Vec2::new(50.0, -20.0), 15.0, rect));
-        // corner: distance from (110, -10) to corner (100, 0) is sqrt(200) ~ 14.1
-        assert!(circle_intersects_aabb(Vec2::new(110.0, -10.0), 15.0, rect));
-        assert!(!circle_intersects_aabb(Vec2::new(112.0, -12.0), 15.0, rect));
     }
 }

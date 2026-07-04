@@ -1,6 +1,4 @@
-[debug]
-debug = false
-
 [display]
-height = 1080.0
-width = 1920.0
+# 2x the 640x360 internal render resolution for crisp integer pixel scaling.
+height = 720.0
+width = 1280.0

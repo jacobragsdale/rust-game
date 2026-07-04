@@ -98,11 +98,7 @@ mod tests {
     }
 
     fn geometry(level: &LevelData) -> Vec<SolidRect> {
-        level
-            .solids
-            .iter()
-            .map(|&r| SolidRect::solid(r, 0.0))
-            .collect()
+        level.solids.iter().map(|&r| SolidRect::solid(r)).collect()
     }
 
     fn spawn_avatar(world: &mut World, pos: Vec2) {

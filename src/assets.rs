@@ -48,7 +48,9 @@ impl ClipSet {
 
 /// How a logical map cell maps onto tiles of the atlas, chosen by looking at
 /// a solid cell's neighbors. All values are 0-based tile indices.
+/// Spelled `Rules(...)` in the RON files.
 #[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "Rules")]
 pub struct AutotileRules {
     pub solid_top_left: u32,
     pub solid_top: u32,
@@ -61,7 +63,9 @@ pub struct AutotileRules {
     pub background: Vec<u32>,
 }
 
+/// Spelled `Tileset(...)` in the RON files.
 #[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "Tileset")]
 pub struct TilesetDef {
     /// Image name (under `assets/graphics/`, without extension).
     pub image: String,

@@ -3,15 +3,14 @@
 //! same at any frame rate.
 
 use ggez::event::EventHandler;
-use ggez::graphics::Canvas;
+use ggez::graphics::{Canvas, Color};
 use ggez::input::keyboard::KeyInput;
 use ggez::winit::event::VirtualKeyCode;
 use ggez::{Context, GameResult};
 
 use crate::assets::Assets;
 use crate::config::Config;
-use crate::save::ScoreStore;
-use crate::scenes::{level::LevelScene, main_menu::MainMenuScene, Resources, Scene, Transition};
+use crate::scenes::{main_menu::MainMenuScene, Resources, Scene, Transition};
 
 pub const TICKS_PER_SECOND: u32 = 60;
 pub const TICK: f32 = 1.0 / TICKS_PER_SECOND as f32;
@@ -23,25 +22,11 @@ pub struct App {
 
 impl App {
     pub fn new(ctx: &mut Context, config: Config) -> Self {
-        let score_store = ScoreStore::new("scores.db")
-            .map(Some)
-            .unwrap_or_else(|err| {
-                eprintln!("Failed to open score database: {err}");
-                None
-            });
-        let top_scores = score_store
-            .as_ref()
-            .and_then(|store| store.top_scores(3).ok())
-            .unwrap_or_default();
-
         let mut resources = Resources {
             config,
-            score_store,
-            top_scores,
-            clear_color: ggez::graphics::Color::BLACK,
             assets: Assets::new(),
         };
-        let mut scenes = Self::initial_stack(&mut resources);
+        let mut scenes = Self::initial_stack();
 
         // Dev shortcut: SUPERGAME_SCENE=adventure boots straight into the
         // castle map, skipping the menu.
@@ -59,12 +44,8 @@ impl App {
         App { scenes, resources }
     }
 
-    /// A fresh run: the level underneath, the "press Up" menu on top.
-    fn initial_stack(resources: &mut Resources) -> Vec<Box<dyn Scene>> {
-        vec![
-            Box::new(LevelScene::new(resources)),
-            Box::new(MainMenuScene),
-        ]
+    fn initial_stack() -> Vec<Box<dyn Scene>> {
+        vec![Box::new(MainMenuScene)]
     }
 
     fn apply(&mut self, transition: Transition) {
@@ -76,7 +57,7 @@ impl App {
                 assert!(!self.scenes.is_empty(), "popped the last scene");
             }
             Transition::Reset => {
-                self.scenes = Self::initial_stack(&mut self.resources);
+                self.scenes = Self::initial_stack();
             }
         }
     }
@@ -117,7 +98,7 @@ impl EventHandler for App {
             self.scenes[i].pre_draw(ctx, &mut self.resources)?;
         }
 
-        let mut canvas = Canvas::from_frame(ctx, self.resources.clear_color);
+        let mut canvas = Canvas::from_frame(ctx, Color::BLACK);
         for i in start..self.scenes.len() {
             self.scenes[i].draw(ctx, &mut canvas, &mut self.resources)?;
         }

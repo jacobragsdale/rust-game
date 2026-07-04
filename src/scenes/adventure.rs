@@ -68,11 +68,8 @@ impl AdventureScene {
             1,
         );
 
-        let mut geometry: Vec<SolidRect> = level
-            .solids
-            .iter()
-            .map(|&r| SolidRect::solid(r, 0.0))
-            .collect();
+        let mut geometry: Vec<SolidRect> =
+            level.solids.iter().map(|&r| SolidRect::solid(r)).collect();
         geometry.extend(level.one_way.iter().map(|&r| SolidRect::one_way(r)));
 
         let mut world = World::new();

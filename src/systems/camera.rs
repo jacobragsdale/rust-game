@@ -1,11 +1,9 @@
-//! Camera that follows the player, clamped to world bounds. With the viewport
-//! equal to the world (the endless runner) the offset stays at zero; it earns
-//! its keep in Phase 2 when Tiled maps are larger than the screen.
+//! Camera that follows the player, clamped to world bounds.
 
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::ecs::components::{Avatar, Dead, Player, Position, Size};
+use crate::ecs::components::{Avatar, Position, Size};
 
 pub struct Camera {
     offset: Vec2,
@@ -26,14 +24,6 @@ impl Camera {
         self.offset
     }
 
-    pub fn world_height(&self) -> f32 {
-        self.world.y
-    }
-
-    pub fn reset(&mut self) {
-        self.offset = Vec2::ZERO;
-    }
-
     fn follow(&mut self, center: Vec2) {
         let max_offset = (self.world - self.viewport).max(Vec2::ZERO);
         let desired = center - self.viewport / 2.0;
@@ -41,19 +31,9 @@ impl Camera {
     }
 }
 
-/// Follow the adventure-mode avatar.
+/// Follow the player.
 pub fn follow_avatar(world: &mut World, camera: &mut Camera) {
     for (_, (pos, size, _)) in world.query_mut::<(&Position, &Size, &Avatar)>() {
         camera.follow(pos.0 + size.0 / 2.0);
-    }
-}
-
-/// Follow the (living) player.
-pub fn follow_player(world: &mut World, camera: &mut Camera) {
-    for (_, (pos, size, _, dead)) in world.query_mut::<(&Position, &Size, &Player, Option<&Dead>)>()
-    {
-        if dead.is_none() {
-            camera.follow(pos.0 + size.0 / 2.0);
-        }
     }
 }

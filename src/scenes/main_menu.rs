@@ -1,5 +1,4 @@
-//! Transparent start overlay: the freshly generated world sits frozen behind
-//! it until the player presses Up.
+//! Main menu: press Enter to start the adventure.
 
 use ggez::glam::Vec2;
 use ggez::graphics::{Canvas, Color, DrawParam, PxScale, Text, TextFragment};
@@ -22,7 +21,7 @@ impl Scene for MainMenuScene {
                 .color(Color::from_rgb(240, 240, 240)),
         );
         let prompt = Text::new(
-            TextFragment::new("Up — Endless Runner        Enter — Castle Adventure")
+            TextFragment::new("Press Enter to Start")
                 .scale(PxScale::from(40.0))
                 .color(Color::from_rgb(220, 220, 220)),
         );
@@ -34,13 +33,13 @@ impl Scene for MainMenuScene {
 
         canvas.draw(
             &title,
-            DrawParam::default().dest(Vec2::new((view_w - title_size.x) / 2.0, view_h * 0.3)),
+            DrawParam::default().dest(Vec2::new((view_w - title_size.x) / 2.0, view_h * 0.35)),
         );
         canvas.draw(
             &prompt,
             DrawParam::default().dest(Vec2::new(
                 (view_w - prompt_size.x) / 2.0,
-                view_h * 0.3 + title_size.y + 40.0,
+                view_h * 0.35 + title_size.y + 40.0,
             )),
         );
         Ok(())
@@ -53,7 +52,6 @@ impl Scene for MainMenuScene {
         key: VirtualKeyCode,
     ) -> Transition {
         match key {
-            VirtualKeyCode::Up => Transition::Pop,
             VirtualKeyCode::Return => match AdventureScene::new(ctx, res, "maps/castle.ron") {
                 Ok(scene) => Transition::Push(Box::new(scene)),
                 Err(err) => {
@@ -63,9 +61,5 @@ impl Scene for MainMenuScene {
             },
             _ => Transition::None,
         }
-    }
-
-    fn draws_below(&self) -> bool {
-        true
     }
 }

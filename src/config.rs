@@ -8,7 +8,6 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub display: DisplayConfig,
-    pub debug: DebugConfig,
 }
 
 impl Config {
@@ -29,9 +28,4 @@ impl Config {
 pub struct DisplayConfig {
     pub height: f32,
     pub width: f32,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct DebugConfig {
-    pub debug: bool,
 }

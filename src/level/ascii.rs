@@ -18,7 +18,9 @@ use crate::assets::{Assets, AutotileRules};
 use crate::ecs::components::Avatar;
 use crate::level::{merge_runs, EntitySpawn, LevelData};
 
+/// Spelled `Level(...)` in the map files.
 #[derive(Debug, Deserialize)]
+#[serde(rename = "Level")]
 struct LevelDef {
     tileset: String,
     grid: Vec<String>,
@@ -298,6 +300,26 @@ mod tests {
             entities: vec![],
         };
         assert!(build(def, 32.0, &rules()).is_err());
+    }
+
+    /// End-to-end: the shipped map + tileset + player clips must all parse.
+    /// (The original RON struct-name mismatch slipped through because no
+    /// test read the real files.)
+    #[test]
+    fn shipped_assets_parse() {
+        let mut assets = crate::assets::Assets::new();
+        let map_path = assets.base_dir().join("maps/castle.ron");
+
+        let level = load(&map_path, &mut assets).unwrap();
+        assert!(!level.solids.is_empty());
+        assert!(!level.one_way.is_empty());
+        assert!(!level.hazards.is_empty());
+        assert_eq!(level.entities[0].kind, "knight");
+
+        let clips = assets.clip_set("player").unwrap();
+        for clip in ["idle", "run", "jump", "fall"] {
+            assert!(clips.clip(clip).is_some(), "missing player clip {clip:?}");
+        }
     }
 
     #[test]
