@@ -59,6 +59,11 @@ impl SolidRect {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Contact {
     pub grounded: bool,
+    /// Landed on a full solid this resolution.
+    pub on_solid: bool,
+    /// Landed on a one-way platform this resolution (drop-through eligible
+    /// when this is the only support).
+    pub on_one_way: bool,
 }
 
 /// Swept AABB resolution: uses the previous position to decide which side the
@@ -88,6 +93,11 @@ pub fn resolve_move(
             pos.y = solid.rect.y - size.y;
             vel.y = 0.0;
             contact.grounded = true;
+            if solid.one_way {
+                contact.on_one_way = true;
+            } else {
+                contact.on_solid = true;
+            }
         } else if solid.one_way {
             // approached from below or the side: pass through
         } else if from_bottom {
@@ -109,6 +119,19 @@ pub fn resolve_move(
     }
 
     contact
+}
+
+/// Is a body pressed against a full solid on the given side (`dir` -1 left,
+/// +1 right)? Probes a 1px strip beside the body, inset vertically so floor
+/// and ceiling contacts don't count as walls.
+pub fn touching_wall(pos: Vec2, size: Vec2, solids: &[SolidRect], dir: f32) -> bool {
+    let probe_x = if dir > 0.0 {
+        pos.x + size.x
+    } else {
+        pos.x - 1.0
+    };
+    let probe = Aabb::new(probe_x, pos.y + 2.0, 1.0, size.y - 4.0);
+    solids.iter().any(|s| !s.one_way && probe.overlaps(&s.rect))
 }
 
 #[cfg(test)]
@@ -183,6 +206,48 @@ mod tests {
         assert!(!contact.grounded);
         assert_eq!(pos.y, 50.0); // untouched
         assert_eq!(vel.y, -30.0);
+    }
+
+    #[test]
+    fn contact_distinguishes_solid_from_one_way() {
+        let size = Vec2::new(10.0, 10.0);
+
+        let mut pos = Vec2::new(20.0, 45.0);
+        let mut vel = Vec2::new(0.0, 30.0);
+        let c = resolve_move(
+            &mut pos,
+            &mut vel,
+            Vec2::new(20.0, 30.0),
+            size,
+            &[SolidRect::one_way(Aabb::new(0.0, 50.0, 100.0, 8.0))],
+        );
+        assert!(c.on_one_way && !c.on_solid);
+
+        let mut pos = Vec2::new(20.0, 45.0);
+        let mut vel = Vec2::new(0.0, 30.0);
+        let c = resolve_move(
+            &mut pos,
+            &mut vel,
+            Vec2::new(20.0, 30.0),
+            size,
+            &[solid(0.0, 50.0, 100.0, 8.0)],
+        );
+        assert!(c.on_solid && !c.on_one_way);
+    }
+
+    #[test]
+    fn wall_probe_detects_solids_but_not_platforms_or_floor() {
+        let size = Vec2::new(10.0, 30.0);
+        let pos = Vec2::new(50.0, 100.0); // body occupies x 50-60, y 100-130
+        let wall_right = [solid(60.0, 80.0, 20.0, 100.0)];
+        let platform_right = [SolidRect::one_way(Aabb::new(60.0, 80.0, 20.0, 100.0))];
+        let floor_below = [solid(0.0, 130.0, 200.0, 20.0)];
+
+        assert!(touching_wall(pos, size, &wall_right, 1.0));
+        assert!(!touching_wall(pos, size, &wall_right, -1.0)); // wrong side
+        assert!(!touching_wall(pos, size, &platform_right, 1.0)); // one-way
+        assert!(!touching_wall(pos, size, &floor_below, 1.0)); // floor is not a wall
+        assert!(!touching_wall(pos, size, &floor_below, -1.0));
     }
 
     #[test]

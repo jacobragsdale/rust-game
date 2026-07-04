@@ -20,6 +20,24 @@ pub struct Avatar {
     pub prev_pos: Vec2,
     pub grounded: bool,
     pub facing_right: bool,
+    /// Ticks since the avatar was last grounded (0 while grounded).
+    pub coyote_ticks: u32,
+    /// Countdown holding a recent jump press until it can be honored.
+    pub jump_buffer: u32,
+    /// Mid-air jumps still available (refilled on landing / wall jump).
+    pub air_jumps: u8,
+    /// Standing on a one-way platform (and nothing solid) last tick.
+    pub on_one_way_only: bool,
+    /// Countdown during which one-way platforms are ignored (drop-through).
+    pub drop_ticks: u32,
+    pub wall_sliding: bool,
+    /// Which side the wall being slid is on (-1 left, +1 right).
+    pub wall_dir: f32,
+    /// Currently in the rising arc of a double jump (drives the animation).
+    pub double_jumping: bool,
+    pub crouching: bool,
+    /// Death freeze countdown; respawns when it reaches zero.
+    pub dead_ticks: u32,
 }
 
 impl Avatar {
@@ -30,15 +48,47 @@ impl Avatar {
     pub const DECEL: f32 = 1800.0;
     /// Jump clears 3 tiles up and ~4.5 tiles across at full run speed.
     pub const JUMP_SPEED: f32 = 520.0;
+    pub const DOUBLE_JUMP_SPEED: f32 = 470.0;
     pub const GRAVITY: f32 = 1400.0;
+    /// Extra gravity while rising with the jump key released: tap = short
+    /// hop, hold = full jump.
+    pub const LOW_JUMP_GRAVITY: f32 = 1800.0;
     pub const MAX_FALL: f32 = 900.0;
+    /// Fall speed cap while pressed against a wall.
+    pub const WALL_SLIDE_SPEED: f32 = 70.0;
+    /// Horizontal kick away from the wall on a wall jump.
+    pub const WALL_JUMP_PUSH: f32 = 260.0;
+    pub const WALL_JUMP_SPEED: f32 = 480.0;
+    /// Jump grace after walking off a ledge (100 ms at 60 Hz).
+    pub const COYOTE_TICKS: u32 = 6;
+    /// How early a jump press may land and still count.
+    pub const JUMP_BUFFER_TICKS: u32 = 6;
+    pub const MAX_AIR_JUMPS: u8 = 1;
+    /// One-way platforms are ignored for this long after down+jump.
+    pub const DROP_TICKS: u32 = 8;
+    /// Death freeze before respawning (0.6 s).
+    pub const DEATH_TICKS: u32 = 36;
 
     pub fn new(spawn: Vec2) -> Self {
         Avatar {
             prev_pos: spawn,
             grounded: false,
             facing_right: true,
+            coyote_ticks: u32::MAX,
+            jump_buffer: 0,
+            air_jumps: Self::MAX_AIR_JUMPS,
+            on_one_way_only: false,
+            drop_ticks: 0,
+            wall_sliding: false,
+            wall_dir: 0.0,
+            double_jumping: false,
+            crouching: false,
+            dead_ticks: 0,
         }
+    }
+
+    pub fn dead(&self) -> bool {
+        self.dead_ticks > 0
     }
 }
 

@@ -8,8 +8,11 @@ use ggez::Context;
 pub struct PlayerInput {
     pub left: bool,
     pub right: bool,
-    /// Edge-triggered jump: one press, one jump.
+    pub down: bool,
+    /// Edge-triggered jump: one press, one jump (buffered by the avatar).
     pub jump_pressed: bool,
+    /// Jump key currently held: releasing early cuts the jump short.
+    pub jump_held: bool,
 }
 
 pub fn read(ctx: &Context) -> PlayerInput {
@@ -20,8 +23,12 @@ pub fn read(ctx: &Context) -> PlayerInput {
     PlayerInput {
         left: left && !right,
         right: right && !left,
+        down: kb.is_key_pressed(Key::Down) || kb.is_key_pressed(Key::S),
         jump_pressed: kb.is_key_just_pressed(Key::Up)
             || kb.is_key_just_pressed(Key::W)
             || kb.is_key_just_pressed(Key::Space),
+        jump_held: kb.is_key_pressed(Key::Up)
+            || kb.is_key_pressed(Key::W)
+            || kb.is_key_pressed(Key::Space),
     }
 }

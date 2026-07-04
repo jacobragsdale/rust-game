@@ -6,16 +6,23 @@ use hecs::World;
 use crate::assets::ClipSet;
 use crate::ecs::components::{AnimationState, Avatar, Velocity};
 
-/// Map the avatar's movement state to a clip name. Grows into the full
-/// state machine (attack, slide, wall-slide, ...) in Phase 3.
+/// Map the avatar's movement state to a clip name.
 pub fn select_avatar_clip(world: &mut World) {
     for (_, (avatar, vel, anim)) in world.query_mut::<(&Avatar, &Velocity, &mut AnimationState)>() {
-        let clip = if !avatar.grounded {
-            if vel.0.y < 0.0 {
+        let clip = if avatar.dead() {
+            "hurt"
+        } else if avatar.wall_sliding {
+            "wall_slide"
+        } else if !avatar.grounded {
+            if avatar.double_jumping {
+                "double_jump"
+            } else if vel.0.y < 0.0 {
                 "jump"
             } else {
                 "fall"
             }
+        } else if avatar.crouching {
+            "crouch"
         } else if vel.0.x.abs() > 5.0 {
             "run"
         } else {

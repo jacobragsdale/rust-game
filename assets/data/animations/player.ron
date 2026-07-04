@@ -31,5 +31,20 @@ ClipSet(
             fps: 8.0,
             looping: true,
         ),
+        "double_jump": Clip(
+            frames: [(4, 2), (5, 2), (6, 2), (0, 3)],
+            fps: 14.0,
+            looping: false,
+        ),
+        "wall_slide": Clip(
+            frames: [(2, 11), (3, 11)],
+            fps: 8.0,
+            looping: true,
+        ),
+        "hurt": Clip(
+            frames: [(3, 8), (4, 8), (5, 8), (6, 8)],
+            fps: 8.0,
+            looping: false,
+        ),
     },
 )
