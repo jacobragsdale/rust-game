@@ -1,13 +1,11 @@
 [package]
-name = "rust-playground"
+name = "supergame"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "2D side-scroller adventure RPG"
 
 [dependencies]
 ggez = "0.9.3"
-config = { version = "0.13.4", features = [] }
 serde = { version = "1.0.195", features = ["derive"] }
 toml = "0.5.11"
 rand = "0.8"
