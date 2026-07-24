@@ -177,8 +177,8 @@ impl AdventureScene {
 }
 
 impl Scene for AdventureScene {
-    fn update(&mut self, ctx: &mut Context, _res: &mut Resources) -> GameResult<Transition> {
-        self.sim.step(input::read(ctx));
+    fn update(&mut self, ctx: &mut Context, res: &mut Resources) -> GameResult<Transition> {
+        self.sim.step(input::read(ctx, &mut res.jump));
         crate::systems::camera::follow_avatar(&mut self.sim.world, &mut self.camera);
         Ok(Transition::None)
     }

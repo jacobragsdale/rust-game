@@ -11,11 +11,16 @@ use ggez::{Context, GameResult};
 
 use crate::assets::Assets;
 use crate::config::Config;
+use crate::systems::input::JumpLatch;
 
 /// Shared state that outlives any single scene.
 pub struct Resources {
     pub config: Config,
     pub assets: Assets,
+    /// Jump presses waiting for a tick to act on them. Lives here rather than
+    /// in the scene because the press arrives as a window event, which only
+    /// the app sees.
+    pub jump: JumpLatch,
 }
 
 pub enum Transition {

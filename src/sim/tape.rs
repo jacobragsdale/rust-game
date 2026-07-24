@@ -25,10 +25,12 @@
 //!
 //! The subtle part is [`Tape::inputs`]: `PlayerInput::jump_pressed` is
 //! edge-triggered while `jump_held` is level-triggered, exactly as
-//! `input::read` derives them from the keyboard. The tape reproduces that by
-//! diffing consecutive ticks, so `jump 10` is one jump held for ten ticks —
-//! what actually happens when you hold the key — rather than ten jumps. Get
-//! this wrong and tapes would perform inputs no human could.
+//! [`crate::systems::input::JumpLatch`] delivers them from the keyboard. The
+//! tape reproduces that by diffing consecutive ticks, so `jump 10` is one jump
+//! held for ten ticks — what actually happens when you hold the key — rather
+//! than ten jumps. Get this wrong and tapes would perform inputs no human
+//! could. (One press reaching two ticks is exactly the bug the latch exists to
+//! prevent, so a tape must never express it either.)
 
 use std::fs;
 use std::path::Path;
