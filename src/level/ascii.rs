@@ -158,7 +158,16 @@ fn build(def: LevelDef, tile_size: f32, rules: &AutotileRules) -> anyhow::Result
         tiles,
         solids: merge_runs(&solid_flags, width, height, tile_size, tile_size, 0.0),
         // Thin strip at the top of the cell: land on it, jump through it.
-        one_way: merge_runs(&platform_flags, width, height, tile_size, 8.0, 0.0),
+        // The tileset's `platform` tile must draw its surface in exactly this
+        // band, or the collision sits somewhere the player cannot see.
+        one_way: merge_runs(
+            &platform_flags,
+            width,
+            height,
+            tile_size,
+            crate::level::ONE_WAY_THICKNESS,
+            0.0,
+        ),
         // Spikes occupy the lower half of their cell.
         hazards: merge_runs(
             &hazard_flags,

@@ -1,12 +1,21 @@
-// Castle tileset: 480x480 atlas, 15 columns of 32px tiles, magenta color key.
+// Castle tileset: 480x480 atlas, 15 columns of 32px tiles.
 // Tile indices are 0-based (Tiled gid - 1). The rule tiles were chosen to
 // match how the original SuperGame castle_level.tmx used this atlas; tweak
 // freely — this file is the only place tile indices exist.
+//
+// No color key: the PNG is palette-indexed with a tRNS chunk, so it already
+// decodes with real alpha. It previously declared a magenta key, which never
+// matched a pixel (the palette's masked color is cyan) and so did nothing.
+//
+// `platform` must draw its walkable surface in the top 8px of its tile, to
+// match level::ONE_WAY_THICKNESS. Tile 181 is a decorative arch whose art
+// sits in the BOTTOM 4px; using it put the collision strip entirely above
+// anything visible. Tiles 195-198 are the plank platforms. See tests/assets.rs.
 Tileset(
     image: "tile_castle",
     tile_size: 32,
     columns: 15,
-    transparent_color: Some((255, 0, 255)),
+    transparent_color: None,
     rules: Rules(
         solid_top_left: 4,
         solid_top: 5,
@@ -14,7 +23,7 @@ Tileset(
         solid_left: 32,
         solid_fill: 31,
         solid_right: 30,
-        platform: 181,
+        platform: 196,
         background: [151, 152, 153],
     ),
 )

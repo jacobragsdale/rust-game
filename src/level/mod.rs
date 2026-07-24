@@ -13,6 +13,15 @@ use ggez::glam::Vec2;
 use crate::assets::Assets;
 use crate::physics::Aabb;
 
+/// Height of a one-way platform's collision strip, in pixels, measured down
+/// from the top of its cell.
+///
+/// This is a contract with the art: the tileset's `platform` tile has to draw
+/// its walkable surface in exactly this band. When it does not, the collision
+/// is somewhere the player cannot see, and the platform feels broken in a way
+/// that looks like a physics bug. `tests/assets.rs` checks the two agree.
+pub const ONE_WAY_THICKNESS: f32 = 8.0;
+
 /// NPC/door/etc. placements parsed from maps. Consumed in Phase 3 when NPCs
 /// spawn from data; until then only tests read it.
 #[derive(Clone, Debug)]

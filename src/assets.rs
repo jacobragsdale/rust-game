@@ -120,18 +120,16 @@ impl Assets {
         &self.base
     }
 
-    /// Load `assets/graphics/{name}.png`, applying an optional color key.
-    /// Images are cheap to clone (shared GPU handle).
-    pub fn image(
-        &mut self,
-        ctx: &mut Context,
+    /// Decode `assets/graphics/{name}.png` to RGBA, applying an optional
+    /// color key.
+    ///
+    /// Split out of [`Assets::image`] because it needs no graphics context,
+    /// which lets asset checks inspect exactly the pixels the game uploads.
+    pub fn decode_image(
+        &self,
         name: &str,
         color_key: Option<(u8, u8, u8)>,
-    ) -> anyhow::Result<Image> {
-        if let Some(image) = self.images.get(name) {
-            return Ok(image.clone());
-        }
-
+    ) -> anyhow::Result<image::RgbaImage> {
         let path = self.base.join("graphics").join(format!("{name}.png"));
         let bytes =
             fs::read(&path).with_context(|| format!("failed to read image {}", path.display()))?;
@@ -147,6 +145,22 @@ impl Assets {
             }
         }
 
+        Ok(rgba)
+    }
+
+    /// Load `assets/graphics/{name}.png`, applying an optional color key.
+    /// Images are cheap to clone (shared GPU handle).
+    pub fn image(
+        &mut self,
+        ctx: &mut Context,
+        name: &str,
+        color_key: Option<(u8, u8, u8)>,
+    ) -> anyhow::Result<Image> {
+        if let Some(image) = self.images.get(name) {
+            return Ok(image.clone());
+        }
+
+        let rgba = self.decode_image(name, color_key)?;
         let (w, h) = rgba.dimensions();
         let image = Image::from_pixels(ctx, rgba.as_raw(), ImageFormat::Rgba8UnormSrgb, w, h);
         self.images.insert(name.to_string(), image.clone());
