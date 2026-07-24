@@ -1,17 +1,12 @@
-mod app;
-mod assets;
-mod config;
-mod ecs;
-mod level;
-mod physics;
-mod scenes;
-mod systems;
+//! The game binary: opens a window and hands control to the scene stack.
+//! Everything it uses lives in the `supergame` library, which the headless
+//! `sim` binary and the integration tests share.
 
 use ggez::event;
 use ggez::ContextBuilder;
 
-use crate::app::App;
-use crate::config::Config;
+use supergame::app::App;
+use supergame::config::Config;
 
 fn main() -> anyhow::Result<()> {
     let config = Config::load("config.toml")?;

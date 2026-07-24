@@ -2373,6 +2373,7 @@ dependencies = [
  "image",
  "ron",
  "serde",
+ "serde_json",
  "tiled",
  "toml",
 ]

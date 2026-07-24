@@ -1,0 +1,39 @@
+// Movement testbed — the map input tapes run against.
+//
+// This exists so that movement regression tapes do not assert against real
+// level geometry. Castle and every later map will get redesigned constantly;
+// this one must not, because tapes encode exact pixel coordinates from it.
+// Treat it as a fixture: add features, but never move what is already here.
+//
+// Legend: '#' solid  '=' one-way platform  '^' spikes  'P' spawn
+//
+// 40x16 tiles at 32px = 1280x512 world pixels.
+//
+//   spawn        col 2,  row 11   world (70, 350), feet on the floor at y=384
+//   spike pit    cols 8-11        world x 256..384, spikes at y=496
+//   platform     cols 14-17 row 10, world x 448..576, top y=320 (8px thick)
+//   spike gap    cols 24-27       world x 768..896, spikes at y=496
+//   chimney      walls col 32 / col 36, interior x 1056..1152 (96px)
+//                open at row 11 so it can be walked into at floor level
+Level(
+    tileset: "castle",
+    grid: [
+        "########################################",
+        "#......................................#",
+        "#......................................#",
+        "#...............................#...#..#",
+        "#...............................#...#..#",
+        "#...............................#...#..#",
+        "#...............................#...#..#",
+        "#...............................#...#..#",
+        "#...............................#...#..#",
+        "#...............................#...#..#",
+        "#.............====..............#...#..#",
+        "#.P.................................#..#",
+        "########....############....############",
+        "########....############....############",
+        "########....############....############",
+        "########^^^^############^^^^############",
+    ],
+    entities: [],
+)

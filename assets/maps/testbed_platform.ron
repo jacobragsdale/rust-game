@@ -1,0 +1,32 @@
+// One-way platform testbed: the player spawns directly beneath a platform,
+// close enough to jump up through it and land on top, and to drop back down
+// with down+jump. Isolated from testbed.ron so the drop-through tape does
+// not depend on first clearing a spike pit.
+//
+// Fixture map — do not move anything already here; tapes encode its pixels.
+//
+//   spawn     col 2, row 12    world (70, 382), feet on the floor at y=416
+//   platform  row 11, cols 1-5 world x 32..192, top y=352 (8px thick)
+//             standing on it puts the player at y=318, a 64px rise
+Level(
+    tileset: "castle",
+    grid: [
+        "############",
+        "#..........#",
+        "#..........#",
+        "#..........#",
+        "#..........#",
+        "#..........#",
+        "#..........#",
+        "#..........#",
+        "#..........#",
+        "#..........#",
+        "#..........#",
+        "#=====.....#",
+        "#.P........#",
+        "############",
+        "############",
+        "############",
+    ],
+    entities: [],
+)

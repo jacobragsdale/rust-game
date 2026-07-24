@@ -1,0 +1,31 @@
+// Wall-jump testbed: a bare 96px shaft with the player spawning at the
+// bottom of it. Kept separate from testbed.ron so that a wall-jump tape is
+// twelve lines instead of a five-hundred-tick traversal of another map.
+// The width matches the castle map's chimney, so tuning here transfers.
+//
+// Fixture map — do not move anything already here; tapes encode its pixels.
+//
+//   spawn        col 5, row 13    world (166, 414), feet on the floor at y=448
+//   shaft        interior x 128..224 (96px wide, 3 tiles)
+Level(
+    tileset: "castle",
+    grid: [
+        "############",
+        "####...#####",
+        "####...#####",
+        "####...#####",
+        "####...#####",
+        "####...#####",
+        "####...#####",
+        "####...#####",
+        "####...#####",
+        "####...#####",
+        "####...#####",
+        "####...#####",
+        "####...#####",
+        "####.P.#####",
+        "############",
+        "############",
+    ],
+    entities: [],
+)

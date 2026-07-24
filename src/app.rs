@@ -11,9 +11,7 @@ use ggez::{Context, GameResult};
 use crate::assets::Assets;
 use crate::config::Config;
 use crate::scenes::{main_menu::MainMenuScene, Resources, Scene, Transition};
-
-pub const TICKS_PER_SECOND: u32 = 60;
-pub const TICK: f32 = 1.0 / TICKS_PER_SECOND as f32;
+use crate::sim::TICKS_PER_SECOND;
 
 pub struct App {
     scenes: Vec<Box<dyn Scene>>,

@@ -1,7 +1,11 @@
 //! Adventure mode: a Tiled/ASCII level rendered as pixel art on a 640x360
 //! internal canvas, scaled up to the window. First playable slice of the RPG.
+//!
+//! This scene owns no gameplay logic. It holds a [`Sim`] — which runs equally
+//! well headless — plus the GPU resources needed to look at it. Everything
+//! `update` does is feed the sim one tick of input, which is why the game and
+//! the `sim` binary can never disagree about what happens.
 
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use ggez::glam::Vec2;
@@ -10,15 +14,13 @@ use ggez::graphics::{
 };
 use ggez::winit::event::VirtualKeyCode;
 use ggez::{Context, GameResult};
-use hecs::World;
 
-use crate::app::TICK;
-use crate::assets::{ClipSet, TilesetDef};
-use crate::ecs::components::{AnimationState, Avatar, Position, Size, Sprite, Velocity};
-use crate::level::LevelData;
-use crate::physics::SolidRect;
+use crate::assets::TilesetDef;
+use crate::debug::DebugOverlay;
+use crate::ecs::components::{AnimationState, Avatar, Position, Sprite};
 use crate::scenes::{pause::PauseScene, Resources, Scene, Transition};
-use crate::systems::{animation, avatar, camera::Camera, input};
+use crate::sim::Sim;
+use crate::systems::{camera::Camera, input};
 
 pub const INTERNAL_WIDTH: f32 = 640.0;
 pub const INTERNAL_HEIGHT: f32 = 360.0;
@@ -31,10 +33,8 @@ const CLEAR_COLOR: Color = Color {
 };
 
 pub struct AdventureScene {
-    world: World,
-    level: LevelData,
-    /// Solids + one-way platforms, pre-flattened for the physics pass.
-    geometry: Vec<SolidRect>,
+    /// The whole game state and its rules; contains no graphics resources.
+    sim: Sim,
     camera: Camera,
     /// 640x360 offscreen target; the window draw scales this up.
     internal: Image,
@@ -42,23 +42,21 @@ pub struct AdventureScene {
     tile_batch: InstanceArray,
     tile_sheet_size: Vec2,
     player_image: Image,
-    player_clips: Rc<ClipSet>,
+    debug: DebugOverlay,
 }
 
 impl AdventureScene {
     pub fn new(ctx: &mut Context, res: &mut Resources, map: &str) -> anyhow::Result<Self> {
-        let map_path: PathBuf = res.assets.base_dir().join(map);
-        let level = LevelData::load(&map_path, &mut res.assets)?;
+        let sim = Sim::load(&mut res.assets, map)?;
 
-        let tileset = res.assets.tileset(&level.tileset)?;
+        let tileset = res.assets.tileset(&sim.level.tileset)?;
         let tile_image = res
             .assets
             .image(ctx, &tileset.image, tileset.transparent_color)?;
         let tile_sheet_size = Vec2::new(tile_image.width() as f32, tile_image.height() as f32);
         let tile_batch = InstanceArray::new(ctx, tile_image);
 
-        let player_clips = res.assets.clip_set("player")?;
-        let player_image = res.assets.image(ctx, &player_clips.sheet, None)?;
+        let player_image = res.assets.image(ctx, &sim.clips.sheet, None)?;
 
         let internal = Image::new_canvas_image(
             ctx,
@@ -68,60 +66,40 @@ impl AdventureScene {
             1,
         );
 
-        let mut geometry: Vec<SolidRect> =
-            level.solids.iter().map(|&r| SolidRect::solid(r)).collect();
-        geometry.extend(level.one_way.iter().map(|&r| SolidRect::one_way(r)));
-
-        let mut world = World::new();
-        let spawn = level.player_spawn;
-        let (fw, fh) = player_clips.frame_size;
-        world.spawn((
-            Avatar::new(spawn),
-            Position(spawn),
-            Velocity(Vec2::ZERO),
-            Size(Vec2::new(Avatar::WIDTH, Avatar::HEIGHT)),
-            Sprite {
-                // sprite centered horizontally on the collider, feet aligned
-                offset: Vec2::new((Avatar::WIDTH - fw) / 2.0, Avatar::HEIGHT - fh),
-            },
-            AnimationState::new("idle"),
-        ));
-
         let camera = Camera::new(
             Vec2::new(INTERNAL_WIDTH, INTERNAL_HEIGHT),
-            Vec2::new(level.pixel_width(), level.pixel_height()),
+            Vec2::new(sim.level.pixel_width(), sim.level.pixel_height()),
         );
 
         Ok(AdventureScene {
-            world,
-            level,
-            geometry,
+            sim,
             camera,
             internal,
             tileset,
             tile_batch,
             tile_sheet_size,
             player_image,
-            player_clips,
+            debug: DebugOverlay::from_env(),
         })
     }
 
     fn queue_tiles(&mut self) {
         let offset = self.camera.offset();
-        let ts = self.level.tile_size;
+        let level = &self.sim.level;
+        let ts = level.tile_size;
         let x0 = (offset.x / ts).floor().max(0.0) as u32;
         let y0 = (offset.y / ts).floor().max(0.0) as u32;
-        let x1 = (((offset.x + INTERNAL_WIDTH) / ts).ceil() as u32 + 1).min(self.level.width);
-        let y1 = (((offset.y + INTERNAL_HEIGHT) / ts).ceil() as u32 + 1).min(self.level.height);
+        let x1 = (((offset.x + INTERNAL_WIDTH) / ts).ceil() as u32 + 1).min(level.width);
+        let y1 = (((offset.y + INTERNAL_HEIGHT) / ts).ceil() as u32 + 1).min(level.height);
 
         let mut params = Vec::new();
-        for layer in [&self.level.background, &self.level.tiles] {
+        for layer in [&level.background, &level.tiles] {
             if layer.is_empty() {
                 continue;
             }
             for y in y0..y1 {
                 for x in x0..x1 {
-                    let Some(tile) = layer[(y * self.level.width + x) as usize] else {
+                    let Some(tile) = layer[(y * level.width + x) as usize] else {
                         continue;
                     };
                     let src =
@@ -138,13 +116,13 @@ impl AdventureScene {
     fn draw_hazards(&self, ctx: &mut Context, canvas: &mut Canvas) -> GameResult {
         // Placeholder spikes (the original spike art was never committed):
         // white triangles across each hazard strip. Replaced in Phase 3.
-        if self.level.hazards.is_empty() {
+        if self.sim.level.hazards.is_empty() {
             return Ok(());
         }
         let offset = self.camera.offset();
         let mut mb = MeshBuilder::new();
         let spike_w = 8.0;
-        for hazard in &self.level.hazards {
+        for hazard in &self.sim.level.hazards {
             let mut x = hazard.x;
             while x + spike_w <= hazard.right() + 0.5 {
                 mb.polygon(
@@ -164,21 +142,24 @@ impl AdventureScene {
         Ok(())
     }
 
-    fn draw_player(&mut self, canvas: &mut Canvas) {
+    fn draw_player(&self, canvas: &mut Canvas) {
         let offset = self.camera.offset();
-        let (fw, _) = self.player_clips.frame_size;
+        let clips = &self.sim.clips;
+        let (fw, _) = clips.frame_size;
         let sheet_w = self.player_image.width() as f32;
         let sheet_h = self.player_image.height() as f32;
 
-        for (_, (pos, sprite, anim, avatar)) in
-            self.world
-                .query_mut::<(&Position, &Sprite, &AnimationState, &Avatar)>()
+        for (_, (pos, sprite, anim, avatar)) in self
+            .sim
+            .world
+            .query::<(&Position, &Sprite, &AnimationState, &Avatar)>()
+            .iter()
         {
-            let Some(clip) = self.player_clips.clip(&anim.clip) else {
+            let Some(clip) = clips.clip(&anim.clip) else {
                 continue;
             };
             let frame = clip.frames[anim.frame.min(clip.frames.len() - 1)];
-            let src = self.player_clips.src_rect(frame, sheet_w, sheet_h);
+            let src = clips.src_rect(frame, sheet_w, sheet_h);
             let draw_pos = (pos.0 + sprite.offset - offset).floor();
 
             let param = if avatar.facing_right {
@@ -197,19 +178,8 @@ impl AdventureScene {
 
 impl Scene for AdventureScene {
     fn update(&mut self, ctx: &mut Context, _res: &mut Resources) -> GameResult<Transition> {
-        let player_input = input::read(ctx);
-
-        avatar::update(
-            &mut self.world,
-            &self.level,
-            &self.geometry,
-            player_input,
-            TICK,
-        );
-        animation::select_avatar_clip(&mut self.world);
-        animation::advance(&mut self.world, &self.player_clips, TICK);
-
-        crate::systems::camera::follow_avatar(&mut self.world, &mut self.camera);
+        self.sim.step(input::read(ctx));
+        crate::systems::camera::follow_avatar(&mut self.sim.world, &mut self.camera);
         Ok(Transition::None)
     }
 
@@ -222,6 +192,13 @@ impl Scene for AdventureScene {
         canvas.draw(&self.tile_batch, DrawParam::default());
         self.draw_hazards(ctx, &mut canvas)?;
         self.draw_player(&mut canvas);
+        self.debug.draw(
+            ctx,
+            &mut canvas,
+            &self.sim,
+            self.camera.offset(),
+            Vec2::new(INTERNAL_WIDTH, INTERNAL_HEIGHT),
+        )?;
         canvas.finish(ctx)
     }
 
@@ -252,6 +229,10 @@ impl Scene for AdventureScene {
         match key {
             VirtualKeyCode::P => Transition::Push(Box::new(PauseScene)),
             VirtualKeyCode::M => Transition::Reset, // back to the main menu
+            VirtualKeyCode::F1 => {
+                self.debug.toggle();
+                Transition::None
+            }
             _ => Transition::None,
         }
     }
