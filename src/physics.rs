@@ -74,8 +74,16 @@ pub struct Contact {
     pub on_one_way: bool,
 }
 
-/// Swept AABB resolution: uses the previous position to decide which side the
-/// body approached from, then pushes it out and kills velocity on that axis.
+/// Resolve a body's move against static geometry, one axis at a time, using
+/// the previous position to decide which side it approached from.
+///
+/// The two passes are not cosmetic. Resolving both axes in a single loop lets
+/// a decision made at one position survive a later correction that invalidates
+/// it: a body can land on a floor it overlaps by a fraction of a pixel, then
+/// get pushed sideways clear of that floor and still come out `grounded`.
+/// Which of those happened depended on the order of `solids`. Settling x first
+/// and only then testing y means the vertical pass sees the position the body
+/// actually ends the tick at.
 pub fn resolve_move(
     pos: &mut Vec2,
     vel: &mut Vec2,
@@ -83,21 +91,40 @@ pub fn resolve_move(
     size: Vec2,
     solids: &[SolidRect],
 ) -> Contact {
-    let prev = Aabb::new(prev_pos.x, prev_pos.y, size.x, size.y);
     let mut contact = Contact::default();
 
+    // --- horizontal: test the new x against the previous y ---
     for solid in solids {
-        let current = Aabb::new(pos.x, pos.y, size.x, size.y);
-        if !current.overlaps(&solid.rect) {
+        // One-way platforms never block horizontal motion.
+        if solid.one_way {
+            continue;
+        }
+        let body = Aabb::new(pos.x, prev_pos.y, size.x, size.y);
+        if !body.overlaps(&solid.rect) {
             continue;
         }
 
-        let from_top = prev.bottom() <= solid.rect.y;
-        let from_bottom = prev.y >= solid.rect.bottom();
-        let from_left = prev.right() <= solid.rect.x;
-        let from_right = prev.x >= solid.rect.right();
+        if prev_pos.x + size.x <= solid.rect.x {
+            pos.x = solid.rect.x - size.x;
+            if vel.x > 0.0 {
+                vel.x = 0.0;
+            }
+        } else if prev_pos.x >= solid.rect.right() {
+            pos.x = solid.rect.right();
+            if vel.x < 0.0 {
+                vel.x = 0.0;
+            }
+        }
+    }
 
-        if from_top {
+    // --- vertical: x is settled, so this sees the final column ---
+    for solid in solids {
+        let body = Aabb::new(pos.x, pos.y, size.x, size.y);
+        if !body.overlaps(&solid.rect) {
+            continue;
+        }
+
+        if prev_pos.y + size.y <= solid.rect.y {
             pos.y = solid.rect.y - size.y;
             vel.y = 0.0;
             contact.grounded = true;
@@ -108,25 +135,59 @@ pub fn resolve_move(
             }
         } else if solid.one_way {
             // approached from below or the side: pass through
-        } else if from_bottom {
+        } else if prev_pos.y >= solid.rect.bottom() {
             pos.y = solid.rect.bottom();
             if vel.y < 0.0 {
                 vel.y = 0.0;
             }
-        } else if from_left {
-            pos.x = solid.rect.x - size.x;
-            if vel.x > 0.0 {
-                vel.x = 0.0;
-            }
-        } else if from_right {
-            pos.x = solid.rect.right();
-            if vel.x < 0.0 {
-                vel.x = 0.0;
+        }
+    }
+
+    // --- depenetration fallback ---
+    // Neither pass applies when the body is already inside a solid with no
+    // approach direction to infer — a spawn point placed in a wall, or a
+    // diagonal entry into a corner. Without this the body is trapped forever,
+    // sinking a fraction of a pixel per tick. Push out along the shallowest
+    // axis so nothing can be permanently stuck.
+    for solid in solids {
+        if solid.one_way {
+            continue;
+        }
+        let body = Aabb::new(pos.x, pos.y, size.x, size.y);
+        if !body.overlaps(&solid.rect) {
+            continue;
+        }
+
+        let out_left = solid.rect.x - body.right();
+        let out_right = solid.rect.right() - body.x;
+        let out_up = solid.rect.y - body.bottom();
+        let out_down = solid.rect.bottom() - body.y;
+        let dx = shallower(out_left, out_right);
+        let dy = shallower(out_up, out_down);
+
+        if dx.abs() <= dy.abs() {
+            pos.x += dx;
+            vel.x = 0.0;
+        } else {
+            pos.y += dy;
+            vel.y = 0.0;
+            if dy < 0.0 {
+                contact.grounded = true;
+                contact.on_solid = true;
             }
         }
     }
 
     contact
+}
+
+/// Of two opposing escape distances, the one with the smaller magnitude.
+fn shallower(a: f32, b: f32) -> f32 {
+    if a.abs() <= b.abs() {
+        a
+    } else {
+        b
+    }
 }
 
 /// Is a body pressed against a full solid on the given side (`dir` -1 left,
