@@ -203,6 +203,24 @@ pub fn touching_wall(pos: Vec2, size: Vec2, solids: &[SolidRect], dir: f32) -> b
     solids.iter().any(|s| !s.one_way && probe.overlaps(&s.rect))
 }
 
+/// Which side, if either, a body is pressed against a wall on: -1 left,
+/// +1 right, 0 for neither.
+///
+/// `prefer` (-1, 0, or +1) breaks the tie when both sides touch: in a shaft
+/// barely wider than the body, the wall the player is pushing into is the one
+/// they mean. With no preference the right wall wins, arbitrarily but stably.
+pub fn wall_contact(pos: Vec2, size: Vec2, solids: &[SolidRect], prefer: f32) -> f32 {
+    let left = touching_wall(pos, size, solids, -1.0);
+    let right = touching_wall(pos, size, solids, 1.0);
+    match (left, right) {
+        (true, true) if prefer != 0.0 => prefer.signum(),
+        (true, true) => 1.0,
+        (true, false) => -1.0,
+        (false, true) => 1.0,
+        (false, false) => 0.0,
+    }
+}
+
 #[cfg(test)]
 mod overlap_tests {
     use super::*;
@@ -365,6 +383,27 @@ mod tests {
         assert!(!touching_wall(pos, size, &platform_right, 1.0)); // one-way
         assert!(!touching_wall(pos, size, &floor_below, 1.0)); // floor is not a wall
         assert!(!touching_wall(pos, size, &floor_below, -1.0));
+    }
+
+    #[test]
+    fn wall_contact_reports_the_side_and_honors_the_preference() {
+        let size = Vec2::new(20.0, 30.0); // body occupies x 50-70
+        let pos = Vec2::new(50.0, 100.0);
+        let right = [solid(70.0, 80.0, 20.0, 100.0)];
+        let left = [solid(30.0, 80.0, 20.0, 100.0)];
+        let shaft = [
+            solid(70.0, 80.0, 20.0, 100.0),
+            solid(30.0, 80.0, 20.0, 100.0),
+        ];
+
+        assert_eq!(wall_contact(pos, size, &right, 0.0), 1.0);
+        assert_eq!(wall_contact(pos, size, &left, 0.0), -1.0);
+        assert_eq!(wall_contact(pos, size, &[], 0.0), 0.0);
+        // pressing into one wall of a tight shaft picks that wall
+        assert_eq!(wall_contact(pos, size, &shaft, -1.0), -1.0);
+        assert_eq!(wall_contact(pos, size, &shaft, 1.0), 1.0);
+        // a preference for a side that is not there does not invent contact
+        assert_eq!(wall_contact(pos, size, &right, -1.0), 1.0);
     }
 
     #[test]

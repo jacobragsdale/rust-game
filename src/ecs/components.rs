@@ -31,8 +31,10 @@ pub struct Avatar {
     /// Countdown during which one-way platforms are ignored (drop-through).
     pub drop_ticks: u32,
     pub wall_sliding: bool,
-    /// Which side the wall being slid is on (-1 left, +1 right).
+    /// Which side the last touched wall is on (-1 left, +1 right).
     pub wall_dir: f32,
+    /// Ticks since the avatar last touched a wall (0 while touching).
+    pub wall_coyote_ticks: u32,
     /// Currently in the rising arc of a double jump (drives the animation).
     pub double_jumping: bool,
     pub crouching: bool,
@@ -61,6 +63,10 @@ impl Avatar {
     pub const WALL_JUMP_SPEED: f32 = 480.0;
     /// Jump grace after walking off a ledge (100 ms at 60 Hz).
     pub const COYOTE_TICKS: u32 = 6;
+    /// Jump grace after leaving a wall. Wall contact is often a single tick —
+    /// clipping a corner, or bouncing off on the way up — and without a grace
+    /// window the wall jump only exists while a slide is held.
+    pub const WALL_COYOTE_TICKS: u32 = 6;
     /// How early a jump press may land and still count.
     pub const JUMP_BUFFER_TICKS: u32 = 6;
     pub const MAX_AIR_JUMPS: u8 = 1;
@@ -81,6 +87,7 @@ impl Avatar {
             drop_ticks: 0,
             wall_sliding: false,
             wall_dir: 0.0,
+            wall_coyote_ticks: u32::MAX,
             double_jumping: false,
             crouching: false,
             dead_ticks: 0,

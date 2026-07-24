@@ -45,6 +45,7 @@ pub struct Probe {
     pub on_one_way_only: bool,
     pub air_jumps: u8,
     pub coyote_ticks: u32,
+    pub wall_coyote_ticks: u32,
     pub jump_buffer: u32,
     pub clip: String,
     pub frame: usize,
@@ -67,6 +68,7 @@ impl Probe {
             on_one_way_only: avatar.on_one_way_only,
             air_jumps: avatar.air_jumps,
             coyote_ticks: avatar.coyote_ticks.min(TICK_DISPLAY_CAP),
+            wall_coyote_ticks: avatar.wall_coyote_ticks.min(TICK_DISPLAY_CAP),
             jump_buffer: avatar.jump_buffer,
             clip: anim.clip.clone(),
             frame: anim.frame,
@@ -170,9 +172,10 @@ mod tests {
         assert!(probe.flag("nonsense").is_none());
     }
 
-    /// The coyote sentinel is `u32::MAX`-ish; traces should stay readable.
+    /// The coyote sentinels are `u32::MAX`-ish; traces should stay readable.
     #[test]
-    fn coyote_sentinel_is_clamped() {
+    fn coyote_sentinels_are_clamped() {
         assert_eq!(sample().coyote_ticks, TICK_DISPLAY_CAP);
+        assert_eq!(sample().wall_coyote_ticks, TICK_DISPLAY_CAP);
     }
 }

@@ -62,7 +62,7 @@ do not move what is already there.
 | --- | --- |
 | `testbed.ron` | running, jumping, gap clearing, spike death |
 | `testbed_platform.ron` | one-way platforms and drop-through |
-| `testbed_chimney.ron` | wall slide and wall jump |
+| `testbed_chimney.ron` | wall slide, wall jump, wall-contact grace |
 
 `castle_spawn.tape` is the exception: it runs on the real map but asserts only
 that the player spawns on solid ground and is not standing in a hazard, so

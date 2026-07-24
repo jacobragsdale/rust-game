@@ -56,15 +56,27 @@ pub fn update(
             avatar.facing_right = false;
         }
 
-        // --- wall slide: airborne, falling, pressing into a solid wall ---
-        avatar.wall_sliding = false;
-        if !avatar.grounded
-            && vel.0.y > 0.0
-            && dir != 0.0
-            && physics::touching_wall(pos.0, size.0, geometry, dir)
-        {
-            avatar.wall_sliding = true;
-            avatar.wall_dir = dir;
+        // --- wall contact, tracked apart from the slide ---
+        // A wall jump used to require an active slide, which meant airborne
+        // *and* falling *and* still holding into the wall. So hitting a wall
+        // on the way up did nothing, and easing off the key for one tick to
+        // line up the kick threw the jump away. Contact alone arms the wall
+        // jump, and the grace window keeps it armed just after letting go.
+        let wall_side = if avatar.grounded {
+            0.0
+        } else {
+            physics::wall_contact(pos.0, size.0, geometry, dir)
+        };
+        if wall_side != 0.0 {
+            avatar.wall_dir = wall_side;
+            avatar.wall_coyote_ticks = 0;
+        } else {
+            avatar.wall_coyote_ticks = avatar.wall_coyote_ticks.saturating_add(1);
+        }
+
+        // --- wall slide: falling while pressing into the wall being touched ---
+        avatar.wall_sliding = wall_side != 0.0 && dir == wall_side && vel.0.y > 0.0;
+        if avatar.wall_sliding {
             vel.0.y = vel.0.y.min(Avatar::WALL_SLIDE_SPEED);
             avatar.double_jumping = false;
         }
@@ -82,11 +94,12 @@ pub fn update(
             avatar.jump_buffer = 0;
         } else if avatar.jump_buffer > 0 {
             let can_ground_jump = avatar.coyote_ticks <= Avatar::COYOTE_TICKS;
+            let can_wall_jump = avatar.wall_coyote_ticks <= Avatar::WALL_COYOTE_TICKS;
 
             if can_ground_jump {
                 vel.0.y = -Avatar::JUMP_SPEED;
                 launch(avatar);
-            } else if avatar.wall_sliding {
+            } else if can_wall_jump {
                 vel.0.x = -avatar.wall_dir * Avatar::WALL_JUMP_PUSH;
                 vel.0.y = -Avatar::WALL_JUMP_SPEED;
                 avatar.facing_right = avatar.wall_dir < 0.0;
@@ -167,8 +180,11 @@ fn launch(avatar: &mut Avatar) {
     avatar.jump_buffer = 0;
     avatar.grounded = false;
     avatar.wall_sliding = false;
-    // lock out coyote jumps until the next real landing
+    // Lock out both grace windows until the next real landing or wall touch,
+    // so one press is one jump and a wall jump cannot re-fire off the wall it
+    // just left.
     avatar.coyote_ticks = u32::MAX - 1;
+    avatar.wall_coyote_ticks = u32::MAX - 1;
 }
 
 fn respawn(avatar: &mut Avatar, pos: &mut Position, vel: &mut Velocity, spawn: Vec2) {
@@ -456,6 +472,176 @@ mod tests {
         assert!(vel.y < 0.0, "kicked upward");
         assert!(vel.x < 0.0, "kicked away from the wall");
         assert!(!avatar.facing_right, "faces away from the wall");
+    }
+
+    /// A wall beside the spawn, reachable by jumping and drifting right.
+    fn wall_level() -> LevelData {
+        let mut level = test_level();
+        level.solids = vec![
+            Aabb::new(0.0, FLOOR_Y, 640.0, 64.0), // floor
+            Aabb::new(140.0, 0.0, 32.0, FLOOR_Y), // wall to the right
+        ];
+        level
+    }
+
+    /// Jump, drift right into the wall, and stop on the tick contact is made
+    /// while still rising. Returns the world with the avatar in that state.
+    fn rising_against_the_wall(level: &LevelData, geo: &[SolidRect]) -> World {
+        let mut world = World::new();
+        spawn_avatar(&mut world, level.player_spawn);
+        settle(&mut world, level, geo);
+
+        let right_hold = PlayerInput {
+            right: true,
+            jump_pressed: true,
+            jump_held: true,
+            ..Default::default()
+        };
+        update(&mut world, level, geo, right_hold, DT);
+
+        let drift = PlayerInput {
+            right: true,
+            jump_held: true,
+            ..Default::default()
+        };
+        for _ in 0..20 {
+            update(&mut world, level, geo, drift, DT);
+            let (avatar, pos, vel) = state(&mut world);
+            let touching =
+                physics::touching_wall(pos, Vec2::new(Avatar::WIDTH, Avatar::HEIGHT), geo, 1.0);
+            if touching && vel.y < 0.0 {
+                assert!(!avatar.grounded);
+                assert!(!avatar.wall_sliding, "not a slide: still on the way up");
+                return world;
+            }
+        }
+        panic!("never reached the wall while rising");
+    }
+
+    /// Hitting a wall on the way up is a wall jump. Requiring an active wall
+    /// slide meant the press was silently dropped unless the player was
+    /// already falling.
+    #[test]
+    fn wall_jump_fires_while_rising_without_a_slide() {
+        let level = wall_level();
+        let geo = geometry(&level);
+        let mut world = rising_against_the_wall(&level, &geo);
+
+        let (_, _, before) = state(&mut world);
+        update(&mut world, &level, &geo, JUMP, DT);
+        let (avatar, _, vel) = state(&mut world);
+
+        assert!(vel.x < 0.0, "kicked away from the wall");
+        assert!(vel.y < before.y, "and upward again");
+        assert!(!avatar.double_jumping, "a wall jump, not the air jump");
+        assert_eq!(avatar.air_jumps, Avatar::MAX_AIR_JUMPS, "air jump intact");
+    }
+
+    /// The wall jump survives a few ticks off the wall, the same way the
+    /// ground jump survives walking off a ledge. Leaning away from the wall
+    /// to line up the kick is what a player actually does.
+    #[test]
+    fn wall_jump_survives_briefly_after_leaving_the_wall() {
+        let level = wall_level();
+        let geo = geometry(&level);
+        let mut world = rising_against_the_wall(&level, &geo);
+
+        // peel off the wall, then press
+        let away = PlayerInput {
+            left: true,
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            update(&mut world, &level, &geo, away, DT);
+        }
+        let (avatar, pos, _) = state(&mut world);
+        assert!(
+            !physics::touching_wall(pos, Vec2::new(Avatar::WIDTH, Avatar::HEIGHT), &geo, 1.0),
+            "no longer touching the wall"
+        );
+        assert!(avatar.wall_coyote_ticks <= Avatar::WALL_COYOTE_TICKS);
+
+        update(&mut world, &level, &geo, JUMP, DT);
+        let (avatar, _, vel) = state(&mut world);
+        assert!(vel.x < 0.0, "still kicks away from the wall");
+        assert!(vel.y < 0.0);
+        assert!(!avatar.double_jumping);
+    }
+
+    /// ...but not forever: past the window it is an ordinary air jump.
+    #[test]
+    fn wall_jump_expires_after_the_grace_window() {
+        let level = wall_level();
+        let geo = geometry(&level);
+        let mut world = rising_against_the_wall(&level, &geo);
+
+        // peel off the wall, then coast until the window is well past — so
+        // horizontal speed has bled to zero and a kick would be unmistakable
+        let away = PlayerInput {
+            left: true,
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            update(&mut world, &level, &geo, away, DT);
+        }
+        for _ in 0..(Avatar::WALL_COYOTE_TICKS + 4) {
+            update(&mut world, &level, &geo, PlayerInput::default(), DT);
+        }
+        let (_, _, before) = state(&mut world);
+        assert_eq!(before.x, 0.0, "drifting freely, no horizontal input");
+        update(&mut world, &level, &geo, JUMP, DT);
+        let (avatar, _, vel) = state(&mut world);
+
+        assert!(avatar.double_jumping, "fell back to the air jump");
+        assert_eq!(avatar.air_jumps, 0);
+        assert_eq!(vel.x, before.x, "no wall kick");
+    }
+
+    /// One press, one jump. Holding the key must not pogo the player off the
+    /// ground on landing.
+    #[test]
+    fn holding_jump_does_not_re_jump_on_landing() {
+        let level = test_level();
+        let geo = geometry(&level);
+        let mut world = World::new();
+        spawn_avatar(&mut world, level.player_spawn);
+        settle(&mut world, &level, &geo);
+
+        update(&mut world, &level, &geo, JUMP, DT);
+        let mut landed = None;
+        for tick in 0..200 {
+            update(&mut world, &level, &geo, HOLD_JUMP, DT);
+            if state(&mut world).0.grounded {
+                landed = Some(tick);
+                break;
+            }
+        }
+        landed.expect("never came back down");
+
+        // still holding, a full second later: on the ground the whole time
+        for _ in 0..60 {
+            update(&mut world, &level, &geo, HOLD_JUMP, DT);
+            let (avatar, _, _) = state(&mut world);
+            assert!(avatar.grounded, "held jump must not fire again");
+            assert_eq!(avatar.air_jumps, Avatar::MAX_AIR_JUMPS);
+        }
+    }
+
+    /// A ground jump spends only the ground jump. (When one press reached two
+    /// ticks, it spent the double jump on the same tap and left the player
+    /// airborne with nothing in reserve.)
+    #[test]
+    fn a_ground_jump_leaves_the_air_jump_available() {
+        let level = test_level();
+        let geo = geometry(&level);
+        let mut world = World::new();
+        spawn_avatar(&mut world, level.player_spawn);
+        settle(&mut world, &level, &geo);
+
+        update(&mut world, &level, &geo, JUMP, DT);
+        let (avatar, _, _) = state(&mut world);
+        assert_eq!(avatar.air_jumps, Avatar::MAX_AIR_JUMPS);
+        assert!(!avatar.double_jumping);
     }
 
     #[test]

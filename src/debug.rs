@@ -172,9 +172,10 @@ impl DebugOverlay {
             lines.push(format!("vel   {:8.2} {:8.2}", vel.0.x, vel.0.y));
             lines.push(format!("clip  {}[{}]", anim.clip, anim.frame));
             lines.push(format!(
-                "air {}  coyote {}  buf {}",
+                "air {}  coyote {}/{}  buf {}",
                 avatar.air_jumps,
                 display_ticks(avatar.coyote_ticks),
+                display_ticks(avatar.wall_coyote_ticks),
                 avatar.jump_buffer
             ));
             lines.push(format!(
