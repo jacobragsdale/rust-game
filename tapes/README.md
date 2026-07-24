@@ -12,18 +12,34 @@ Adding coverage for a movement feature means writing a tape, not writing Rust.
 cargo run --bin sim -- --tape tapes/wall_jump.tape
 ```
 
-Add `--trace out.jsonl` to record every tick. The sim is deterministic, so
-`diff` over two traces of the same tape reports the exact tick at which a code
-change altered behavior:
-
-```bash
-git stash && cargo run --bin sim -- --tape tapes/jump.tape --trace before.jsonl
-git stash pop && cargo run --bin sim -- --tape tapes/jump.tape --trace after.jsonl
-diff before.jsonl after.jsonl | head
-```
+Add `--trace out.jsonl` to record every tick, or `--trace -` for stdout.
 
 `--geometry` prints a map's collision rectangles, which is how you find the
 coordinates to write assertions against.
+
+## Golden traces
+
+Every tape has a recorded trace in `traces/`, and `cargo test` checks that it
+still reproduces it. A tape's assertions cover whatever the author thought to
+write down; a trace covers every probe field and every event on every tick, so
+it catches the changes assertions walk past — a landing that shifts by one
+tick, a jump arc that moves two pixels, an event that stops firing.
+
+```bash
+cargo test --test traces                    # check
+UPDATE_TRACES=1 cargo test --test traces    # re-record after an intended change
+```
+
+A failure names the tick and the fields that moved:
+
+```
+jump: behavior changed
+  first difference at trace line 7
+    vy: -496.66666 -> -497.66666
+    y: 341.72223 -> 341.70557
+```
+
+Re-recording is deliberate: the diff lands in the commit, where it can be read.
 
 ## Format
 
@@ -50,6 +66,33 @@ Assertions read `assert <flag>`, `assert !<flag>`, or `assert <field> <op>
 - numeric: `x`, `y`, `vx`, `vy`, `tick`, `air_jumps`, `frame`
 - boolean: `grounded`, `facing_right`, `wall_sliding`, `double_jumping`,
   `crouching`, `dead`, `on_one_way_only`
+
+## Events
+
+`assert` samples state; `expect` checks things that *happened*. Most of what a
+game does is transient — a hit that lands and resolves inside one tick leaves
+nothing in any state field, so no `assert` can see it. Combat, dialogue, and
+quests are almost entirely this shape.
+
+```
+expect landed            # fired at least once by this point
+expect no died           # has not fired at all
+expect wall_jumped == 1  # fired exactly once
+```
+
+Events: `jumped`, `double_jumped`, `wall_jumped`, `landed`, `dropped_through`,
+`died`, `respawned`.
+
+Two things to know:
+
+**Counts are cumulative** from the start of the tape, not per-tick — you rarely
+know which tick a landing happened on, but you always know it should have
+happened by now. The flip side is that "nothing new fired in this section" is
+written as "still the same count as before" (`expect jumped == 1`), not
+`expect no jumped`.
+
+**`landed` fires on tick 1** as the player settles onto the ground under their
+spawn point, so a tape that jumps once and comes back down has landed twice.
 
 ## Fixture maps
 
