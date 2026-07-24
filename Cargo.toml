@@ -3,6 +3,8 @@ name = "supergame"
 version = "0.1.0"
 edition = "2021"
 description = "2D side-scroller adventure RPG"
+# Without this, adding src/bin/sim.rs makes a bare `cargo run` ambiguous.
+default-run = "supergame"
 
 [dependencies]
 anyhow = "1"
