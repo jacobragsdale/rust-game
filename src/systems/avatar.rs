@@ -69,16 +69,21 @@ pub fn update(
             avatar.double_jumping = false;
         }
 
-        // --- jumps, in priority order ---
-        if avatar.jump_buffer > 0 {
+        // --- drop through, then jumps in priority order ---
+
+        // Down alone drops through a one-way platform: there is nothing worth
+        // crouching on up there, and standing on a platform makes "down" mean
+        // "go down". Crouching still works on solid ground, which is what
+        // `on_one_way_only` distinguishes. A buffered jump press is discarded
+        // so the drop is not immediately cancelled by a jump on the way out.
+        if input.down && avatar.grounded && avatar.on_one_way_only {
+            avatar.drop_ticks = Avatar::DROP_TICKS;
+            avatar.grounded = false;
+            avatar.jump_buffer = 0;
+        } else if avatar.jump_buffer > 0 {
             let can_ground_jump = avatar.coyote_ticks <= Avatar::COYOTE_TICKS;
 
-            if input.down && avatar.grounded && avatar.on_one_way_only {
-                // drop through the platform instead of jumping
-                avatar.drop_ticks = Avatar::DROP_TICKS;
-                avatar.grounded = false;
-                avatar.jump_buffer = 0;
-            } else if can_ground_jump {
+            if can_ground_jump {
                 vel.0.y = -Avatar::JUMP_SPEED;
                 launch(avatar);
             } else if avatar.wall_sliding {

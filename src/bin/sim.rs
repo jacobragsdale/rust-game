@@ -20,6 +20,7 @@ use std::process::ExitCode;
 use anyhow::{bail, Context as _};
 
 use supergame::assets::Assets;
+use supergame::ecs::components::Avatar;
 use supergame::sim::run::{run_idle, run_tape};
 use supergame::sim::tape::Tape;
 use supergame::sim::Sim;
@@ -162,6 +163,18 @@ fn run() -> anyhow::Result<bool> {
             }
         }
         return Ok(true);
+    }
+
+    // Geometry the player cannot use is reported on every run, tape or not:
+    // it is silent in-game and looks like a physics bug when you hit it.
+    let issues = sim
+        .level
+        .blocked_platforms(ggez::glam::Vec2::new(Avatar::WIDTH, Avatar::HEIGHT));
+    if !issues.is_empty() {
+        eprintln!("level warnings:");
+        for issue in &issues {
+            eprintln!("  {}", issue.describe());
+        }
     }
 
     let (trace, failures) = match &tape {

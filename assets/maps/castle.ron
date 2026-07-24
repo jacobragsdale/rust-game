@@ -3,6 +3,13 @@
 // Each character is one 32px tile. The chimney on the right (cols 52-56)
 // is a wall-jump climb; enter through the doorway at floor level.
 // See src/level/ascii.rs.
+//
+// Headroom: the player is 34px tall, so a single empty row (32px) above a
+// standable surface is NOT enough to stand in. Leave two. The solid blocks
+// on row 6 used to sit on row 7, one tile above the row-9 platforms, which
+// made those platforms impossible to land on — the player's head hit the
+// block before their feet cleared the platform. `cargo test` now checks this;
+// see src/level/validate.rs.
 Level(
     tileset: "castle",
     grid: [
@@ -12,8 +19,8 @@ Level(
         "#...................................................#...#..#",
         "#...................====............................#...#..#",
         "#........................####................====...#...#..#",
-        "#...................................................#...#..#",
-        "#.....####........====...........####...............#...#..#",
+        "#.....####.......................####...............#...#..#",
+        "#.................====..............................#...#..#",
         "#...................................................#...#..#",
         "#.......====..................====......................#..#",
         "#..P..................................K.................#..#",

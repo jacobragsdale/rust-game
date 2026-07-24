@@ -4,6 +4,7 @@
 
 pub mod ascii;
 pub mod tiled;
+pub mod validate;
 
 use std::path::Path;
 
