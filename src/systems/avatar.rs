@@ -8,6 +8,7 @@ use hecs::World;
 use crate::ecs::components::{Avatar, Position, Size, Velocity};
 use crate::level::LevelData;
 use crate::physics::{self, Aabb, SolidRect};
+use crate::sim::event::{DeathCause, GameEvent};
 use crate::systems::input::PlayerInput;
 
 pub fn update(
@@ -16,6 +17,7 @@ pub fn update(
     geometry: &[SolidRect],
     input: PlayerInput,
     dt: f32,
+    events: &mut Vec<GameEvent>,
 ) {
     for (_, (avatar, pos, vel, size)) in
         world.query_mut::<(&mut Avatar, &mut Position, &mut Velocity, &Size)>()
@@ -24,9 +26,15 @@ pub fn update(
             avatar.dead_ticks -= 1;
             if avatar.dead_ticks == 0 {
                 respawn(avatar, pos, vel, level.player_spawn);
+                events.push(GameEvent::Respawned);
             }
             continue;
         }
+
+        // Captured before anything below can clear it: a landing is a
+        // transition, and both the drop-through branch and `launch` mutate
+        // `grounded` partway through the tick.
+        let was_grounded = avatar.grounded;
 
         // --- timers ---
         if avatar.grounded {
@@ -92,6 +100,7 @@ pub fn update(
             avatar.drop_ticks = Avatar::DROP_TICKS;
             avatar.grounded = false;
             avatar.jump_buffer = 0;
+            events.push(GameEvent::DroppedThrough);
         } else if avatar.jump_buffer > 0 {
             let can_ground_jump = avatar.coyote_ticks <= Avatar::COYOTE_TICKS;
             let can_wall_jump = avatar.wall_coyote_ticks <= Avatar::WALL_COYOTE_TICKS;
@@ -99,17 +108,21 @@ pub fn update(
             if can_ground_jump {
                 vel.0.y = -Avatar::JUMP_SPEED;
                 launch(avatar);
+                events.push(GameEvent::Jumped);
             } else if can_wall_jump {
                 vel.0.x = -avatar.wall_dir * Avatar::WALL_JUMP_PUSH;
                 vel.0.y = -Avatar::WALL_JUMP_SPEED;
                 avatar.facing_right = avatar.wall_dir < 0.0;
                 avatar.air_jumps = Avatar::MAX_AIR_JUMPS;
+                let wall_dir = avatar.wall_dir;
                 launch(avatar);
+                events.push(GameEvent::WallJumped { wall_dir });
             } else if avatar.air_jumps > 0 {
                 vel.0.y = -Avatar::DOUBLE_JUMP_SPEED;
                 avatar.air_jumps -= 1;
                 avatar.double_jumping = true;
                 launch(avatar);
+                events.push(GameEvent::DoubleJumped);
             }
         }
 
@@ -147,6 +160,11 @@ pub fn update(
         if contact.grounded {
             avatar.air_jumps = Avatar::MAX_AIR_JUMPS;
             avatar.double_jumping = false;
+            if !was_grounded {
+                events.push(GameEvent::Landed {
+                    on_one_way: avatar.on_one_way_only,
+                });
+            }
         }
         if vel.0.y >= 0.0 {
             avatar.double_jumping = false;
@@ -171,6 +189,13 @@ pub fn update(
         if spiked || fell_out {
             avatar.dead_ticks = Avatar::DEATH_TICKS;
             vel.0 = Vec2::ZERO;
+            events.push(GameEvent::Died {
+                cause: if spiked {
+                    DeathCause::Hazard
+                } else {
+                    DeathCause::FellOutOfWorld
+                },
+            });
         }
     }
 }
@@ -208,20 +233,24 @@ mod tests {
     const DT: f32 = 1.0 / 60.0;
     const FLOOR_Y: f32 = 256.0;
 
+    /// `super::update` with a throwaway event log, so the movement tests below
+    /// stay about movement. Tests that care about events call `super::update`
+    /// directly and inspect what it pushed.
+    fn update(
+        world: &mut World,
+        level: &LevelData,
+        geometry: &[SolidRect],
+        input: PlayerInput,
+        dt: f32,
+    ) {
+        super::update(world, level, geometry, input, dt, &mut Vec::new());
+    }
+
     fn test_level() -> LevelData {
-        LevelData {
-            tileset: "test".to_string(),
-            width: 20,
-            height: 10,
-            tile_size: 32.0,
-            background: vec![],
-            tiles: vec![],
-            solids: vec![Aabb::new(0.0, FLOOR_Y, 640.0, 64.0)],
-            one_way: vec![],
-            hazards: vec![],
-            player_spawn: Vec2::new(100.0, FLOOR_Y - Avatar::HEIGHT),
-            entities: vec![],
-        }
+        let mut level = LevelData::empty(20, 10, 32.0);
+        level.solids = vec![Aabb::new(0.0, FLOOR_Y, 640.0, 64.0)];
+        level.player_spawn = Vec2::new(100.0, FLOOR_Y - Avatar::HEIGHT);
+        level
     }
 
     fn geometry(level: &LevelData) -> Vec<SolidRect> {

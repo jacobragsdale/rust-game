@@ -63,6 +63,38 @@ impl LevelData {
         }
     }
 
+    /// An empty level of the given size: no geometry, no art, spawn at the
+    /// origin. Tests that need one specific piece of geometry build it from
+    /// here and set that one field, rather than writing out every field of
+    /// `LevelData` — which otherwise means every new field breaks every test.
+    pub fn empty(width: u32, height: u32, tile_size: f32) -> LevelData {
+        LevelData {
+            tileset: "test".to_string(),
+            width,
+            height,
+            tile_size,
+            background: vec![],
+            tiles: vec![],
+            solids: vec![],
+            one_way: vec![],
+            hazards: vec![],
+            player_spawn: Vec2::ZERO,
+            entities: vec![],
+        }
+    }
+
+    /// Build a level straight from an ASCII grid, with no tileset and no
+    /// filesystem — the same legend the `.ron` maps use (see
+    /// [`crate::level::ascii`]). Tile art is placeholder, since nothing about
+    /// collision depends on which atlas index gets drawn.
+    ///
+    /// This is what makes a test for a new system cheap to write: the map is
+    /// three lines at the top of the test, and the geometry is visible in the
+    /// test rather than in a fixture file somewhere else.
+    pub fn from_grid(grid: &[&str]) -> anyhow::Result<LevelData> {
+        ascii::from_grid(grid)
+    }
+
     pub fn pixel_width(&self) -> f32 {
         self.width as f32 * self.tile_size
     }

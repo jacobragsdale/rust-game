@@ -17,8 +17,14 @@ assert y == 318
 # down alone drops through
 down 2
 assert !grounded
+expect dropped_through == 1
+# a drop-through, not a jump. Counts are cumulative, so "nothing new fired" is
+# spelled as "still the one jump from getting up here".
+expect jumped == 1
 
 wait 40
 assert grounded
 assert !on_one_way_only
 assert y == 382
+# three landings: settling onto the spawn floor, the platform, the floor again
+expect landed == 3

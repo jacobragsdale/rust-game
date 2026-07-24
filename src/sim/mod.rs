@@ -10,6 +10,7 @@
 //! It works because only `Assets::image` needs a graphics context; the RON
 //! side of the asset cache (tilesets, animation clips) is pure file I/O.
 
+pub mod event;
 pub mod probe;
 pub mod run;
 pub mod tape;
@@ -20,13 +21,14 @@ use std::rc::Rc;
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::assets::{Assets, ClipSet};
+use crate::assets::{Assets, Clip, ClipSet};
 use crate::ecs::components::{AnimationState, Avatar, Position, Size, Sprite, Velocity};
 use crate::level::LevelData;
 use crate::physics::{Aabb, SolidRect};
 use crate::systems::input::PlayerInput;
 use crate::systems::{animation, avatar};
 
+pub use event::GameEvent;
 pub use probe::Probe;
 
 /// The simulation runs on a fixed timestep so that behavior is identical at
@@ -43,6 +45,10 @@ pub struct Sim {
     pub clips: Rc<ClipSet>,
     /// Ticks elapsed since the sim was created.
     pub tick: u64,
+    /// What happened during the most recent [`Sim::step`]. Cleared at the
+    /// start of each tick, so this is never a running log — the tape runner
+    /// and the trace are what accumulate.
+    events: Vec<GameEvent>,
 }
 
 impl Sim {
@@ -52,6 +58,27 @@ impl Sim {
         let level = LevelData::load(&map_path, assets)?;
         let clips = assets.clip_set("player")?;
         Ok(Self::new(level, clips))
+    }
+
+    /// A sim built from an inline ASCII grid, with placeholder animation
+    /// clips and no filesystem access at all.
+    ///
+    /// ```
+    /// # use supergame::sim::Sim;
+    /// let mut sim = Sim::fixture(&[
+    ///     "..........",
+    ///     "..P.......",
+    ///     "##########",
+    /// ]);
+    /// sim.step(Default::default());
+    /// assert!(sim.probe().grounded);
+    /// ```
+    ///
+    /// Panics on a malformed grid: this is a test helper, and a fixture that
+    /// does not parse is a mistake in the test, not a condition to handle.
+    pub fn fixture(grid: &[&str]) -> Self {
+        let level = LevelData::from_grid(grid).expect("fixture grid should parse");
+        Sim::new(level, Rc::new(fixture_clips()))
     }
 
     pub fn new(level: LevelData, clips: Rc<ClipSet>) -> Self {
@@ -80,18 +107,32 @@ impl Sim {
             geometry,
             clips,
             tick: 0,
+            events: Vec::new(),
         }
     }
 
     /// Advance one fixed tick.
     pub fn step(&mut self, input: PlayerInput) {
-        avatar::update(&mut self.world, &self.level, &self.geometry, input, TICK);
+        self.events.clear();
+        avatar::update(
+            &mut self.world,
+            &self.level,
+            &self.geometry,
+            input,
+            TICK,
+            &mut self.events,
+        );
         animation::select_avatar_clip(&mut self.world);
         animation::advance(&mut self.world, &self.clips, TICK);
         self.tick += 1;
 
         #[cfg(debug_assertions)]
         self.check_invariants();
+    }
+
+    /// What happened during the most recent [`Sim::step`].
+    pub fn events(&self) -> &[GameEvent] {
+        &self.events
     }
 
     /// Snapshot the player's state for tracing and assertions.
@@ -153,6 +194,31 @@ impl Sim {
     }
 }
 
+/// Placeholder clips for [`Sim::fixture`]: every clip the avatar's selector
+/// can ask for, each two frames at 10 fps on a sheet that does not exist.
+/// Nothing headless reads the pixels, and `Sim::check_invariants` fails loudly
+/// if the selector ever reaches a name that is missing here.
+fn fixture_clips() -> ClipSet {
+    let clips = animation::AVATAR_CLIPS
+        .iter()
+        .map(|&name| {
+            (
+                name.to_string(),
+                Clip {
+                    frames: vec![(0, 0), (1, 0)],
+                    fps: 10.0,
+                    looping: true,
+                },
+            )
+        })
+        .collect();
+    ClipSet {
+        sheet: "fixture".to_string(),
+        frame_size: (50.0, 37.0),
+        clips,
+    }
+}
+
 /// Overlap tolerance for the penetration invariant, in pixels. Resting on a
 /// surface puts the edges exactly equal, and a single resolution pass can
 /// leave sub-pixel residue in corners; anything deeper is a real bug.
@@ -169,52 +235,34 @@ fn penetrates(a: &Aabb, b: &Aabb, eps: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::Clip;
-    use std::collections::HashMap;
+    use crate::sim::event::DeathCause;
 
-    /// A flat floor with a pit on the right, and the matching clip set.
+    /// A flat floor with a pit on the right.
     fn test_sim() -> Sim {
-        let level = LevelData {
-            tileset: "test".to_string(),
-            width: 20,
-            height: 10,
-            tile_size: 32.0,
-            background: vec![],
-            tiles: vec![],
-            solids: vec![Aabb::new(0.0, 256.0, 400.0, 64.0)],
-            one_way: vec![],
-            hazards: vec![],
-            player_spawn: Vec2::new(100.0, 256.0 - Avatar::HEIGHT),
-            entities: vec![],
-        };
+        let mut level = LevelData::empty(20, 10, 32.0);
+        level.solids = vec![Aabb::new(0.0, 256.0, 400.0, 64.0)];
+        level.player_spawn = Vec2::new(100.0, 256.0 - Avatar::HEIGHT);
+        Sim::new(level, Rc::new(fixture_clips()))
+    }
 
-        let mut clips = HashMap::new();
-        for name in [
-            "idle",
-            "run",
-            "jump",
-            "fall",
-            "crouch",
-            "double_jump",
-            "wall_slide",
-            "hurt",
-        ] {
-            clips.insert(
-                name.to_string(),
-                Clip {
-                    frames: vec![(0, 0), (1, 0)],
-                    fps: 10.0,
-                    looping: true,
-                },
-            );
+    const JUMP: PlayerInput = PlayerInput {
+        left: false,
+        right: false,
+        down: false,
+        jump_pressed: true,
+        jump_held: true,
+    };
+
+    /// Step until `pred` holds, returning the tick it happened on. Fixture
+    /// tests care about "did this happen", not about counting ticks by hand.
+    fn step_until(sim: &mut Sim, limit: u32, input: PlayerInput, pred: impl Fn(&Sim) -> bool) -> u32 {
+        for tick in 0..limit {
+            sim.step(input);
+            if pred(sim) {
+                return tick;
+            }
         }
-        let clip_set = ClipSet {
-            sheet: "test".to_string(),
-            frame_size: (50.0, 37.0),
-            clips,
-        };
-
-        Sim::new(level, Rc::new(clip_set))
+        panic!("condition never held within {limit} ticks");
     }
 
     #[test]
@@ -257,6 +305,94 @@ mod tests {
         assert!(probe.x > start_x);
         assert!(probe.facing_right);
         assert_eq!(probe.clip, "run");
+    }
+
+    /// The point of the fixture builder: a level, a player, and a working sim
+    /// in three lines, with the geometry visible right there in the test.
+    #[test]
+    fn a_fixture_grid_builds_a_playable_sim() {
+        let mut sim = Sim::fixture(&[
+            "..........",
+            "..P.......",
+            "##########",
+        ]);
+        step_until(&mut sim, 30, PlayerInput::default(), |s| s.probe().grounded);
+
+        let probe = sim.probe();
+        assert_eq!(probe.clip, "idle");
+        // spawn cell is row 1, so the floor surface is at y = 64
+        assert_eq!(probe.y, 64.0 - Avatar::HEIGHT);
+        assert_eq!(sim.level.solids.len(), 1, "the floor row merged into one rect");
+    }
+
+    #[test]
+    fn fixture_grids_carry_platforms_and_hazards() {
+        let sim = Sim::fixture(&[
+            "..........",
+            "..P..==...",
+            ".....^^...",
+            "##########",
+        ]);
+        assert_eq!(sim.level.one_way.len(), 1);
+        assert_eq!(sim.level.hazards.len(), 1);
+    }
+
+    // --- events ---------------------------------------------------------
+
+    #[test]
+    fn jumping_and_landing_emit_events() {
+        let mut sim = Sim::fixture(&[
+            "..........",
+            "..........",
+            "..P.......",
+            "##########",
+        ]);
+        step_until(&mut sim, 30, PlayerInput::default(), |s| s.probe().grounded);
+
+        sim.step(JUMP);
+        assert_eq!(sim.events(), [GameEvent::Jumped]);
+
+        // ...and the landing, some ticks later, is its own event
+        step_until(&mut sim, 200, PlayerInput::default(), |s| {
+            !s.events().is_empty()
+        });
+        assert_eq!(sim.events(), [GameEvent::Landed { on_one_way: false }]);
+    }
+
+    /// Events are transient: they belong to the tick they happened on and are
+    /// gone the next tick. That is the whole reason they are recorded into the
+    /// trace rather than sampled from state.
+    #[test]
+    fn events_do_not_survive_into_the_next_tick() {
+        let mut sim = Sim::fixture(&["..........", "..P.......", "##########"]);
+        step_until(&mut sim, 30, PlayerInput::default(), |s| s.probe().grounded);
+
+        sim.step(JUMP);
+        assert!(!sim.events().is_empty());
+        sim.step(PlayerInput::default());
+        assert!(sim.events().is_empty(), "the jump event was cleared");
+    }
+
+    #[test]
+    fn a_hazard_death_names_its_cause() {
+        let mut sim = Sim::fixture(&[
+            "..........",
+            "..P.......",
+            "..^.......",
+            "##########",
+        ]);
+        // the spike is directly below the spawn cell; falling onto it kills
+        step_until(&mut sim, 60, PlayerInput::default(), |s| s.probe().dead);
+        assert_eq!(
+            sim.events(),
+            [GameEvent::Died {
+                cause: DeathCause::Hazard
+            }]
+        );
+
+        step_until(&mut sim, 120, PlayerInput::default(), |s| {
+            s.events().contains(&GameEvent::Respawned)
+        });
     }
 
     /// The same inputs must always produce the same trace, or tapes and

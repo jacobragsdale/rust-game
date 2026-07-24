@@ -24,3 +24,7 @@ assert !wall_sliding
 right+jump 1
 assert vx < 0
 assert vy < 0
+# vx/vy only say "went up and left" -- which a double jump plus leftward drift
+# also produces. This is the assertion the tape was really trying to make.
+expect wall_jumped == 1
+expect no double_jumped

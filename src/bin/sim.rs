@@ -201,8 +201,19 @@ fn run() -> anyhow::Result<bool> {
     }
 
     if !args.quiet {
+        // Events are transient, so a run that only prints final state hides
+        // everything that happened on the way there.
+        let total: usize = trace.frames().iter().map(|f| f.events.len()).sum();
+        if total > 0 {
+            println!("events — {total} total:");
+            for frame in trace.frames().iter().filter(|f| !f.events.is_empty()) {
+                for event in &frame.events {
+                    println!("  tick {:>5}  {event:?}", frame.probe.tick);
+                }
+            }
+        }
         if let Some(last) = trace.last() {
-            println!("final {}", last.summary());
+            println!("final {}", last.probe.summary());
         }
     }
 

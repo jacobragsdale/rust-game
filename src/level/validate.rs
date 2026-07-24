@@ -100,19 +100,10 @@ mod tests {
     use crate::ecs::components::Avatar;
 
     fn level(solids: Vec<Aabb>, one_way: Vec<Aabb>) -> LevelData {
-        LevelData {
-            tileset: "test".to_string(),
-            width: 20,
-            height: 10,
-            tile_size: 32.0,
-            background: vec![],
-            tiles: vec![],
-            solids,
-            one_way,
-            hazards: vec![],
-            player_spawn: Vec2::ZERO,
-            entities: vec![],
-        }
+        let mut level = LevelData::empty(20, 10, 32.0);
+        level.solids = solids;
+        level.one_way = one_way;
+        level
     }
 
     fn body() -> Vec2 {

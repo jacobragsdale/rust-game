@@ -6,6 +6,7 @@
 //! loop — including the off-by-one that matters: an assertion written after
 //! `right 10` is checked once ten ticks have been *stepped*.
 
+use crate::sim::event::EventCounts;
 use crate::sim::tape::Tape;
 use crate::sim::trace::Trace;
 use crate::sim::Sim;
@@ -50,11 +51,17 @@ impl RunOutcome {
 pub fn run_tape(sim: &mut Sim, tape: &Tape) -> RunOutcome {
     let mut trace = Trace::new();
     let mut failures = Vec::new();
+    // Cumulative, so `expect` reads as "by this point in the tape".
+    let mut counts = EventCounts::new();
 
-    let record = |sim: &Sim, tick: usize, trace: &mut Trace, failures: &mut Vec<Failure>| {
+    let record = |sim: &Sim,
+                  tick: usize,
+                  counts: &EventCounts,
+                  trace: &mut Trace,
+                  failures: &mut Vec<Failure>| {
         let probe = sim.probe();
         for assertion in tape.asserts_at(tick) {
-            if let Err(message) = assertion.evaluate(&probe) {
+            if let Err(message) = assertion.evaluate(&probe, counts) {
                 failures.push(Failure {
                     line: assertion.line,
                     tick,
@@ -63,15 +70,17 @@ pub fn run_tape(sim: &mut Sim, tape: &Tape) -> RunOutcome {
                 });
             }
         }
-        trace.push(probe);
+        trace.push(probe, sim.events());
     };
 
-    // Assertions written before any input describe the starting state.
-    record(sim, 0, &mut trace, &mut failures);
+    // Assertions written before any input describe the starting state, when
+    // nothing has happened yet.
+    record(sim, 0, &counts, &mut trace, &mut failures);
 
     for (index, input) in tape.inputs().iter().enumerate() {
         sim.step(*input);
-        record(sim, index + 1, &mut trace, &mut failures);
+        counts.record(sim.events());
+        record(sim, index + 1, &counts, &mut trace, &mut failures);
     }
 
     RunOutcome { trace, failures }
@@ -80,10 +89,10 @@ pub fn run_tape(sim: &mut Sim, tape: &Tape) -> RunOutcome {
 /// Step the sim with no input, for probing a map without authoring a tape.
 pub fn run_idle(sim: &mut Sim, ticks: usize) -> Trace {
     let mut trace = Trace::new();
-    trace.push(sim.probe());
+    trace.push(sim.probe(), &[]);
     for _ in 0..ticks {
         sim.step(PlayerInput::default());
-        trace.push(sim.probe());
+        trace.push(sim.probe(), sim.events());
     }
     trace
 }
@@ -92,6 +101,7 @@ pub fn run_idle(sim: &mut Sim, ticks: usize) -> Trace {
 mod tests {
     use super::*;
     use crate::assets::Assets;
+    use crate::sim::GameEvent;
 
     fn castle() -> Sim {
         Sim::load(&mut Assets::new(), "maps/castle.ron").expect("castle map loads")
@@ -102,8 +112,54 @@ mod tests {
         let tape = Tape::parse("right 10").unwrap();
         let outcome = run_tape(&mut castle(), &tape);
         assert_eq!(outcome.trace.len(), 11);
-        assert_eq!(outcome.trace.probes()[0].tick, 0);
-        assert_eq!(outcome.trace.last().unwrap().tick, 10);
+        assert_eq!(outcome.trace.frames()[0].probe.tick, 0);
+        assert_eq!(outcome.trace.last().unwrap().probe.tick, 10);
+    }
+
+    /// Events land on the tick they happened, not smeared across the trace.
+    #[test]
+    fn the_trace_records_events_on_the_tick_they_fired() {
+        let tape = Tape::parse("wait 10\njump 5").unwrap();
+        let outcome = run_tape(&mut castle(), &tape);
+
+        let ticks_with_a_jump: Vec<u64> = outcome
+            .trace
+            .frames()
+            .iter()
+            .filter(|f| f.events.contains(&GameEvent::Jumped))
+            .map(|f| f.probe.tick)
+            .collect();
+        assert_eq!(ticks_with_a_jump, vec![11], "one jump, on the press tick");
+    }
+
+    /// `expect` counts cumulatively, so a tape can assert something happened
+    /// at some point earlier without knowing which tick.
+    #[test]
+    fn expect_checks_events_accumulated_so_far() {
+        let tape = Tape::parse(
+            "wait 10\n\
+             expect no jumped\n\
+             jump 5\n\
+             wait 60\n\
+             expect jumped\n\
+             expect landed >= 1\n\
+             expect no died",
+        )
+        .unwrap();
+        let outcome = run_tape(&mut castle(), &tape);
+        assert!(outcome.passed(), "unexpected failures: {:?}", outcome.failures);
+    }
+
+    #[test]
+    fn a_violated_expect_reports_the_actual_count() {
+        let tape = Tape::parse("wait 10\nexpect died").unwrap();
+        let outcome = run_tape(&mut castle(), &tape);
+        assert_eq!(outcome.failures.len(), 1);
+        assert!(
+            outcome.failures[0].message.contains("it fired 0"),
+            "{}",
+            outcome.failures[0].message
+        );
     }
 
     #[test]

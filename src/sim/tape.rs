@@ -37,6 +37,7 @@ use std::path::Path;
 
 use anyhow::{bail, Context as _};
 
+use crate::sim::event::{EventCounts, GameEvent};
 use crate::sim::Probe;
 use crate::systems::input::PlayerInput;
 
@@ -92,8 +93,21 @@ impl Op {
 
 #[derive(Clone, Debug)]
 pub enum Check {
-    Flag { name: String, expected: bool },
-    Compare { field: String, op: Op, value: f32 },
+    Flag {
+        name: String,
+        expected: bool,
+    },
+    Compare {
+        field: String,
+        op: Op,
+        value: f32,
+    },
+    /// How many times an event has fired since the tape started.
+    Event {
+        name: String,
+        op: Op,
+        count: u32,
+    },
 }
 
 /// An assertion bound to the tick at which it appears in the tape.
@@ -107,7 +121,7 @@ pub struct Assertion {
 }
 
 impl Assertion {
-    pub fn evaluate(&self, probe: &Probe) -> Result<(), String> {
+    pub fn evaluate(&self, probe: &Probe, events: &EventCounts) -> Result<(), String> {
         match &self.check {
             Check::Flag { name, expected } => {
                 let actual = probe
@@ -135,6 +149,17 @@ impl Assertion {
                     ))
                 }
             }
+            Check::Event { name, op, count } => {
+                let actual = events.count(name);
+                if op.apply(actual as f32, *count as f32) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected `{name}` {} {count} times by now, but it fired {actual}",
+                        op_str(*op)
+                    ))
+                }
+            }
         }
     }
 
@@ -146,6 +171,9 @@ impl Assertion {
             }
             Check::Compare { field, op, value } => {
                 format!("assert {field} {} {value}", op_str(*op))
+            }
+            Check::Event { name, op, count } => {
+                format!("expect {name} {} {count}", op_str(*op))
             }
         }
     }
@@ -207,10 +235,14 @@ impl Tape {
                 continue;
             }
 
-            if head == "assert" {
+            if head == "assert" || head == "expect" {
                 let rest: Vec<&str> = tokens.collect();
-                let check = parse_check(&rest)
-                    .with_context(|| format!("line {line}: `{content}`"))?;
+                let check = if head == "expect" {
+                    parse_expect(&rest)
+                } else {
+                    parse_check(&rest)
+                }
+                .with_context(|| format!("line {line}: `{content}`"))?;
                 tape.asserts.push(Assertion {
                     tick: tape.keys.len(),
                     line,
@@ -331,6 +363,40 @@ fn parse_check(tokens: &[&str]) -> anyhow::Result<Check> {
         }
         _ => bail!("expected `assert <flag>`, `assert !<flag>`, or `assert <field> <op> <value>`"),
     }
+}
+
+/// `expect <event>`, `expect no <event>`, or `expect <event> <op> <count>`.
+///
+/// Counts are cumulative over every tick so far, which is how a tape actually
+/// reads: after writing `right+jump 25` you want to say the player landed
+/// *somewhere* in there, not work out which tick it was. `expect landed` is
+/// therefore `>= 1`, and `expect no died` is `== 0`.
+fn parse_expect(tokens: &[&str]) -> anyhow::Result<Check> {
+    let (name, op, count) = match tokens {
+        ["no", name] => (*name, Op::Eq, 0),
+        [name] => (*name, Op::Ge, 1),
+        [name, op, count] => {
+            let op = Op::parse(op)
+                .with_context(|| format!("`{op}` is not a comparison operator"))?;
+            let count: u32 = count
+                .parse()
+                .with_context(|| format!("`{count}` is not an event count"))?;
+            (*name, op, count)
+        }
+        _ => bail!("expected `expect <event>`, `expect no <event>`, or `expect <event> <op> <count>`"),
+    };
+
+    if !GameEvent::names().contains(&name) {
+        bail!(
+            "`{name}` is not an event (known events: {})",
+            GameEvent::known_names()
+        );
+    }
+    Ok(Check::Event {
+        name: name.to_string(),
+        op,
+        count,
+    })
 }
 
 #[cfg(test)]

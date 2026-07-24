@@ -44,6 +44,34 @@ pub fn load(path: &Path, assets: &mut Assets) -> anyhow::Result<LevelData> {
         .with_context(|| format!("invalid map {}", path.display()))
 }
 
+/// The tile size fixture grids are built at, matching the shipped tilesets.
+pub const FIXTURE_TILE_SIZE: f32 = 32.0;
+
+/// Placeholder art for [`from_grid`]. Collision comes from the grid
+/// characters, never from these indices, so any distinct values will do —
+/// distinct so that a test *could* assert on which tile was chosen.
+const FIXTURE_RULES: AutotileRules = AutotileRules {
+    solid_top_left: 0,
+    solid_top: 1,
+    solid_top_right: 2,
+    solid_left: 3,
+    solid_fill: 4,
+    solid_right: 5,
+    platform: 6,
+    background: Vec::new(),
+};
+
+/// Build a level from an ASCII grid with placeholder tile art. See
+/// [`crate::level::LevelData::from_grid`].
+pub fn from_grid(grid: &[&str]) -> anyhow::Result<LevelData> {
+    let def = LevelDef {
+        tileset: "fixture".to_string(),
+        grid: grid.iter().map(|row| row.to_string()).collect(),
+        entities: Vec::new(),
+    };
+    build(def, FIXTURE_TILE_SIZE, &FIXTURE_RULES)
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Cell {
     Empty,

@@ -6,6 +6,21 @@ use hecs::World;
 use crate::assets::ClipSet;
 use crate::ecs::components::{AnimationState, Avatar, Velocity};
 
+/// Every clip [`select_avatar_clip`] can ask for. A clip set that is missing
+/// one of these freezes the sprite silently, so `Sim::check_invariants` fails
+/// the moment the selector reaches it — which is what keeps this list honest
+/// without a test that duplicates the selector's logic.
+pub const AVATAR_CLIPS: &[&str] = &[
+    "idle",
+    "run",
+    "jump",
+    "fall",
+    "crouch",
+    "double_jump",
+    "wall_slide",
+    "hurt",
+];
+
 /// Map the avatar's movement state to a clip name.
 pub fn select_avatar_clip(world: &mut World) {
     for (_, (avatar, vel, anim)) in world.query_mut::<(&Avatar, &Velocity, &mut AnimationState)>() {
