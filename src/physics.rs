@@ -23,12 +23,20 @@ impl Aabb {
         self.y + self.h
     }
 
-    /// Inclusive overlap test.
+    /// Strict overlap: sharing an edge is *not* an intersection.
+    ///
+    /// This has to be strict. `resolve_move` pushes a body flush against a
+    /// surface (`pos.x == solid.right()`), and a wall is stored as one rect
+    /// per tile row. Under an inclusive test, a body sliding down a wall
+    /// touches every rect in that column — including the ones entirely below
+    /// it — and the `from_top` branch then snaps it onto a phantom ledge at
+    /// each tile boundary. Grounding still works because gravity penetrates
+    /// the floor by a fraction of a pixel every tick before resolution.
     pub fn overlaps(&self, other: &Aabb) -> bool {
-        self.x <= other.right()
-            && self.right() >= other.x
-            && self.y <= other.bottom()
-            && self.bottom() >= other.y
+        self.x < other.right()
+            && self.right() > other.x
+            && self.y < other.bottom()
+            && self.bottom() > other.y
     }
 }
 
@@ -132,6 +140,54 @@ pub fn touching_wall(pos: Vec2, size: Vec2, solids: &[SolidRect], dir: f32) -> b
     };
     let probe = Aabb::new(probe_x, pos.y + 2.0, 1.0, size.y - 4.0);
     solids.iter().any(|s| !s.one_way && probe.overlaps(&s.rect))
+}
+
+#[cfg(test)]
+mod overlap_tests {
+    use super::*;
+    use ggez::glam::Vec2;
+
+    /// Regression: a wall is stored as one rect per tile row, and a body
+    /// pressed flush against it shares an edge with every rect in the column.
+    /// Under an inclusive overlap test each of those seams read as a ledge,
+    /// so a wall slide would silently stop in mid-air at every tile boundary.
+    /// Found by tapes/wall_jump.tape.
+    #[test]
+    fn sliding_flush_down_a_wall_finds_no_ledge_at_tile_seams() {
+        let wall: Vec<SolidRect> = (0..4)
+            .map(|row| SolidRect::solid(Aabb::new(0.0, row as f32 * 32.0, 32.0, 32.0)))
+            .collect();
+        let size = Vec2::new(20.0, 34.0);
+
+        // Flush against the wall's right face, falling across the seam at y=64.
+        let prev = Vec2::new(32.0, 30.0);
+        let mut pos = Vec2::new(32.0, 34.0);
+        let mut vel = Vec2::new(0.0, 240.0);
+
+        let contact = resolve_move(&mut pos, &mut vel, prev, size, &wall);
+
+        assert!(!contact.grounded, "a flush wall slide must not find a ledge");
+        assert_eq!(pos, Vec2::new(32.0, 34.0), "and must not be displaced");
+        assert_eq!(vel.y, 240.0, "and must keep falling");
+    }
+
+    /// The flip side: a real ledge must still catch a body that is genuinely
+    /// above it, however slightly.
+    #[test]
+    fn a_real_ledge_still_catches_a_falling_body() {
+        let ledge = [SolidRect::solid(Aabb::new(0.0, 64.0, 32.0, 32.0))];
+        let size = Vec2::new(20.0, 34.0);
+
+        let prev = Vec2::new(10.0, 29.0);
+        let mut pos = Vec2::new(10.0, 34.0);
+        let mut vel = Vec2::new(0.0, 240.0);
+
+        let contact = resolve_move(&mut pos, &mut vel, prev, size, &ledge);
+
+        assert!(contact.grounded);
+        assert_eq!(pos.y, 64.0 - 34.0);
+        assert_eq!(vel.y, 0.0);
+    }
 }
 
 #[cfg(test)]
