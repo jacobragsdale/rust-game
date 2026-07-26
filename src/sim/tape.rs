@@ -38,7 +38,7 @@ use std::path::Path;
 use anyhow::{bail, Context as _};
 
 use crate::sim::event::{EventCounts, GameEvent};
-use crate::sim::Probe;
+use crate::sim::trace::{Frame, ProbePath};
 use crate::systems::input::PlayerInput;
 
 /// Runaway-tape guard: 100k ticks is ~28 minutes of game time.
@@ -121,12 +121,12 @@ pub struct Assertion {
 }
 
 impl Assertion {
-    pub fn evaluate(&self, probe: &Probe, events: &EventCounts) -> Result<(), String> {
+    pub fn evaluate(&self, frame: &Frame, events: &EventCounts) -> Result<(), String> {
         match &self.check {
             Check::Flag { name, expected } => {
-                let actual = probe
+                let actual = frame
                     .flag(name)
-                    .ok_or_else(|| format!("unknown flag `{name}`"))?;
+                    .ok_or_else(|| format!("`{name}` does not resolve in this frame"))?;
                 if actual == *expected {
                     Ok(())
                 } else {
@@ -137,9 +137,9 @@ impl Assertion {
                 }
             }
             Check::Compare { field, op, value } => {
-                let actual = probe
+                let actual = frame
                     .field(field)
-                    .ok_or_else(|| format!("unknown field `{field}`"))?;
+                    .ok_or_else(|| format!("`{field}` does not resolve in this frame"))?;
                 if op.apply(actual, *value) {
                     Ok(())
                 } else {
@@ -315,9 +315,7 @@ fn parse_keys(token: &str) -> anyhow::Result<Keys> {
             "right" => keys.right = true,
             "down" => keys.down = true,
             "jump" => keys.jump = true,
-            other => bail!(
-                "unknown key `{other}` (expected left, right, down, jump, or wait)"
-            ),
+            other => bail!("unknown key `{other}` (expected left, right, down, jump, or wait)"),
         }
     }
     Ok(keys)
@@ -330,25 +328,29 @@ fn parse_check(tokens: &[&str]) -> anyhow::Result<Check> {
                 Some(rest) => (rest, false),
                 None => (*flag, true),
             };
-            if Probe::flag_names().contains(&name) {
+            let path =
+                ProbePath::parse(name).with_context(|| format!("`{name}` is not a valid path"))?;
+            if path.is_flag() {
                 Ok(Check::Flag {
                     name: name.to_string(),
                     expected,
                 })
             } else {
                 bail!(
-                    "`{name}` is not a boolean field (known fields: {})",
-                    Probe::known_names()
+                    "`{name}` is not a boolean field (known: {})",
+                    path.known_names()
                 )
             }
         }
         [field, op, value] => {
-            let op = Op::parse(op)
-                .with_context(|| format!("`{op}` is not a comparison operator"))?;
+            let op =
+                Op::parse(op).with_context(|| format!("`{op}` is not a comparison operator"))?;
             let value: f32 = value
                 .parse()
                 .with_context(|| format!("`{value}` is not a number"))?;
-            if Probe::field_names().contains(field) {
+            let path = ProbePath::parse(field)
+                .with_context(|| format!("`{field}` is not a valid path"))?;
+            if path.is_field() {
                 Ok(Check::Compare {
                     field: field.to_string(),
                     op,
@@ -356,8 +358,8 @@ fn parse_check(tokens: &[&str]) -> anyhow::Result<Check> {
                 })
             } else {
                 bail!(
-                    "`{field}` is not a numeric field (known fields: {})",
-                    Probe::known_names()
+                    "`{field}` is not a numeric field (known: {})",
+                    path.known_names()
                 )
             }
         }
@@ -376,14 +378,16 @@ fn parse_expect(tokens: &[&str]) -> anyhow::Result<Check> {
         ["no", name] => (*name, Op::Eq, 0),
         [name] => (*name, Op::Ge, 1),
         [name, op, count] => {
-            let op = Op::parse(op)
-                .with_context(|| format!("`{op}` is not a comparison operator"))?;
+            let op =
+                Op::parse(op).with_context(|| format!("`{op}` is not a comparison operator"))?;
             let count: u32 = count
                 .parse()
                 .with_context(|| format!("`{count}` is not an event count"))?;
             (*name, op, count)
         }
-        _ => bail!("expected `expect <event>`, `expect no <event>`, or `expect <event> <op> <count>`"),
+        _ => bail!(
+            "expected `expect <event>`, `expect no <event>`, or `expect <event> <op> <count>`"
+        ),
     };
 
     if !GameEvent::names().contains(&name) {
@@ -473,8 +477,7 @@ mod tests {
 
     #[test]
     fn parses_negated_flags_and_all_operators() {
-        let tape =
-            Tape::parse("assert !grounded\nassert vy <= 0\nassert air_jumps == 1").unwrap();
+        let tape = Tape::parse("assert !grounded\nassert vy <= 0\nassert air_jumps == 1").unwrap();
         assert_eq!(tape.asserts.len(), 3);
         assert!(matches!(
             tape.asserts[0].check,
@@ -495,7 +498,10 @@ mod tests {
     #[test]
     fn rejects_bad_input() {
         assert!(Tape::parse("map").is_err(), "map without a path");
-        assert!(Tape::parse("map a.ron\nmap b.ron").is_err(), "duplicate map");
+        assert!(
+            Tape::parse("map a.ron\nmap b.ron").is_err(),
+            "duplicate map"
+        );
         assert!(Tape::parse("sideways 3").is_err(), "unknown key");
         assert!(Tape::parse("right zero").is_err(), "bad count");
         assert!(Tape::parse("right 0").is_err(), "zero count");

@@ -18,6 +18,7 @@ use std::path::Path;
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
+use crate::sim::probe::NpcProbe;
 use crate::sim::{GameEvent, Probe};
 
 /// One tick's worth of trace: what was true, and what happened.
@@ -29,8 +30,91 @@ use crate::sim::{GameEvent, Probe};
 pub struct Frame {
     #[serde(flatten)]
     pub probe: Probe,
+    /// Every NPC, in spawn order. Nested rather than flattened so the player's
+    /// columns stay where they have always been and a trace diff over a map
+    /// with no NPCs is unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub npcs: Vec<NpcProbe>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<GameEvent>,
+}
+
+impl Frame {
+    /// Resolve a dotted path to a number, for tape assertions.
+    ///
+    /// `x` and `player.x` are the player; `knight.0.x` is the first knight in
+    /// spawn order. The bare form stays the player's so that every tape
+    /// written before there were NPCs still means what it said.
+    pub fn field(&self, path: &str) -> Option<f32> {
+        match ProbePath::parse(path)? {
+            ProbePath::Player(name) => self.probe.field(name),
+            ProbePath::Npc { kind, index, name } => self.npc(kind, index)?.field(name),
+        }
+    }
+
+    /// Resolve a dotted path to a boolean, for tape assertions.
+    pub fn flag(&self, path: &str) -> Option<bool> {
+        match ProbePath::parse(path)? {
+            ProbePath::Player(name) => self.probe.flag(name),
+            ProbePath::Npc { kind, index, name } => self.npc(kind, index)?.flag(name),
+        }
+    }
+
+    /// The `index`-th NPC of `kind`, in spawn order.
+    fn npc(&self, kind: &str, index: usize) -> Option<&NpcProbe> {
+        self.npcs.iter().filter(|n| n.kind == kind).nth(index)
+    }
+}
+
+/// A parsed assertion path.
+pub enum ProbePath<'a> {
+    Player(&'a str),
+    Npc {
+        kind: &'a str,
+        index: usize,
+        name: &'a str,
+    },
+}
+
+impl<'a> ProbePath<'a> {
+    pub fn parse(path: &'a str) -> Option<ProbePath<'a>> {
+        let parts: Vec<&str> = path.split('.').collect();
+        match parts.as_slice() {
+            [name] => Some(ProbePath::Player(name)),
+            ["player", name] => Some(ProbePath::Player(name)),
+            [kind, index, name] => Some(ProbePath::Npc {
+                kind,
+                index: index.parse().ok()?,
+                name,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Whether this path names a numeric field, without needing a frame to
+    /// resolve against — used to reject typos when a tape is parsed rather
+    /// than when it runs.
+    pub fn is_field(&self) -> bool {
+        match self {
+            ProbePath::Player(name) => Probe::field_names().contains(name),
+            ProbePath::Npc { name, .. } => NpcProbe::field_names().contains(name),
+        }
+    }
+
+    pub fn is_flag(&self) -> bool {
+        match self {
+            ProbePath::Player(name) => Probe::flag_names().contains(name),
+            ProbePath::Npc { name, .. } => NpcProbe::flag_names().contains(name),
+        }
+    }
+
+    /// What this path could have meant, for an error message.
+    pub fn known_names(&self) -> String {
+        match self {
+            ProbePath::Player(_) => Probe::known_names(),
+            ProbePath::Npc { .. } => NpcProbe::known_names(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -43,11 +127,16 @@ impl Trace {
         Trace::default()
     }
 
-    pub fn push(&mut self, probe: Probe, events: &[GameEvent]) {
-        self.frames.push(Frame {
+    pub fn push(&mut self, probe: Probe, npcs: Vec<NpcProbe>, events: &[GameEvent]) {
+        self.push_frame(Frame {
             probe,
+            npcs,
             events: events.to_vec(),
         });
+    }
+
+    pub fn push_frame(&mut self, frame: Frame) {
+        self.frames.push(frame);
     }
 
     pub fn frames(&self) -> &[Frame] {
@@ -97,8 +186,8 @@ impl Trace {
             if line.trim().is_empty() {
                 continue;
             }
-            let frame: Frame = serde_json::from_str(line)
-                .with_context(|| format!("line {}", index + 1))?;
+            let frame: Frame =
+                serde_json::from_str(line).with_context(|| format!("line {}", index + 1))?;
             frames.push(frame);
         }
         Ok(Trace { frames })
@@ -143,8 +232,8 @@ mod tests {
     #[test]
     fn writes_one_json_object_per_tick() {
         let mut trace = Trace::new();
-        trace.push(probe(0), &[]);
-        trace.push(probe(1), &[]);
+        trace.push(probe(0), Vec::new(), &[]);
+        trace.push(probe(1), Vec::new(), &[]);
 
         let text = trace.to_jsonl();
         let lines: Vec<&str> = text.lines().collect();
@@ -162,6 +251,7 @@ mod tests {
         let mut trace = Trace::new();
         trace.push(
             probe(3),
+            Vec::new(),
             &[GameEvent::Died {
                 cause: DeathCause::Hazard,
             }],
@@ -179,7 +269,7 @@ mod tests {
     #[test]
     fn eventless_frames_carry_no_events_key() {
         let mut trace = Trace::new();
-        trace.push(probe(0), &[]);
+        trace.push(probe(0), Vec::new(), &[]);
         assert!(!trace.to_jsonl().contains("events"));
     }
 
@@ -187,18 +277,83 @@ mod tests {
     #[test]
     fn jsonl_round_trips() {
         let mut trace = Trace::new();
-        trace.push(probe(7), &[GameEvent::Jumped]);
-        trace.push(probe(8), &[]);
+        trace.push(probe(7), Vec::new(), &[GameEvent::Jumped]);
+        trace.push(probe(8), Vec::new(), &[]);
 
         let parsed = Trace::parse(&trace.to_jsonl()).unwrap();
         assert_eq!(parsed.frames(), trace.frames());
         assert_eq!(parsed.to_jsonl(), trace.to_jsonl());
     }
 
+    fn npc(kind: &str, x: f32, dir: f32) -> NpcProbe {
+        NpcProbe {
+            kind: kind.to_string(),
+            x,
+            y: 0.0,
+            vx: 0.0,
+            vy: 0.0,
+            dir,
+            grounded: true,
+            clip: "run".to_string(),
+            frame: 0,
+        }
+    }
+
+    fn frame_with_npcs() -> Frame {
+        Frame {
+            probe: probe(0),
+            npcs: vec![npc("knight", 10.0, 1.0), npc("knight", 20.0, -1.0)],
+            events: Vec::new(),
+        }
+    }
+
+    /// A bare name has always meant the player and must keep meaning it, or
+    /// every tape written before NPCs existed would change meaning silently.
+    #[test]
+    fn bare_and_player_prefixed_paths_both_resolve_to_the_player() {
+        let frame = frame_with_npcs();
+        assert_eq!(frame.field("x"), Some(1.5));
+        assert_eq!(frame.field("player.x"), Some(1.5));
+        assert_eq!(frame.flag("grounded"), frame.flag("player.grounded"));
+    }
+
+    #[test]
+    fn npcs_resolve_by_kind_and_spawn_index() {
+        let frame = frame_with_npcs();
+        assert_eq!(frame.field("knight.0.x"), Some(10.0));
+        assert_eq!(frame.field("knight.1.x"), Some(20.0));
+        assert_eq!(frame.flag("knight.0.facing_right"), Some(true));
+        assert_eq!(frame.flag("knight.1.facing_right"), Some(false));
+    }
+
+    #[test]
+    fn paths_that_cannot_resolve_return_none_rather_than_a_wrong_answer() {
+        let frame = frame_with_npcs();
+        assert_eq!(frame.field("knight.2.x"), None, "only two knights");
+        assert_eq!(frame.field("goblin.0.x"), None, "no goblins on this map");
+        assert_eq!(frame.field("knight.0.nonsense"), None);
+        assert_eq!(frame.field("a.b.c.d"), None, "too many segments");
+        assert_eq!(frame.field("knight.left.x"), None, "index is not a number");
+    }
+
+    /// Typos are rejected when a tape is parsed, not when it runs, so the
+    /// error names the line instead of appearing 300 ticks in.
+    #[test]
+    fn path_validity_is_decidable_without_a_frame() {
+        assert!(ProbePath::parse("knight.0.x").unwrap().is_field());
+        assert!(ProbePath::parse("knight.0.grounded").unwrap().is_flag());
+        assert!(
+            !ProbePath::parse("knight.0.air_jumps").unwrap().is_field(),
+            "air_jumps is a player field; an NPC has no jump budget"
+        );
+        assert!(ProbePath::parse("x").unwrap().is_field());
+        assert!(ProbePath::parse("a.b.c.d").is_none());
+    }
+
     #[test]
     fn a_corrupt_line_is_reported_with_its_number() {
         let mut good = Trace::new();
-        good.push(probe(0), &[]);
+        good.push(probe(0), Vec::new(), &[]);
 
         let text = format!("{}not json\n", good.to_jsonl());
         let err = Trace::parse(&text).unwrap_err();

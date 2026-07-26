@@ -178,6 +178,15 @@ impl Default for Avatar {
     }
 }
 
+/// What the map called this entity — `"knight"`, later `"goblin"`.
+///
+/// Kept on the entity because traces and tape assertions address NPCs as
+/// `<kind>.<index>`, so `knight.0` needs something to resolve against. An
+/// index rather than a name because nothing needs naming yet; when a quest
+/// NPC does, this is where a name would sit beside the kind.
+#[derive(Clone, Debug)]
+pub struct Kind(pub String);
+
 /// Walks back and forth, turning at walls and at the edges of what it is
 /// standing on. No awareness of the player at all.
 ///

@@ -24,10 +24,10 @@ gameplay events with `expect` assertions, golden traces checked on every
 `cargo test`, inline ASCII fixtures, property sweeps over the collision system,
 and an F1 debug overlay. See [tapes/README.md](tapes/README.md).
 
-Also done: M1 below — movement split into a shared `Body` any entity can have,
-which is what unblocks the rest of this list.
+Also done: M1 and M2 below — movement split into a shared `Body` any entity can
+have, and a knight that spawns from map data and patrols using it.
 
-Not done: anything with a second entity in it.
+Not done: anything where two entities affect each other.
 
 ## The organizing principle
 
@@ -85,40 +85,41 @@ Notes for what comes next:
 - **`landed` is a transition flag**, true for exactly one tick. Contact events
   need it; `grounded` alone cannot express touching down.
 
-## M2 — NPCs
+## M2 — NPCs ✅ done
 
-**Size:** medium. **Unlocks:** everything downstream.
+Spawn registry (`ecs/spawn.rs`) turning `EntitySpawn.kind` into entities, a
+`Patrol` controller writing to the shared `Body`, per-entity sprite sheets, and
+NPCs in the trace and in tape assertions as `knight.0.x`.
 
-Spawn registry mapping `EntitySpawn.kind` to a spawn function, so the `K` in a
-map and the `Npc(kind: "...")` entries finally do something. `NpcDef` in RON
-(stats, clip set, AI behavior, loot table) per PLAN.md. A patrol AI that writes
-to the same `Body` the player uses.
+The knight is harmless by design — it has no idea the player exists. That kept
+the whole milestone verifiable without also inventing health: all nine testbed
+baselines stayed byte-identical, and the two castle ones changed only by
+gaining an `npcs` array, checked by stripping that key and diffing the rest.
 
-**Harness work — do it with this milestone, not after:**
+Notes for what comes next:
 
-- `Sim` holds `player: Entity`; `probe()` stops panicking and stops assuming.
-- `Probe` becomes a keyed world snapshot (entities by name, plus globals), with
-  tape assertions as path expressions: `player.x`, `npc.goblin.hp`. The
-  hand-maintained `FIELD_NAMES`/`FLAG_NAMES` tables and their `match` arms do
-  not survive contact with a second entity type.
-- Deterministic RNG owned by `Sim`, seeded per run. AI jitter, crits, and loot
-  rolls all want randomness, and one `rand::thread_rng()` anywhere destroys
-  tapes, traces, and reproducibility together.
-- A determinism guard against archetype reordering: hecs iterates archetypes in
-  creation order, and adding or removing a component mid-run (a stun, a damage
-  flash) moves an entity between archetypes and can change iteration order. The
-  current determinism test cannot catch this because one entity has no order to
-  get wrong. Test: spawn, despawn, and mutate components mid-run, and still
-  reproduce a byte-identical trace.
-
-Design the snapshot format *with* the second entity in hand, not before it.
-
-**Exit criteria:** a knight patrols the castle map, is visible in a trace, and a
-tape can assert about it by name. Two runs of the same tape are byte-identical.
+- **`ClipSet` clips carry their own sheet and frame size.** The knight pack is
+  seven files with four frame widths; the player is one atlas. Set-level values
+  are defaults, validated at load so the renderer never sees a clip with no
+  sheet. `ClipSet.offset` handles art that is not bottom-aligned in its cell —
+  the knight's feet sit at row 44 of 64.
+- **NPCs are addressed by kind and spawn index**, not by name. Map order
+  decides it, `Sim::npcs` sorts by entity id to keep it stable while components
+  come and go, and a test fails if that sort is removed. Named NPCs are an M5
+  problem, when a quest needs one.
+- **The seeded RNG was deferred to M3.** Patrol is fully deterministic, so an
+  RNG here would have been dead code. What matters is the rule, not the
+  plumbing: nothing may call `rand::thread_rng()`. The moment combat wants a
+  crit roll, the RNG goes on `Sim` and is seeded per run.
+- **Clip names are not assertable** — the tape language compares numbers only.
+  Golden traces do record the clip, so an animation change is still caught.
+- **Known art quirk**: the knight's jump/fall frames carry the character across
+  the cell, so a jumping knight will visibly slide against a position that
+  comes from physics. Harmless while it only walks; deal with it in M3.
 
 ## M3 — Combat
 
-**Size:** large. **Depends on:** M1, M2.
+**Size:** large. **Depends on:** M1, M2. **Next up.**
 
 Health and mana components, i-frames, knockback, attack states driving timed
 hitbox queries, a three-hit ground combo, air attacks, the shock spell as the
@@ -269,7 +270,7 @@ serves, not after.
 | Milestone | Harness work |
 | --- | --- |
 | ~~M1 Body split~~ | ~~none — the traces already cover it~~ (held: zero diffs) |
-| M2 NPCs | world-snapshot `Probe`, path assertions, seeded RNG, ordering guard |
+| ~~M2 NPCs~~ | ~~snapshot `Probe`, path assertions, ordering guard~~ (RNG moved to M3) |
 | M3 Combat | combat events, action-set inputs (attack/cast) in tapes |
 | M4 Items | inventory in the snapshot, pickup/equip events |
 | M5 Dialogue | choice selection in tapes, dialogue events |

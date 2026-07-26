@@ -25,7 +25,7 @@ use hecs::World;
 
 use crate::assets::{Assets, Clip, ClipSet};
 use crate::ecs::components::{
-    AnimationState, Avatar, Body, Patrol, Position, Size, Sprite, Velocity,
+    AnimationState, Avatar, Body, Kind, Patrol, Position, Size, Sprite, Velocity,
 };
 use crate::ecs::spawn;
 use crate::level::LevelData;
@@ -34,7 +34,7 @@ use crate::systems::input::PlayerInput;
 use crate::systems::{animation, avatar, body, npc};
 
 pub use event::GameEvent;
-pub use probe::Probe;
+pub use probe::{NpcProbe, Probe};
 
 /// The simulation runs on a fixed timestep so that behavior is identical at
 /// any frame rate — and, just as importantly, reproducible between runs.
@@ -69,7 +69,10 @@ impl Sim {
         for placement in &level.entities {
             if let hash_map::Entry::Vacant(slot) = clip_sets.entry(placement.kind.clone()) {
                 slot.insert(assets.clip_set(&placement.kind).with_context(|| {
-                    format!("map places `{}` but its clip set is missing", placement.kind)
+                    format!(
+                        "map places `{}` but its clip set is missing",
+                        placement.kind
+                    )
                 })?);
             }
         }
@@ -191,11 +194,43 @@ impl Sim {
         entities
     }
 
+    /// Snapshot every NPC, in spawn order, for tracing and assertions.
+    pub fn npc_probes(&self) -> Vec<NpcProbe> {
+        self.npcs()
+            .into_iter()
+            .filter_map(|entity| {
+                let mut query = self
+                    .world
+                    .query_one::<(&Kind, &Patrol, &Position, &Velocity, &Body, &AnimationState)>(
+                        entity,
+                    )
+                    .ok()?;
+                let (kind, patrol, pos, vel, body, anim) = query.get()?;
+                Some(NpcProbe {
+                    kind: kind.0.clone(),
+                    x: pos.0.x,
+                    y: pos.0.y,
+                    vx: vel.0.x,
+                    vy: vel.0.y,
+                    dir: patrol.dir,
+                    grounded: body.grounded,
+                    clip: anim.clip.clone(),
+                    frame: anim.frame,
+                })
+            })
+            .collect()
+    }
+
     /// Every NPC's position, in spawn order.
     pub fn npc_positions(&self) -> Vec<Vec2> {
         self.npcs()
             .into_iter()
-            .map(|entity| self.world.get::<&Position>(entity).expect("npc has a position").0)
+            .map(|entity| {
+                self.world
+                    .get::<&Position>(entity)
+                    .expect("npc has a position")
+                    .0
+            })
             .collect()
     }
 
@@ -307,7 +342,10 @@ const PENETRATION_TOLERANCE: f32 = 1.0;
 /// merely touching does not count.
 #[cfg(debug_assertions)]
 fn penetrates(a: &Aabb, b: &Aabb, eps: f32) -> bool {
-    a.x + eps < b.right() && a.right() - eps > b.x && a.y + eps < b.bottom() && a.bottom() - eps > b.y
+    a.x + eps < b.right()
+        && a.right() - eps > b.x
+        && a.y + eps < b.bottom()
+        && a.bottom() - eps > b.y
 }
 
 #[cfg(test)]
@@ -333,7 +371,12 @@ mod tests {
 
     /// Step until `pred` holds, returning the tick it happened on. Fixture
     /// tests care about "did this happen", not about counting ticks by hand.
-    fn step_until(sim: &mut Sim, limit: u32, input: PlayerInput, pred: impl Fn(&Sim) -> bool) -> u32 {
+    fn step_until(
+        sim: &mut Sim,
+        limit: u32,
+        input: PlayerInput,
+        pred: impl Fn(&Sim) -> bool,
+    ) -> u32 {
         for tick in 0..limit {
             sim.step(input);
             if pred(sim) {
@@ -389,28 +432,23 @@ mod tests {
     /// in three lines, with the geometry visible right there in the test.
     #[test]
     fn a_fixture_grid_builds_a_playable_sim() {
-        let mut sim = Sim::fixture(&[
-            "..........",
-            "..P.......",
-            "##########",
-        ]);
+        let mut sim = Sim::fixture(&["..........", "..P.......", "##########"]);
         step_until(&mut sim, 30, PlayerInput::default(), |s| s.probe().grounded);
 
         let probe = sim.probe();
         assert_eq!(probe.clip, "idle");
         // spawn cell is row 1, so the floor surface is at y = 64
         assert_eq!(probe.y, 64.0 - Avatar::HEIGHT);
-        assert_eq!(sim.level.solids.len(), 1, "the floor row merged into one rect");
+        assert_eq!(
+            sim.level.solids.len(),
+            1,
+            "the floor row merged into one rect"
+        );
     }
 
     #[test]
     fn fixture_grids_carry_platforms_and_hazards() {
-        let sim = Sim::fixture(&[
-            "..........",
-            "..P..==...",
-            ".....^^...",
-            "##########",
-        ]);
+        let sim = Sim::fixture(&["..........", "..P..==...", ".....^^...", "##########"]);
         assert_eq!(sim.level.one_way.len(), 1);
         assert_eq!(sim.level.hazards.len(), 1);
     }
@@ -419,12 +457,7 @@ mod tests {
 
     #[test]
     fn jumping_and_landing_emit_events() {
-        let mut sim = Sim::fixture(&[
-            "..........",
-            "..........",
-            "..P.......",
-            "##########",
-        ]);
+        let mut sim = Sim::fixture(&["..........", "..........", "..P.......", "##########"]);
         step_until(&mut sim, 30, PlayerInput::default(), |s| s.probe().grounded);
 
         sim.step(JUMP);
@@ -453,12 +486,7 @@ mod tests {
 
     #[test]
     fn a_hazard_death_names_its_cause() {
-        let mut sim = Sim::fixture(&[
-            "..........",
-            "..P.......",
-            "..^.......",
-            "##########",
-        ]);
+        let mut sim = Sim::fixture(&["..........", "..P.......", "..^.......", "##########"]);
         // the spike is directly below the spawn cell; falling onto it kills
         step_until(&mut sim, 60, PlayerInput::default(), |s| s.probe().dead);
         assert_eq!(
@@ -471,6 +499,51 @@ mod tests {
         step_until(&mut sim, 120, PlayerInput::default(), |s| {
             s.events().contains(&GameEvent::Respawned)
         });
+    }
+
+    /// `npc.<n>` in a tape has to keep meaning the same entity for the whole
+    /// run. hecs iterates archetypes in creation order, so adding or removing
+    /// a component moves an entity between archetypes and reshuffles query
+    /// order — which combat will do constantly, with stuns and damage flashes.
+    ///
+    /// This mutates components mid-run and checks the ordering survives. The
+    /// guard is `Sim::npcs` sorting by entity id; delete that sort and this
+    /// fails.
+    #[test]
+    fn npc_order_survives_components_being_added_and_removed() {
+        let mut sim = Sim::fixture(&["................", "..P..K....K...K.", "################"]);
+
+        let original = sim.npcs();
+        assert_eq!(original.len(), 3, "three knights, one per K");
+        let spawn_xs: Vec<f32> = sim.npc_positions().iter().map(|p| p.x).collect();
+        assert!(
+            spawn_xs.windows(2).all(|w| w[0] < w[1]),
+            "spawn order should run left to right across the grid: {spawn_xs:?}"
+        );
+
+        // Give the middle knight a component, which moves it to a different
+        // archetype, then take it away again.
+        #[derive(Clone, Copy, Debug)]
+        struct Stunned;
+
+        sim.world.insert_one(original[1], Stunned).unwrap();
+        assert_eq!(
+            sim.npcs(),
+            original,
+            "order held while a component was added"
+        );
+
+        for _ in 0..30 {
+            sim.step(PlayerInput::default());
+        }
+        assert_eq!(sim.npcs(), original, "order held across a step");
+
+        sim.world.remove_one::<Stunned>(original[1]).unwrap();
+        assert_eq!(sim.npcs(), original, "order held once it was removed again");
+
+        // And the probes still line up with the entities they describe.
+        let kinds: Vec<String> = sim.npc_probes().into_iter().map(|n| n.kind).collect();
+        assert_eq!(kinds, vec!["knight"; 3]);
     }
 
     /// The same inputs must always produce the same trace, or tapes and

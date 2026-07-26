@@ -67,6 +67,34 @@ Assertions read `assert <flag>`, `assert !<flag>`, or `assert <field> <op>
 - boolean: `grounded`, `facing_right`, `wall_sliding`, `double_jumping`,
   `crouching`, `dead`, `on_one_way_only`
 
+## Asserting on NPCs
+
+A bare name is the player, and always will be — every tape written before there
+were NPCs still means what it said. NPCs are addressed as `<kind>.<index>`,
+where the index is spawn order (the map grid scanned left to right, top to
+bottom, then the explicit entity list):
+
+```
+assert knight.0.x <= 458
+assert knight.0.dir == -1
+assert !knight.0.facing_right
+assert player.grounded        # the long way round, if you want the symmetry
+```
+
+- numeric: `x`, `y`, `vx`, `vy`, `dir`, `frame`
+- boolean: `grounded`, `facing_right`
+
+Spawn order is stable across a run even as components are added and removed —
+`Sim::npcs` sorts by entity id rather than trusting query order, and
+`npc_order_survives_components_being_added_and_removed` is what holds that
+down. It is *not* stable across map edits: move a `K` and `knight.0` may be a
+different knight.
+
+Clips are not assertable yet. `assert knight.0.clip == run` would need string
+comparison in the tape language, which does not exist; the trace records the
+clip name, so a golden trace catches an animation change even though no
+assertion can name one.
+
 ## Events
 
 `assert` samples state; `expect` checks things that *happened*. Most of what a
@@ -106,6 +134,7 @@ do not move what is already there.
 | `testbed.ron` | running, jumping, gap clearing, spike death |
 | `testbed_platform.ron` | one-way platforms and drop-through |
 | `testbed_chimney.ron` | wall slide, wall jump, wall-contact grace |
+| `testbed_knight.ron` | a patrolling knight, with a wall at one end and a drop at the other |
 
 `castle_spawn.tape` is the exception: it runs on the real map but asserts only
 that the player spawns on solid ground and is not standing in a hazard, so

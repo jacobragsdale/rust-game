@@ -17,7 +17,7 @@ use hecs::World;
 
 use crate::assets::ClipSet;
 use crate::ecs::components::{
-    AnimationState, Avatar, Body, Patrol, Position, Size, Sprite, Velocity,
+    AnimationState, Avatar, Body, Kind, Patrol, Position, Size, Sprite, Velocity,
 };
 use crate::level::EntitySpawn;
 
@@ -60,6 +60,7 @@ pub fn entity(
             let pos = stand_in_cell(placement.pos, tile_size, KNIGHT_SIZE);
             let offset = art_offset(&clips);
             Ok(world.spawn((
+                Kind(placement.kind.clone()),
                 Patrol::new(1.0, KNIGHT_SPEED),
                 Position(pos),
                 Velocity(Vec2::ZERO),

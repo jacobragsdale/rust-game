@@ -8,7 +8,7 @@
 
 use crate::sim::event::EventCounts;
 use crate::sim::tape::Tape;
-use crate::sim::trace::Trace;
+use crate::sim::trace::{Frame, Trace};
 use crate::sim::Sim;
 use crate::systems::input::PlayerInput;
 
@@ -59,9 +59,15 @@ pub fn run_tape(sim: &mut Sim, tape: &Tape) -> RunOutcome {
                   counts: &EventCounts,
                   trace: &mut Trace,
                   failures: &mut Vec<Failure>| {
-        let probe = sim.probe();
+        // The frame is what assertions resolve against, so `knight.0.x` in a
+        // tape and `knight.0.x` in the trace can never mean different things.
+        let frame = Frame {
+            probe: sim.probe(),
+            npcs: sim.npc_probes(),
+            events: sim.events().to_vec(),
+        };
         for assertion in tape.asserts_at(tick) {
-            if let Err(message) = assertion.evaluate(&probe, counts) {
+            if let Err(message) = assertion.evaluate(&frame, counts) {
                 failures.push(Failure {
                     line: assertion.line,
                     tick,
@@ -70,7 +76,7 @@ pub fn run_tape(sim: &mut Sim, tape: &Tape) -> RunOutcome {
                 });
             }
         }
-        trace.push(probe, sim.events());
+        trace.push_frame(frame);
     };
 
     // Assertions written before any input describe the starting state, when
@@ -89,10 +95,10 @@ pub fn run_tape(sim: &mut Sim, tape: &Tape) -> RunOutcome {
 /// Step the sim with no input, for probing a map without authoring a tape.
 pub fn run_idle(sim: &mut Sim, ticks: usize) -> Trace {
     let mut trace = Trace::new();
-    trace.push(sim.probe(), &[]);
+    trace.push(sim.probe(), sim.npc_probes(), &[]);
     for _ in 0..ticks {
         sim.step(PlayerInput::default());
-        trace.push(sim.probe(), sim.events());
+        trace.push(sim.probe(), sim.npc_probes(), sim.events());
     }
     trace
 }
@@ -147,7 +153,11 @@ mod tests {
         )
         .unwrap();
         let outcome = run_tape(&mut castle(), &tape);
-        assert!(outcome.passed(), "unexpected failures: {:?}", outcome.failures);
+        assert!(
+            outcome.passed(),
+            "unexpected failures: {:?}",
+            outcome.failures
+        );
     }
 
     #[test]
@@ -166,7 +176,11 @@ mod tests {
     fn satisfied_assertions_pass() {
         let tape = Tape::parse("wait 10\nassert grounded\nassert vx == 0").unwrap();
         let outcome = run_tape(&mut castle(), &tape);
-        assert!(outcome.passed(), "unexpected failures: {:?}", outcome.failures);
+        assert!(
+            outcome.passed(),
+            "unexpected failures: {:?}",
+            outcome.failures
+        );
     }
 
     #[test]

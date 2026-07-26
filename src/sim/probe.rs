@@ -51,6 +51,67 @@ pub struct Probe {
     pub frame: usize,
 }
 
+/// Numeric fields of an NPC, addressable as `<kind>.<index>.<field>`.
+const NPC_FIELD_NAMES: &[&str] = &["x", "y", "vx", "vy", "dir", "frame"];
+
+/// Boolean fields of an NPC.
+const NPC_FLAG_NAMES: &[&str] = &["grounded", "facing_right"];
+
+/// A snapshot of one NPC.
+///
+/// Deliberately much thinner than the player's: an NPC has no coyote timer or
+/// jump buffer, and a trace with a line per tick per entity gets unreadable
+/// fast. Fields get added here when something needs to assert on them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NpcProbe {
+    pub kind: String,
+    pub x: f32,
+    pub y: f32,
+    pub vx: f32,
+    pub vy: f32,
+    /// Travel direction: -1 left, +1 right.
+    pub dir: f32,
+    pub grounded: bool,
+    pub clip: String,
+    pub frame: usize,
+}
+
+impl NpcProbe {
+    pub fn field(&self, name: &str) -> Option<f32> {
+        Some(match name {
+            "x" => self.x,
+            "y" => self.y,
+            "vx" => self.vx,
+            "vy" => self.vy,
+            "dir" => self.dir,
+            "frame" => self.frame as f32,
+            _ => return None,
+        })
+    }
+
+    pub fn flag(&self, name: &str) -> Option<bool> {
+        Some(match name {
+            "grounded" => self.grounded,
+            "facing_right" => self.dir >= 0.0,
+            _ => return None,
+        })
+    }
+
+    pub fn field_names() -> &'static [&'static str] {
+        NPC_FIELD_NAMES
+    }
+
+    pub fn flag_names() -> &'static [&'static str] {
+        NPC_FLAG_NAMES
+    }
+
+    pub fn known_names() -> String {
+        let mut all: Vec<&str> = NPC_FIELD_NAMES.to_vec();
+        all.extend_from_slice(NPC_FLAG_NAMES);
+        all.join(", ")
+    }
+}
+
 impl Probe {
     pub fn new(
         tick: u64,
@@ -135,7 +196,11 @@ impl Probe {
             self.y,
             self.vx,
             self.vy,
-            if self.grounded { "grounded" } else { "airborne" },
+            if self.grounded {
+                "grounded"
+            } else {
+                "airborne"
+            },
             self.clip,
             self.frame,
             if self.dead { "  DEAD" } else { "" },
@@ -164,12 +229,21 @@ mod tests {
     fn advertised_names_all_resolve() {
         let probe = sample();
         for name in Probe::field_names() {
-            assert!(probe.field(name).is_some(), "field `{name}` does not resolve");
-            assert!(probe.flag(name).is_none(), "`{name}` is both field and flag");
+            assert!(
+                probe.field(name).is_some(),
+                "field `{name}` does not resolve"
+            );
+            assert!(
+                probe.flag(name).is_none(),
+                "`{name}` is both field and flag"
+            );
         }
         for name in Probe::flag_names() {
             assert!(probe.flag(name).is_some(), "flag `{name}` does not resolve");
-            assert!(probe.field(name).is_none(), "`{name}` is both flag and field");
+            assert!(
+                probe.field(name).is_none(),
+                "`{name}` is both flag and field"
+            );
         }
     }
 
