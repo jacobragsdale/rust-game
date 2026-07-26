@@ -24,6 +24,9 @@ gameplay events with `expect` assertions, golden traces checked on every
 `cargo test`, inline ASCII fixtures, property sweeps over the collision system,
 and an F1 debug overlay. See [tapes/README.md](tapes/README.md).
 
+Also done: M1 below — movement split into a shared `Body` any entity can have,
+which is what unblocks the rest of this list.
+
 Not done: anything with a second entity in it.
 
 ## The organizing principle
@@ -54,24 +57,33 @@ current shape.
 
 ---
 
-## M1 — Split movement into intent and body
+## M1 — Split movement into intent and body ✅ done
 
-**Size:** small. **No new features.** Do this first.
+`Body` component in `ecs/components.rs`, `systems/body.rs::move_bodies` moving
+every `Position + Velocity + Size + Body` against geometry in one pass per
+tick. The tick is now three phases — `avatar::control` decides a velocity and
+sets the body's knobs, `move_bodies` moves everything, `avatar::after_move`
+reacts to where things ended up.
 
-Add a `Body` component (velocity, grounded, prev_pos, gravity scale) and a
-system that moves every `Position + Velocity + Size + Body` against geometry.
-`avatar::update` shrinks to translating `PlayerInput` into velocity; anything
-else that needs to fall and collide reuses the same system.
+Shipped with zero trace diffs, which was the exit criterion: the golden
+baselines were recorded specifically so this refactor could prove it changed
+the code and not the game.
 
-**Why first:** nothing else can start. An NPC that walks off a ledge needs
-gravity, and today not one line of that is reachable from outside the avatar
-query. It is also the cheapest moment to do it — the golden traces were
-recorded specifically to make this refactor safe, and their value decays with
-every feature built on the current shape.
+Notes for what comes next:
 
-**Exit criteria:** `cargo test` green **and zero trace diffs**. This is a pure
-refactor, so any trace movement at all is a bug. That is a rare and very clean
-success condition; take advantage of it.
+- **`Body` carries per-tick knobs, not just state.** `gravity`, `max_fall`,
+  `fall_cap`, `ignore_one_way`, `frozen` are written by a controller each tick;
+  `grounded`, `on_solid`, `on_one_way`, `landed` are written by `move_bodies`.
+  Variable jump height is "heavier gravity while rising", wall slide is a
+  `fall_cap`, drop-through is `ignore_one_way`. Gravity is an absolute value
+  rather than a scale on purpose — a multiplier would not have reproduced the
+  old arithmetic bit for bit.
+- **`frozen` is the freeze primitive.** The death freeze uses it; stuns,
+  knockback recovery, and cutscenes should too. Phases 1 and 3 both consult it,
+  because a body that did not move must not draw conclusions from stale
+  contact either.
+- **`landed` is a transition flag**, true for exactly one tick. Contact events
+  need it; `grounded` alone cannot express touching down.
 
 ## M2 — NPCs
 
@@ -256,7 +268,7 @@ serves, not after.
 
 | Milestone | Harness work |
 | --- | --- |
-| M1 Body split | none — the point is that the traces already cover it |
+| ~~M1 Body split~~ | ~~none — the traces already cover it~~ (held: zero diffs) |
 | M2 NPCs | world-snapshot `Probe`, path assertions, seeded RNG, ordering guard |
 | M3 Combat | combat events, action-set inputs (attack/cast) in tapes |
 | M4 Items | inventory in the snapshot, pickup/equip events |

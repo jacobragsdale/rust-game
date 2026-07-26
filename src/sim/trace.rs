@@ -132,7 +132,8 @@ mod tests {
     fn probe(tick: u64) -> Probe {
         Probe::new(
             tick,
-            &Avatar::new(Vec2::ZERO),
+            &Avatar::new(),
+            &Avatar::body(Vec2::ZERO),
             Vec2::new(1.5, 2.5),
             Vec2::ZERO,
             &AnimationState::new("idle"),

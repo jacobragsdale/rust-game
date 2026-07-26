@@ -4,7 +4,7 @@
 use hecs::World;
 
 use crate::assets::ClipSet;
-use crate::ecs::components::{AnimationState, Avatar, Velocity};
+use crate::ecs::components::{AnimationState, Avatar, Body, Velocity};
 
 /// Every clip [`select_avatar_clip`] can ask for. A clip set that is missing
 /// one of these freezes the sprite silently, so `Sim::check_invariants` fails
@@ -23,12 +23,14 @@ pub const AVATAR_CLIPS: &[&str] = &[
 
 /// Map the avatar's movement state to a clip name.
 pub fn select_avatar_clip(world: &mut World) {
-    for (_, (avatar, vel, anim)) in world.query_mut::<(&Avatar, &Velocity, &mut AnimationState)>() {
+    for (_, (avatar, body, vel, anim)) in
+        world.query_mut::<(&Avatar, &Body, &Velocity, &mut AnimationState)>()
+    {
         let clip = if avatar.dead() {
             "hurt"
         } else if avatar.wall_sliding {
             "wall_slide"
-        } else if !avatar.grounded {
+        } else if !body.grounded {
             if avatar.double_jumping {
                 "double_jump"
             } else if vel.0.y < 0.0 {

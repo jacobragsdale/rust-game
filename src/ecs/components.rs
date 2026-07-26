@@ -12,13 +12,82 @@ pub struct Velocity(pub Vec2);
 #[derive(Clone, Copy, Debug)]
 pub struct Size(pub Vec2);
 
+/// Anything that falls, moves, and collides with the level.
+///
+/// [`crate::systems::body::move_bodies`] applies gravity, integrates, and
+/// resolves collisions for every entity that has one, so a controller — the
+/// player's, an NPC's, eventually a projectile's — only has to decide a
+/// velocity and set the few per-tick knobs below. Before this existed, all of
+/// that lived inside a `&mut Avatar` query and nothing else could reach it.
+///
+/// The tick has three phases and this type is the contract between them:
+/// a controller writes the knobs, `move_bodies` writes the contact results,
+/// and the controller reads those back on the next phase or the next tick.
+#[derive(Clone, Copy, Debug)]
+pub struct Body {
+    /// Position at the start of the current tick. Collision resolution uses it
+    /// to work out which side a surface was approached from.
+    pub prev_pos: Vec2,
+
+    // --- knobs: set by the controller, read by `move_bodies` ---
+    /// Downward acceleration in px/s². A per-tick value rather than a constant
+    /// because variable jump height is exactly "heavier gravity while rising
+    /// with the button released".
+    pub gravity: f32,
+    /// Terminal velocity.
+    pub max_fall: f32,
+    /// A tighter fall-speed cap for this tick only, applied after gravity.
+    /// Wall sliding is the only user so far; `None` means no extra cap.
+    pub fall_cap: Option<f32>,
+    /// Fall through one-way platforms this tick (drop-through).
+    pub ignore_one_way: bool,
+    /// Skip movement entirely: no gravity, no integration, no collision. The
+    /// death freeze uses this, and stuns and cutscenes will want it too.
+    pub frozen: bool,
+
+    // --- results: written by `move_bodies`, read by the controller ---
+    pub grounded: bool,
+    /// Standing on a full solid.
+    pub on_solid: bool,
+    /// Standing on a one-way platform.
+    pub on_one_way: bool,
+    /// True only on the tick the body touches down after being airborne.
+    /// A transition, so it cannot be recovered from `grounded` alone.
+    pub landed: bool,
+}
+
+impl Body {
+    pub fn new(pos: Vec2, gravity: f32, max_fall: f32) -> Self {
+        Body {
+            prev_pos: pos,
+            gravity,
+            max_fall,
+            fall_cap: None,
+            ignore_one_way: false,
+            frozen: false,
+            grounded: false,
+            on_solid: false,
+            on_one_way: false,
+            landed: false,
+        }
+    }
+
+    /// Standing on a one-way platform and nothing else — the case where "down"
+    /// should mean "drop through" rather than "crouch".
+    pub fn on_one_way_only(&self) -> bool {
+        self.on_one_way && !self.on_solid
+    }
+}
+
 /// The player. Tile-scale physics tuned for 32px tiles and the 50x37
 /// Adventurer sprite. The collider is smaller than the sprite;
 /// `Sprite::offset` aligns them.
+///
+/// Only the state that is specific to *being the player* lives here. Where the
+/// body is, how fast it is going, and whether it is on the ground belong to
+/// [`Body`], which anything else in the world can have too.
 #[derive(Clone, Debug)]
 pub struct Avatar {
-    pub prev_pos: Vec2,
-    pub grounded: bool,
     pub facing_right: bool,
     /// Ticks since the avatar was last grounded (0 while grounded).
     pub coyote_ticks: u32,
@@ -26,8 +95,6 @@ pub struct Avatar {
     pub jump_buffer: u32,
     /// Mid-air jumps still available (refilled on landing / wall jump).
     pub air_jumps: u8,
-    /// Standing on a one-way platform (and nothing solid) last tick.
-    pub on_one_way_only: bool,
     /// Countdown during which one-way platforms are ignored (drop-through).
     pub drop_ticks: u32,
     pub wall_sliding: bool,
@@ -75,15 +142,12 @@ impl Avatar {
     /// Death freeze before respawning (0.6 s).
     pub const DEATH_TICKS: u32 = 36;
 
-    pub fn new(spawn: Vec2) -> Self {
+    pub fn new() -> Self {
         Avatar {
-            prev_pos: spawn,
-            grounded: false,
             facing_right: true,
             coyote_ticks: u32::MAX,
             jump_buffer: 0,
             air_jumps: Self::MAX_AIR_JUMPS,
-            on_one_way_only: false,
             drop_ticks: 0,
             wall_sliding: false,
             wall_dir: 0.0,
@@ -94,8 +158,19 @@ impl Avatar {
         }
     }
 
+    /// The body the player drives, at its spawn point.
+    pub fn body(spawn: Vec2) -> Body {
+        Body::new(spawn, Self::GRAVITY, Self::MAX_FALL)
+    }
+
     pub fn dead(&self) -> bool {
         self.dead_ticks > 0
+    }
+}
+
+impl Default for Avatar {
+    fn default() -> Self {
+        Avatar::new()
     }
 }
 

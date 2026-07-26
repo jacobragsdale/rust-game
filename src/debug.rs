@@ -18,7 +18,7 @@ use ggez::graphics::{
 };
 use ggez::{Context, GameResult};
 
-use crate::ecs::components::{AnimationState, Avatar, Position, Size, Sprite, Velocity};
+use crate::ecs::components::{AnimationState, Avatar, Body, Position, Size, Sprite, Velocity};
 use crate::physics::Aabb;
 use crate::sim::Sim;
 
@@ -162,9 +162,9 @@ impl DebugOverlay {
     fn draw_hud(&self, canvas: &mut Canvas, sim: &Sim, view: Vec2) {
         let mut lines: Vec<String> = Vec::new();
 
-        for (_, (avatar, pos, vel, anim)) in sim
+        for (_, (avatar, body, pos, vel, anim)) in sim
             .world
-            .query::<(&Avatar, &Position, &Velocity, &AnimationState)>()
+            .query::<(&Avatar, &Body, &Position, &Velocity, &AnimationState)>()
             .iter()
         {
             lines.push(format!("tick  {}", sim.tick));
@@ -180,13 +180,13 @@ impl DebugOverlay {
             ));
             lines.push(format!(
                 "{}{}{}{}",
-                if avatar.grounded {
+                if body.grounded {
                     "grounded "
                 } else {
                     "airborne "
                 },
                 if avatar.wall_sliding { "wallslide " } else { "" },
-                if avatar.on_one_way_only { "oneway " } else { "" },
+                if body.on_one_way_only() { "oneway " } else { "" },
                 if avatar.dead() { "DEAD" } else { "" },
             ));
         }

@@ -7,7 +7,7 @@
 use ggez::glam::Vec2;
 use serde::{Deserialize, Serialize};
 
-use crate::ecs::components::{AnimationState, Avatar};
+use crate::ecs::components::{AnimationState, Avatar, Body};
 
 /// `coyote_ticks` uses `u32::MAX`-ish sentinels to mean "no coyote jump
 /// available". Clamping keeps traces readable; any value past the coyote
@@ -52,20 +52,27 @@ pub struct Probe {
 }
 
 impl Probe {
-    pub fn new(tick: u64, avatar: &Avatar, pos: Vec2, vel: Vec2, anim: &AnimationState) -> Self {
+    pub fn new(
+        tick: u64,
+        avatar: &Avatar,
+        body: &Body,
+        pos: Vec2,
+        vel: Vec2,
+        anim: &AnimationState,
+    ) -> Self {
         Probe {
             tick,
             x: pos.x,
             y: pos.y,
             vx: vel.x,
             vy: vel.y,
-            grounded: avatar.grounded,
+            grounded: body.grounded,
             facing_right: avatar.facing_right,
             wall_sliding: avatar.wall_sliding,
             double_jumping: avatar.double_jumping,
             crouching: avatar.crouching,
             dead: avatar.dead(),
-            on_one_way_only: avatar.on_one_way_only,
+            on_one_way_only: body.on_one_way_only(),
             air_jumps: avatar.air_jumps,
             coyote_ticks: avatar.coyote_ticks.min(TICK_DISPLAY_CAP),
             wall_coyote_ticks: avatar.wall_coyote_ticks.min(TICK_DISPLAY_CAP),
@@ -143,7 +150,8 @@ mod tests {
     fn sample() -> Probe {
         Probe::new(
             0,
-            &Avatar::new(Vec2::ZERO),
+            &Avatar::new(),
+            &Avatar::body(Vec2::ZERO),
             Vec2::ZERO,
             Vec2::ZERO,
             &AnimationState::new("idle"),

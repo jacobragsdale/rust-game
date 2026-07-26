@@ -1,17 +1,31 @@
-//! Player movement against static level geometry: run, jump (with coyote
-//! time, buffering, and variable height), double jump, wall slide/jump,
-//! drop-through platforms, and hazard death.
+//! What the player *decides*: run, jump (with coyote time, buffering, and
+//! variable height), double jump, wall slide/jump, drop-through, and dying.
+//!
+//! Actually moving through the world is [`crate::systems::body`], shared with
+//! everything else that has a [`Body`]. That split is why this file is all
+//! intent and no integration, and it puts the tick in three phases:
+//!
+//! 1. [`control`] reads input and decides a velocity, plus the per-tick knobs
+//!    on the body (how heavy gravity is, whether to fall through platforms).
+//! 2. `move_bodies` moves every body and records what it touched.
+//! 3. [`after_move`] reacts to where the body actually ended up — landing,
+//!    crouching, map bounds, and whether any of it was lethal.
+//!
+//! Phases 1 and 3 must agree about skipping: a frozen body does not move, so
+//! it must not draw conclusions from a stale contact either. `Body::frozen` is
+//! the single flag both consult.
 
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::ecs::components::{Avatar, Position, Size, Velocity};
+use crate::ecs::components::{Avatar, Body, Position, Size, Velocity};
 use crate::level::LevelData;
 use crate::physics::{self, Aabb, SolidRect};
 use crate::sim::event::{DeathCause, GameEvent};
 use crate::systems::input::PlayerInput;
 
-pub fn update(
+/// Phase 1: turn this tick's input into a velocity and body settings.
+pub fn control(
     world: &mut World,
     level: &LevelData,
     geometry: &[SolidRect],
@@ -19,25 +33,24 @@ pub fn update(
     dt: f32,
     events: &mut Vec<GameEvent>,
 ) {
-    for (_, (avatar, pos, vel, size)) in
-        world.query_mut::<(&mut Avatar, &mut Position, &mut Velocity, &Size)>()
+    for (_, (avatar, pos, vel, size, body)) in
+        world.query_mut::<(&mut Avatar, &mut Position, &mut Velocity, &Size, &mut Body)>()
     {
         if avatar.dead() {
             avatar.dead_ticks -= 1;
             if avatar.dead_ticks == 0 {
-                respawn(avatar, pos, vel, level.player_spawn);
+                respawn(avatar, pos, vel, body, level.player_spawn);
                 events.push(GameEvent::Respawned);
             }
+            // Still frozen on the tick of the respawn itself, so the player
+            // reappears standing still rather than mid-fall.
+            body.frozen = true;
             continue;
         }
-
-        // Captured before anything below can clear it: a landing is a
-        // transition, and both the drop-through branch and `launch` mutate
-        // `grounded` partway through the tick.
-        let was_grounded = avatar.grounded;
+        body.frozen = false;
 
         // --- timers ---
-        if avatar.grounded {
+        if body.grounded {
             avatar.coyote_ticks = 0;
         } else {
             avatar.coyote_ticks = avatar.coyote_ticks.saturating_add(1);
@@ -70,7 +83,7 @@ pub fn update(
         // on the way up did nothing, and easing off the key for one tick to
         // line up the kick threw the jump away. Contact alone arms the wall
         // jump, and the grace window keeps it armed just after letting go.
-        let wall_side = if avatar.grounded {
+        let wall_side = if body.grounded {
             0.0
         } else {
             physics::wall_contact(pos.0, size.0, geometry, dir)
@@ -96,9 +109,8 @@ pub fn update(
         // "go down". Crouching still works on solid ground, which is what
         // `on_one_way_only` distinguishes. A buffered jump press is discarded
         // so the drop is not immediately cancelled by a jump on the way out.
-        if input.down && avatar.grounded && avatar.on_one_way_only {
+        if input.down && body.grounded && body.on_one_way_only() {
             avatar.drop_ticks = Avatar::DROP_TICKS;
-            avatar.grounded = false;
             avatar.jump_buffer = 0;
             events.push(GameEvent::DroppedThrough);
         } else if avatar.jump_buffer > 0 {
@@ -126,43 +138,51 @@ pub fn update(
             }
         }
 
-        // --- gravity, with a heavier pull when the jump key is released
-        //     mid-rise (variable jump height) ---
-        let gravity = if vel.0.y < 0.0 && !input.jump_held {
+        // --- hand the body its settings for this tick ---
+
+        // Heavier gravity while rising with the jump key released is what
+        // makes a tap a short hop and a hold a full jump. Read after the jump
+        // block, so a launch on this very tick is already accounted for.
+        body.gravity = if vel.0.y < 0.0 && !input.jump_held {
             Avatar::GRAVITY + Avatar::LOW_JUMP_GRAVITY
         } else {
             Avatar::GRAVITY
         };
-        vel.0.y = (vel.0.y + gravity * dt).min(Avatar::MAX_FALL);
-        if avatar.wall_sliding {
-            vel.0.y = vel.0.y.min(Avatar::WALL_SLIDE_SPEED);
+        // Also read after the jump block: `launch` clears `wall_sliding`, and
+        // a wall jump must not have its upward kick capped by the slide.
+        body.fall_cap = avatar.wall_sliding.then_some(Avatar::WALL_SLIDE_SPEED);
+        body.ignore_one_way = avatar.drop_ticks > 0;
+    }
+}
+
+/// Phase 3: react to where the body actually ended up.
+///
+/// Takes the same input as [`control`] because a couple of decisions depend on
+/// both what was pressed and where the body finished — crouching needs to know
+/// the player is holding down *and* is now standing on something.
+pub fn after_move(
+    world: &mut World,
+    level: &LevelData,
+    input: PlayerInput,
+    events: &mut Vec<GameEvent>,
+) {
+    let dir = f32::from(input.right) - f32::from(input.left);
+
+    for (_, (avatar, pos, vel, size, body)) in
+        world.query_mut::<(&mut Avatar, &mut Position, &mut Velocity, &Size, &Body)>()
+    {
+        // Frozen bodies did not move, so there is no new contact to read and
+        // nothing new can have killed them.
+        if body.frozen {
+            continue;
         }
 
-        // --- integrate & collide ---
-        avatar.prev_pos = pos.0;
-        pos.0 += vel.0 * dt;
-
-        let contact = if avatar.drop_ticks > 0 {
-            let solids_only: Vec<SolidRect> =
-                geometry.iter().copied().filter(|s| !s.one_way).collect();
-            physics::resolve_move(
-                &mut pos.0,
-                &mut vel.0,
-                avatar.prev_pos,
-                size.0,
-                &solids_only,
-            )
-        } else {
-            physics::resolve_move(&mut pos.0, &mut vel.0, avatar.prev_pos, size.0, geometry)
-        };
-        avatar.grounded = contact.grounded;
-        avatar.on_one_way_only = contact.on_one_way && !contact.on_solid;
-        if contact.grounded {
+        if body.grounded {
             avatar.air_jumps = Avatar::MAX_AIR_JUMPS;
             avatar.double_jumping = false;
-            if !was_grounded {
+            if body.landed {
                 events.push(GameEvent::Landed {
-                    on_one_way: avatar.on_one_way_only,
+                    on_one_way: body.on_one_way_only(),
                 });
             }
         }
@@ -170,7 +190,7 @@ pub fn update(
             avatar.double_jumping = false;
         }
 
-        avatar.crouching = avatar.grounded && input.down && dir == 0.0;
+        avatar.crouching = body.grounded && input.down && dir == 0.0;
 
         // --- map bounds ---
         let max_x = level.pixel_width() - size.0.x;
@@ -183,8 +203,8 @@ pub fn update(
         }
 
         // --- lethal stuff ---
-        let body = Aabb::new(pos.0.x, pos.0.y, size.0.x, size.0.y);
-        let spiked = level.hazards.iter().any(|h| body.overlaps(h));
+        let hitbox = Aabb::new(pos.0.x, pos.0.y, size.0.x, size.0.y);
+        let spiked = level.hazards.iter().any(|h| hitbox.overlaps(h));
         let fell_out = pos.0.y > level.pixel_height() + 100.0;
         if spiked || fell_out {
             avatar.dead_ticks = Avatar::DEATH_TICKS;
@@ -203,7 +223,6 @@ pub fn update(
 /// Shared bookkeeping for every kind of jump.
 fn launch(avatar: &mut Avatar) {
     avatar.jump_buffer = 0;
-    avatar.grounded = false;
     avatar.wall_sliding = false;
     // Lock out both grace windows until the next real landing or wall touch,
     // so one press is one jump and a wall jump cannot re-fire off the wall it
@@ -212,8 +231,18 @@ fn launch(avatar: &mut Avatar) {
     avatar.wall_coyote_ticks = u32::MAX - 1;
 }
 
-fn respawn(avatar: &mut Avatar, pos: &mut Position, vel: &mut Velocity, spawn: Vec2) {
-    *avatar = Avatar::new(spawn);
+/// Back to a clean slate at the spawn point. The body is reset alongside the
+/// avatar — leaving stale contact or a stale `prev_pos` behind would have the
+/// player reappear believing they are still standing where they died.
+fn respawn(
+    avatar: &mut Avatar,
+    pos: &mut Position,
+    vel: &mut Velocity,
+    body: &mut Body,
+    spawn: Vec2,
+) {
+    *avatar = Avatar::new();
+    *body = Avatar::body(spawn);
     pos.0 = spawn;
     vel.0 = Vec2::ZERO;
 }
@@ -233,9 +262,13 @@ mod tests {
     const DT: f32 = 1.0 / 60.0;
     const FLOOR_Y: f32 = 256.0;
 
-    /// `super::update` with a throwaway event log, so the movement tests below
-    /// stay about movement. Tests that care about events call `super::update`
-    /// directly and inspect what it pushed.
+    /// One whole tick of player movement — all three phases in order, with a
+    /// throwaway event log.
+    ///
+    /// Deliberately the real sequence rather than a stub: these tests predate
+    /// the control/move/react split and describe behavior that the split was
+    /// not supposed to change, so running them through the composed pipeline
+    /// is exactly the check that matters.
     fn update(
         world: &mut World,
         level: &LevelData,
@@ -243,7 +276,10 @@ mod tests {
         input: PlayerInput,
         dt: f32,
     ) {
-        super::update(world, level, geometry, input, dt, &mut Vec::new());
+        let mut events = Vec::new();
+        super::control(world, level, geometry, input, dt, &mut events);
+        crate::systems::body::move_bodies(world, geometry, dt);
+        super::after_move(world, level, input, &mut events);
     }
 
     fn test_level() -> LevelData {
@@ -261,7 +297,8 @@ mod tests {
 
     fn spawn_avatar(world: &mut World, pos: Vec2) {
         world.spawn((
-            Avatar::new(pos),
+            Avatar::new(),
+            Avatar::body(pos),
             Position(pos),
             Velocity(Vec2::ZERO),
             Size(Vec2::new(Avatar::WIDTH, Avatar::HEIGHT)),
@@ -277,11 +314,16 @@ mod tests {
         (a.clone(), p.0, v.0)
     }
 
+    /// Contact state, which lives on the body rather than the avatar.
+    fn body(world: &mut World) -> Body {
+        *world.query_mut::<&Body>().into_iter().next().unwrap().1
+    }
+
     fn settle(world: &mut World, level: &LevelData, geo: &[SolidRect]) {
         for _ in 0..10 {
             update(world, level, geo, PlayerInput::default(), DT);
         }
-        assert!(state(world).0.grounded, "avatar failed to settle on ground");
+        assert!(body(world).grounded, "avatar failed to settle on ground");
     }
 
     const JUMP: PlayerInput = PlayerInput {
@@ -319,8 +361,8 @@ mod tests {
         assert_eq!(vel.x, Avatar::RUN_SPEED);
 
         update(&mut world, &level, &geo, JUMP, DT);
-        let (avatar, _, vel) = state(&mut world);
-        assert!(!avatar.grounded);
+        let (_, _, vel) = state(&mut world);
+        assert!(!body(&mut world).grounded);
         assert!(vel.y < 0.0);
     }
 
@@ -360,7 +402,7 @@ mod tests {
             update(&mut world, &level, &geo, PlayerInput::default(), DT);
         }
         let (avatar, _, _) = state(&mut world);
-        assert!(avatar.grounded);
+        assert!(body(&mut world).grounded);
         assert_eq!(avatar.air_jumps, Avatar::MAX_AIR_JUMPS);
     }
 
@@ -383,7 +425,7 @@ mod tests {
         let mut airborne_at = None;
         for tick in 0..60 {
             update(&mut world, &level, &geo, run, DT);
-            if !state(&mut world).0.grounded {
+            if !body(&mut world).grounded {
                 airborne_at = Some(tick);
                 break;
             }
@@ -539,7 +581,7 @@ mod tests {
             let touching =
                 physics::touching_wall(pos, Vec2::new(Avatar::WIDTH, Avatar::HEIGHT), geo, 1.0);
             if touching && vel.y < 0.0 {
-                assert!(!avatar.grounded);
+                assert!(!body(&mut world).grounded);
                 assert!(!avatar.wall_sliding, "not a slide: still on the way up");
                 return world;
             }
@@ -640,7 +682,7 @@ mod tests {
         let mut landed = None;
         for tick in 0..200 {
             update(&mut world, &level, &geo, HOLD_JUMP, DT);
-            if state(&mut world).0.grounded {
+            if body(&mut world).grounded {
                 landed = Some(tick);
                 break;
             }
@@ -651,7 +693,7 @@ mod tests {
         for _ in 0..60 {
             update(&mut world, &level, &geo, HOLD_JUMP, DT);
             let (avatar, _, _) = state(&mut world);
-            assert!(avatar.grounded, "held jump must not fire again");
+            assert!(body(&mut world).grounded, "held jump must not fire again");
             assert_eq!(avatar.air_jumps, Avatar::MAX_AIR_JUMPS);
         }
     }
@@ -682,8 +724,7 @@ mod tests {
         let mut world = World::new();
         spawn_avatar(&mut world, Vec2::new(100.0, 256.0 - Avatar::HEIGHT));
         settle(&mut world, &level, &geo);
-        let (avatar, _, _) = state(&mut world);
-        assert!(avatar.on_one_way_only);
+        assert!(body(&mut world).on_one_way_only());
 
         // down + jump: fall through the platform...
         let down_jump = PlayerInput {
@@ -693,15 +734,14 @@ mod tests {
             ..Default::default()
         };
         update(&mut world, &level, &geo, down_jump, DT);
-        let (avatar, _, _) = state(&mut world);
-        assert!(!avatar.grounded, "dropped off the platform");
+        assert!(!body(&mut world).grounded, "dropped off the platform");
 
         // ...and land on the solid floor below
         for _ in 0..120 {
             update(&mut world, &level, &geo, PlayerInput::default(), DT);
         }
-        let (avatar, pos, _) = state(&mut world);
-        assert!(avatar.grounded);
+        let (_, pos, _) = state(&mut world);
+        assert!(body(&mut world).grounded);
         assert_eq!(pos.y, 400.0 - Avatar::HEIGHT);
 
         // down + jump on solid ground is just a jump

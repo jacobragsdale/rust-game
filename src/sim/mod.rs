@@ -22,11 +22,11 @@ use ggez::glam::Vec2;
 use hecs::World;
 
 use crate::assets::{Assets, Clip, ClipSet};
-use crate::ecs::components::{AnimationState, Avatar, Position, Size, Sprite, Velocity};
+use crate::ecs::components::{AnimationState, Avatar, Body, Position, Size, Sprite, Velocity};
 use crate::level::LevelData;
 use crate::physics::{Aabb, SolidRect};
 use crate::systems::input::PlayerInput;
-use crate::systems::{animation, avatar};
+use crate::systems::{animation, avatar, body};
 
 pub use event::GameEvent;
 pub use probe::Probe;
@@ -90,7 +90,8 @@ impl Sim {
         let spawn = level.player_spawn;
         let (fw, fh) = clips.frame_size;
         world.spawn((
-            Avatar::new(spawn),
+            Avatar::new(),
+            Avatar::body(spawn),
             Position(spawn),
             Velocity(Vec2::ZERO),
             Size(Vec2::new(Avatar::WIDTH, Avatar::HEIGHT)),
@@ -112,9 +113,14 @@ impl Sim {
     }
 
     /// Advance one fixed tick.
+    ///
+    /// Decide, move, react — in that order, and with movement as one pass over
+    /// every body. New systems slot into the phase they belong to rather than
+    /// being appended here, which is what keeps this readable as the game
+    /// grows past one entity.
     pub fn step(&mut self, input: PlayerInput) {
         self.events.clear();
-        avatar::update(
+        avatar::control(
             &mut self.world,
             &self.level,
             &self.geometry,
@@ -122,6 +128,8 @@ impl Sim {
             TICK,
             &mut self.events,
         );
+        body::move_bodies(&mut self.world, &self.geometry, TICK);
+        avatar::after_move(&mut self.world, &self.level, input, &mut self.events);
         animation::select_avatar_clip(&mut self.world);
         animation::advance(&mut self.world, &self.clips, TICK);
         self.tick += 1;
@@ -139,12 +147,10 @@ impl Sim {
     pub fn probe(&self) -> Probe {
         let mut query = self
             .world
-            .query::<(&Avatar, &Position, &Velocity, &AnimationState)>();
-        let (_, (avatar, pos, vel, anim)) = query
-            .iter()
-            .next()
-            .expect("sim has no avatar to probe");
-        Probe::new(self.tick, avatar, pos.0, vel.0, anim)
+            .query::<(&Avatar, &Body, &Position, &Velocity, &AnimationState)>();
+        let (_, (avatar, body, pos, vel, anim)) =
+            query.iter().next().expect("sim has no avatar to probe");
+        Probe::new(self.tick, avatar, body, pos.0, vel.0, anim)
     }
 
     /// Things that must be true at the end of every tick. Debug builds only,
