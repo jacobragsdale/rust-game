@@ -5,6 +5,11 @@ feature set of [SuperGame](https://github.com/jacobragsdale/SuperGame) (LÖVE2D/
 and building it into a scalable adventure/RPG where new content — equipment, NPCs,
 dialogue, weapons, potions — can be added without touching engine code.
 
+> **This is the design document.** For what to build next and in what order, see
+> [ROADMAP.md](ROADMAP.md) — it supersedes the phased roadmap in section 4 below,
+> which predates Phases 0–3a shipping and is stale in the ways ROADMAP.md lists.
+> The designs here (data schemas, architecture rules, story) are still current.
+
 ---
 
 ## 1. Where each codebase stands
