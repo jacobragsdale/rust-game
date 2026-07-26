@@ -6,6 +6,8 @@ use ggez::Context;
 
 /// Every key that jumps.
 const JUMP_KEYS: [Key; 3] = [Key::Up, Key::W, Key::Space];
+/// Every key that swings the sword. `J` for WASD hands, `X` for arrow hands.
+const ATTACK_KEYS: [Key; 2] = [Key::J, Key::X];
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlayerInput {
@@ -16,10 +18,12 @@ pub struct PlayerInput {
     pub jump_pressed: bool,
     /// Jump key currently held: releasing early cuts the jump short.
     pub jump_held: bool,
+    /// Edge-triggered attack: one press, one swing. Holding does not flail.
+    pub attack_pressed: bool,
 }
 
-/// Holds a jump press from the moment the OS reports it until a simulation
-/// tick consumes it.
+/// Holds one-shot presses from the moment the OS reports them until a
+/// simulation tick consumes them.
 ///
 /// This exists because presses and ticks are not on the same clock. The sim
 /// runs on a fixed 60 Hz accumulator, but ggez clears its "just pressed" edge
@@ -35,35 +39,38 @@ pub struct PlayerInput {
 /// back and leaves the player airborne with nothing left.
 ///
 /// Latching at the event and clearing on consumption makes it exactly one
-/// jump per press, whatever the frames and ticks are doing.
+/// action per press, whatever the frames and ticks are doing.
+///
+/// One latch per one-shot action rather than a single bool, because attacking
+/// has the same problem jumping does and would otherwise be dropped on exactly
+/// the frames a jump is.
 #[derive(Debug, Default)]
-pub struct JumpLatch {
-    pressed: bool,
+pub struct InputLatch {
+    jump: bool,
+    attack: bool,
 }
 
-impl JumpLatch {
-    /// Record a key-down event. Non-jump keys are ignored, and the caller is
-    /// expected to have already filtered out OS key-repeat — holding the key
-    /// must not re-arm the latch.
+impl InputLatch {
+    /// Record a key-down event. Keys bound to nothing are ignored, and the
+    /// caller is expected to have already filtered out OS key-repeat — holding
+    /// a key must not re-arm its latch.
     pub fn key_down(&mut self, key: Key) {
         if JUMP_KEYS.contains(&key) {
-            self.pressed = true;
+            self.jump = true;
+        }
+        if ATTACK_KEYS.contains(&key) {
+            self.attack = true;
         }
     }
 
-    /// Drop a pending press. Called on scene changes so a press meant for a
-    /// menu does not turn into a jump the instant gameplay resumes.
+    /// Drop every pending press. Called on scene changes so a press meant for
+    /// a menu does not turn into a jump the instant gameplay resumes.
     pub fn clear(&mut self) {
-        self.pressed = false;
-    }
-
-    /// Consume the latched press, if any.
-    fn take(&mut self) -> bool {
-        std::mem::take(&mut self.pressed)
+        *self = InputLatch::default();
     }
 }
 
-pub fn read(ctx: &Context, jump: &mut JumpLatch) -> PlayerInput {
+pub fn read(ctx: &Context, latch: &mut InputLatch) -> PlayerInput {
     let kb = &ctx.keyboard;
     let left = kb.is_key_pressed(Key::Left) || kb.is_key_pressed(Key::A);
     let right = kb.is_key_pressed(Key::Right) || kb.is_key_pressed(Key::D);
@@ -72,8 +79,9 @@ pub fn read(ctx: &Context, jump: &mut JumpLatch) -> PlayerInput {
         left: left && !right,
         right: right && !left,
         down: kb.is_key_pressed(Key::Down) || kb.is_key_pressed(Key::S),
-        jump_pressed: jump.take(),
+        jump_pressed: std::mem::take(&mut latch.jump),
         jump_held: JUMP_KEYS.iter().any(|&key| kb.is_key_pressed(key)),
+        attack_pressed: std::mem::take(&mut latch.attack),
     }
 }
 
@@ -83,24 +91,24 @@ mod tests {
 
     #[test]
     fn a_press_survives_until_a_tick_consumes_it() {
-        let mut latch = JumpLatch::default();
+        let mut latch = InputLatch::default();
         latch.key_down(Key::Space);
         // ...however many frames render before the next fixed tick.
-        assert!(latch.take(), "the press is still there when a tick runs");
-        assert!(!latch.take(), "and only fires once");
+        assert!(std::mem::take(&mut latch.jump), "the press is still there when a tick runs");
+        assert!(!std::mem::take(&mut latch.jump), "and only fires once");
     }
 
     #[test]
     fn every_jump_key_latches_and_other_keys_do_not() {
         for key in JUMP_KEYS {
-            let mut latch = JumpLatch::default();
+            let mut latch = InputLatch::default();
             latch.key_down(key);
-            assert!(latch.take(), "{key:?} should jump");
+            assert!(std::mem::take(&mut latch.jump), "{key:?} should jump");
         }
-        let mut latch = JumpLatch::default();
+        let mut latch = InputLatch::default();
         latch.key_down(Key::Left);
         latch.key_down(Key::P);
-        assert!(!latch.take());
+        assert!(!std::mem::take(&mut latch.jump));
     }
 
     /// Two presses inside one tick are still one jump. The player cannot
@@ -108,18 +116,18 @@ mod tests {
     /// both look like this, and both used to burn the double jump.
     #[test]
     fn repeated_presses_before_a_tick_collapse_to_one_jump() {
-        let mut latch = JumpLatch::default();
+        let mut latch = InputLatch::default();
         latch.key_down(Key::Up);
         latch.key_down(Key::Up);
-        assert!(latch.take());
-        assert!(!latch.take());
+        assert!(std::mem::take(&mut latch.jump));
+        assert!(!std::mem::take(&mut latch.jump));
     }
 
     #[test]
     fn clearing_drops_a_pending_press() {
-        let mut latch = JumpLatch::default();
+        let mut latch = InputLatch::default();
         latch.key_down(Key::Up);
         latch.clear();
-        assert!(!latch.take(), "a press meant for a menu is not a jump");
+        assert!(!std::mem::take(&mut latch.jump), "a press meant for a menu is not a jump");
     }
 }

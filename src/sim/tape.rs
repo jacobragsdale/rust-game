@@ -18,14 +18,14 @@
 //! ```
 //!
 //! Each line is `<keys> [count]`, where `<keys>` is `+`-separated from
-//! `left right down jump`, or `wait`/`none` for no input. `count` defaults
+//! `left right down jump attack`, or `wait`/`none` for no input. `count` defaults
 //! to 1. `#` starts a comment. Two directives are also recognized:
 //! `map <path>` names the map to run against, and `assert ...` checks the
 //! player's state at the tick where it appears.
 //!
 //! The subtle part is [`Tape::inputs`]: `PlayerInput::jump_pressed` is
 //! edge-triggered while `jump_held` is level-triggered, exactly as
-//! [`crate::systems::input::JumpLatch`] delivers them from the keyboard. The
+//! [`crate::systems::input::InputLatch`] delivers them from the keyboard. The
 //! tape reproduces that by diffing consecutive ticks, so `jump 10` is one jump
 //! held for ten ticks — what actually happens when you hold the key — rather
 //! than ten jumps. Get this wrong and tapes would perform inputs no human
@@ -54,6 +54,7 @@ pub struct Keys {
     pub right: bool,
     pub down: bool,
     pub jump: bool,
+    pub attack: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -293,6 +294,9 @@ impl Tape {
                     down: keys.down,
                     jump_pressed: keys.jump && !prev.jump,
                     jump_held: keys.jump,
+                    // Edge-triggered for the same reason jump is: holding the
+                    // key must be one swing, not one per tick.
+                    attack_pressed: keys.attack && !prev.attack,
                 };
                 prev = keys;
                 input
@@ -315,6 +319,7 @@ fn parse_keys(token: &str) -> anyhow::Result<Keys> {
             "right" => keys.right = true,
             "down" => keys.down = true,
             "jump" => keys.jump = true,
+            "attack" => keys.attack = true,
             other => bail!("unknown key `{other}` (expected left, right, down, jump, or wait)"),
         }
     }

@@ -216,7 +216,7 @@ impl AdventureScene {
 
 impl Scene for AdventureScene {
     fn update(&mut self, ctx: &mut Context, res: &mut Resources) -> GameResult<Transition> {
-        self.sim.step(input::read(ctx, &mut res.jump));
+        self.sim.step(input::read(ctx, &mut res.input));
         crate::systems::camera::follow_avatar(&mut self.sim.world, &mut self.camera);
         Ok(Transition::None)
     }
@@ -230,6 +230,7 @@ impl Scene for AdventureScene {
         canvas.draw(&self.tile_batch, DrawParam::default());
         self.draw_hazards(ctx, &mut canvas)?;
         self.draw_sprites(&mut canvas);
+        crate::hud::draw(&mut canvas, &self.sim, self.camera.offset());
         self.debug.draw(
             ctx,
             &mut canvas,

@@ -18,7 +18,7 @@
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::ecs::components::{Avatar, Body, Position, Size, Velocity};
+use crate::ecs::components::{Attacking, Avatar, Body, Health, Position, Size, Velocity};
 use crate::level::LevelData;
 use crate::physics::{self, Aabb, SolidRect};
 use crate::sim::event::{DeathCause, GameEvent};
@@ -33,13 +33,20 @@ pub fn control(
     dt: f32,
     events: &mut Vec<GameEvent>,
 ) {
-    for (_, (avatar, pos, vel, size, body)) in
-        world.query_mut::<(&mut Avatar, &mut Position, &mut Velocity, &Size, &mut Body)>()
-    {
+    for (_, (avatar, pos, vel, size, body, health, attacking)) in world.query_mut::<(
+        &mut Avatar,
+        &mut Position,
+        &mut Velocity,
+        &Size,
+        &mut Body,
+        &mut Health,
+        &mut Attacking,
+    )>() {
+        let stunned = health.hitstun > 0;
         if avatar.dead() {
             avatar.dead_ticks -= 1;
             if avatar.dead_ticks == 0 {
-                respawn(avatar, pos, vel, body, level.player_spawn);
+                respawn(avatar, pos, vel, body, health, attacking, level.player_spawn);
                 events.push(GameEvent::Respawned);
             }
             // Still frozen on the tick of the respawn itself, so the player
@@ -48,6 +55,15 @@ pub fn control(
             continue;
         }
         body.frozen = false;
+
+        // --- knocked about: the body keeps flying, the player has no say ---
+        //
+        // Deliberately not `Body::frozen`, which would stop the knockback dead
+        // in mid-air. Steering is what is taken away, not momentum.
+        if stunned {
+            avatar.jump_buffer = 0;
+            continue;
+        }
 
         // --- timers ---
         if body.grounded {
@@ -62,9 +78,24 @@ pub fn control(
         }
         avatar.drop_ticks = avatar.drop_ticks.saturating_sub(1);
 
+        // --- attack: one press, one swing, and no swinging mid-swing ---
+        if input.attack_pressed && !attacking.busy() {
+            attacking.start(Avatar::ATTACK);
+            events.push(GameEvent::Attacked {
+                attack: Avatar::ATTACK.to_string(),
+            });
+        }
+
         // --- horizontal: accelerate toward the target speed, brake to zero ---
         let dir = f32::from(input.right) - f32::from(input.left);
-        let target = dir * Avatar::RUN_SPEED;
+        // Rooted on the ground while committed to a swing, so an attack costs
+        // something. Air momentum is left alone -- stopping dead mid-jump
+        // reads as a bug rather than as commitment.
+        let target = if attacking.busy() && body.grounded {
+            0.0
+        } else {
+            dir * Avatar::RUN_SPEED
+        };
         let rate = if dir != 0.0 {
             Avatar::ACCEL
         } else {
@@ -210,6 +241,7 @@ pub fn after_move(
             avatar.dead_ticks = Avatar::DEATH_TICKS;
             vel.0 = Vec2::ZERO;
             events.push(GameEvent::Died {
+                who: "player".to_string(),
                 cause: if spiked {
                     DeathCause::Hazard
                 } else {
@@ -234,15 +266,20 @@ fn launch(avatar: &mut Avatar) {
 /// Back to a clean slate at the spawn point. The body is reset alongside the
 /// avatar — leaving stale contact or a stale `prev_pos` behind would have the
 /// player reappear believing they are still standing where they died.
+#[allow(clippy::too_many_arguments)]
 fn respawn(
     avatar: &mut Avatar,
     pos: &mut Position,
     vel: &mut Velocity,
     body: &mut Body,
+    health: &mut Health,
+    attacking: &mut Attacking,
     spawn: Vec2,
 ) {
     *avatar = Avatar::new();
     *body = Avatar::body(spawn);
+    *health = Health::new(Avatar::MAX_HEALTH);
+    attacking.stop();
     pos.0 = spawn;
     vel.0 = Vec2::ZERO;
 }
@@ -299,6 +336,8 @@ mod tests {
         world.spawn((
             Avatar::new(),
             Avatar::body(pos),
+            Health::new(Avatar::MAX_HEALTH),
+            Attacking::default(),
             Position(pos),
             Velocity(Vec2::ZERO),
             Size(Vec2::new(Avatar::WIDTH, Avatar::HEIGHT)),
@@ -332,6 +371,7 @@ mod tests {
         down: false,
         jump_pressed: true,
         jump_held: true,
+        attack_pressed: false,
     };
     const HOLD_JUMP: PlayerInput = PlayerInput {
         left: false,
@@ -339,6 +379,7 @@ mod tests {
         down: false,
         jump_pressed: false,
         jump_held: true,
+        attack_pressed: false,
     };
 
     #[test]

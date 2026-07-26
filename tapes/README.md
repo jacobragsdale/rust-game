@@ -53,19 +53,21 @@ assert x > 384         # check the player's state at this point in the tape
 assert !grounded
 ```
 
-Keys are `left`, `right`, `down`, `jump`, and `wait`/`none`. The count defaults
-to 1. `#` starts a comment.
+Keys are `left`, `right`, `down`, `jump`, `attack`, and `wait`/`none`. The
+count defaults to 1. `#` starts a comment.
 
-**Jump is edge-triggered.** `jump 10` is one jump held for ten ticks — exactly
-what holding the key does — not ten jumps. Releasing and pressing again is what
-produces a second jump.
+**Jump and attack are edge-triggered.** `jump 10` is one jump held for ten
+ticks — exactly what holding the key does — not ten jumps. Releasing and
+pressing again is what produces a second. `attack 1` is the usual way to write
+a swing, since holding the key does nothing after the first tick.
 
 Assertions read `assert <flag>`, `assert !<flag>`, or `assert <field> <op>
 <value>` with `< <= > >= == !=`. Available names:
 
-- numeric: `x`, `y`, `vx`, `vy`, `tick`, `air_jumps`, `frame`
+- numeric: `x`, `y`, `vx`, `vy`, `tick`, `air_jumps`, `frame`, `hp`,
+  `iframes`, `hitstun`
 - boolean: `grounded`, `facing_right`, `wall_sliding`, `double_jumping`,
-  `crouching`, `dead`, `on_one_way_only`
+  `crouching`, `dead`, `on_one_way_only`, `attacking`
 
 ## Asserting on NPCs
 
@@ -81,8 +83,8 @@ assert !knight.0.facing_right
 assert player.grounded        # the long way round, if you want the symmetry
 ```
 
-- numeric: `x`, `y`, `vx`, `vy`, `dir`, `frame`
-- boolean: `grounded`, `facing_right`
+- numeric: `x`, `y`, `vx`, `vy`, `dir`, `frame`, `hp`, `hitstun`
+- boolean: `grounded`, `facing_right`, `dead`
 
 Spawn order is stable across a run even as components are added and removed —
 `Sim::npcs` sorts by entity id rather than trusting query order, and
@@ -109,9 +111,14 @@ expect wall_jumped == 1  # fired exactly once
 ```
 
 Events: `jumped`, `double_jumped`, `wall_jumped`, `landed`, `dropped_through`,
-`died`, `respawned`.
+`died`, `respawned`, `attacked`, `damaged`.
 
-Two things to know:
+Three things to know:
+
+**`expect` counts by event name only**, not by who it happened to. `damaged`
+and `died` record a `who` in the trace, but `expect damaged == 3` counts every
+hit on anything. That is unambiguous while only enemies can be hurt; it will
+need per-subject filtering once the knight can fight back.
 
 **Counts are cumulative** from the start of the tape, not per-tick — you rarely
 know which tick a landing happened on, but you always know it should have
@@ -135,6 +142,7 @@ do not move what is already there.
 | `testbed_platform.ron` | one-way platforms and drop-through |
 | `testbed_chimney.ron` | wall slide, wall jump, wall-contact grace |
 | `testbed_knight.ron` | a patrolling knight, with a wall at one end and a drop at the other |
+| `testbed_arena.ron` | fighting: a small walled room with a knight and nowhere to run |
 
 `castle_spawn.tape` is the exception: it runs on the real map but asserts only
 that the player spawns on solid ground and is not standing in a hazard, so

@@ -214,7 +214,7 @@ impl Trace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::components::{AnimationState, Avatar};
+    use crate::ecs::components::{AnimationState, Attacking, Avatar, Health};
     use crate::sim::event::DeathCause;
     use ggez::glam::Vec2;
 
@@ -223,6 +223,8 @@ mod tests {
             tick,
             &Avatar::new(),
             &Avatar::body(Vec2::ZERO),
+            &Health::new(Avatar::MAX_HEALTH),
+            &Attacking::default(),
             Vec2::new(1.5, 2.5),
             Vec2::ZERO,
             &AnimationState::new("idle"),
@@ -253,6 +255,7 @@ mod tests {
             probe(3),
             Vec::new(),
             &[GameEvent::Died {
+                who: "player".to_string(),
                 cause: DeathCause::Hazard,
             }],
         );
@@ -294,6 +297,9 @@ mod tests {
             vy: 0.0,
             dir,
             grounded: true,
+            hp: 3,
+            hitstun: 0,
+            dead: false,
             clip: "run".to_string(),
             frame: 0,
         }

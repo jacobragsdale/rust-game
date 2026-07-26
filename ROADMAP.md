@@ -119,11 +119,24 @@ Notes for what comes next:
 
 ## M3 — Combat
 
-**Size:** large. **Depends on:** M1, M2. **Next up.**
+**Size:** large. **Depends on:** M1, M2. **In progress.**
 
-Health and mana components, i-frames, knockback, attack states driving timed
-hitbox queries, a three-hit ground combo, air attacks, the shock spell as the
-first `SpellDef` projectile, enemy death and despawn, and a health/mana HUD.
+**M3a ✅ done** — you can kill the knight. Attack as a latched action input,
+`Health` with i-frames and hitstun, hitbox timing and balance in
+`assets/data/attacks.ron`, combat resolved after `move_bodies`, knockback,
+death, and the HUD. The player's health bar is in; the mana bar's space is
+reserved and it arrives with the spell in M3c.
+
+**M3b** — the knight fights back: the Patrol → Chase → Attack → Return state
+machine, the knight's own hitbox, the player taking damage and dying into the
+respawn that already exists. Also where `expect` needs per-subject filtering,
+since `damaged` stops being unambiguous.
+
+**M3c** — the shock spell: mana, a projectile entity, cooldown. And the seeded
+RNG, if nothing before it has needed one.
+
+Remaining from the original scope: a three-hit ground combo and air attacks
+(the sheet has the frames), and moving stats to RON.
 
 **Harness work:** combat is almost entirely event-shaped, which is why events
 landed in Tier 1. Add `Damaged`, `Died`, `Attacked`, `SpellCast`, `Blocked`

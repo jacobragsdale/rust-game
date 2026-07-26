@@ -1,0 +1,29 @@
+// Attacks: what a swing does, separately from what it looks like.
+//
+// Timing is in ticks (60 = 1 second). `active` is the half-open window during
+// which the hitbox exists, measured from the tick the swing started; outside
+// it the attacker is committed but harmless, which is what makes an attack a
+// decision rather than a free action.
+//
+// `offset` is measured from the attacker's collider, facing right, and is
+// mirrored automatically when facing left. `knockback` is likewise given
+// rightward and mirrored.
+//
+// These numbers are balance, not art, which is why they are not in the clip
+// set: the animation table should not have to be reopened to make a sword hit
+// harder. `duration` does need to roughly match the clip's natural length, or
+// the sprite finishes before the swing does — `tests/assets.rs` checks that.
+Attacks({
+    // The player's ground slash: a wind-up, a wide downward crescent, and a
+    // recovery you can be punished during.
+    "player_slash": AttackDef(
+        clip: "attack",
+        duration: 21,
+        active: (6, 12),
+        offset: (14.0, 2.0),
+        size: (26.0, 26.0),
+        damage: 1,
+        knockback: (170.0, -90.0),
+        hitstun: 14,
+    ),
+})

@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use ggez::glam::Vec2;
 use ggez::graphics::{Image, ImageFormat, Rect};
 use ggez::Context;
 use serde::Deserialize;
@@ -114,6 +115,67 @@ impl ClipSet {
     }
 }
 
+/// One attack's timing, reach, and effect. See `assets/data/attacks.ron`.
+/// Spelled `AttackDef(...)` in the RON file.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "AttackDef")]
+pub struct AttackDef {
+    /// Animation clip to play on the attacker, from its own clip set.
+    pub clip: String,
+    /// Total ticks the attacker is committed for.
+    pub duration: u32,
+    /// `[start, end)` in ticks, during which the hitbox exists.
+    pub active: (u32, u32),
+    /// Hitbox position relative to the attacker's collider, facing right.
+    pub offset: (f32, f32),
+    pub size: (f32, f32),
+    pub damage: i32,
+    /// Impulse applied to whatever is hit, rightward.
+    pub knockback: (f32, f32),
+    /// Ticks the victim loses control for.
+    pub hitstun: u32,
+}
+
+impl AttackDef {
+    pub fn is_active(&self, elapsed: u32) -> bool {
+        elapsed >= self.active.0 && elapsed < self.active.1
+    }
+
+    pub fn finished(&self, elapsed: u32) -> bool {
+        elapsed >= self.duration
+    }
+
+    /// The hitbox in world space for an attacker whose collider is at `pos`
+    /// with size `size`, facing `facing_right`.
+    pub fn hitbox(&self, pos: Vec2, size: Vec2, facing_right: bool) -> Rect {
+        let (w, h) = self.size;
+        let x = if facing_right {
+            pos.x + self.offset.0
+        } else {
+            // mirror the whole box about the collider's centre
+            pos.x + size.x - self.offset.0 - w
+        };
+        Rect::new(x, pos.y + self.offset.1, w, h)
+    }
+
+    /// Knockback impulse, pointing away from an attacker facing `facing_right`.
+    pub fn impulse(&self, facing_right: bool) -> Vec2 {
+        let (x, y) = self.knockback;
+        Vec2::new(if facing_right { x } else { -x }, y)
+    }
+}
+
+/// Every attack in the game, by id. Spelled `Attacks({...})` in the RON file.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "Attacks")]
+pub struct AttackTable(pub HashMap<String, AttackDef>);
+
+impl AttackTable {
+    pub fn get(&self, id: &str) -> Option<&AttackDef> {
+        self.0.get(id)
+    }
+}
+
 /// How a logical map cell maps onto tiles of the atlas, chosen by looking at
 /// a solid cell's neighbors. All values are 0-based tile indices.
 /// Spelled `Rules(...)` in the RON files.
@@ -164,6 +226,7 @@ pub struct Assets {
     images: HashMap<String, Image>,
     clip_sets: HashMap<String, Arc<ClipSet>>,
     tilesets: HashMap<String, Rc<TilesetDef>>,
+    attacks: Option<Arc<AttackTable>>,
 }
 
 impl Assets {
@@ -181,6 +244,7 @@ impl Assets {
             images: HashMap::new(),
             clip_sets: HashMap::new(),
             tilesets: HashMap::new(),
+            attacks: None,
         }
     }
 
@@ -249,6 +313,17 @@ impl Assets {
         let set = Arc::new(set);
         self.clip_sets.insert(name.to_string(), set.clone());
         Ok(set)
+    }
+
+    /// Load `assets/data/attacks.ron`. One table for the whole game.
+    pub fn attacks(&mut self) -> anyhow::Result<Arc<AttackTable>> {
+        if let Some(table) = &self.attacks {
+            return Ok(table.clone());
+        }
+        let table: AttackTable = load_ron(&self.base.join("data/attacks.ron"))?;
+        let table = Arc::new(table);
+        self.attacks = Some(table.clone());
+        Ok(table)
     }
 
     /// Load `assets/data/tilesets/{name}.ron`.

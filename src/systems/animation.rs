@@ -3,7 +3,9 @@
 
 use hecs::World;
 
-use crate::ecs::components::{AnimationState, Avatar, Body, Patrol, Sprite, Velocity};
+use crate::ecs::components::{
+    AnimationState, Attacking, Avatar, Body, Health, Patrol, Sprite, Velocity,
+};
 
 /// Every clip [`select_avatar_clip`] can ask for. A clip set that is missing
 /// one of these freezes the sprite silently, so `Sim::check_invariants` fails
@@ -18,14 +20,27 @@ pub const AVATAR_CLIPS: &[&str] = &[
     "double_jump",
     "wall_slide",
     "hurt",
+    "attack",
 ];
 
 /// Map the avatar's movement state to a clip name.
 pub fn select_avatar_clip(world: &mut World) {
-    for (_, (avatar, body, vel, anim)) in
-        world.query_mut::<(&Avatar, &Body, &Velocity, &mut AnimationState)>()
-    {
+    for (_, (avatar, body, vel, anim, health, attacking)) in world.query_mut::<(
+        &Avatar,
+        &Body,
+        &Velocity,
+        &mut AnimationState,
+        &Health,
+        &Attacking,
+    )>() {
+        // A swing outranks everything except dying: committing to an attack
+        // and then having the run cycle paint over it looks like the attack
+        // never happened.
         let clip = if avatar.dead() {
+            "hurt"
+        } else if attacking.busy() {
+            "attack"
+        } else if health.hitstun > 0 {
             "hurt"
         } else if avatar.wall_sliding {
             "wall_slide"
@@ -52,14 +67,16 @@ pub fn select_avatar_clip(world: &mut World) {
 /// list because a patroller has fewer states, not because its art is poorer —
 /// the knight's attack, shield, roll, and death sheets are all in the repo
 /// waiting for something to select them.
-pub const PATROL_CLIPS: &[&str] = &["idle", "run", "jump", "fall"];
+pub const PATROL_CLIPS: &[&str] = &["idle", "run", "jump", "fall", "death"];
 
 /// Map a patroller's movement state to a clip name.
 pub fn select_patrol_clip(world: &mut World) {
-    for (_, (_, body, vel, anim)) in
-        world.query_mut::<(&Patrol, &Body, &Velocity, &mut AnimationState)>()
+    for (_, (_, body, vel, anim, health)) in
+        world.query_mut::<(&Patrol, &Body, &Velocity, &mut AnimationState, &Health)>()
     {
-        let clip = if !body.grounded {
+        let clip = if health.dead() {
+            "death"
+        } else if !body.grounded {
             if vel.0.y < 0.0 {
                 "jump"
             } else {

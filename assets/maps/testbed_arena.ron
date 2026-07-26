@@ -1,0 +1,26 @@
+// Combat arena: a small walled room with the player at one end and a knight
+// at the other, and nowhere for either to go.
+//
+// Deliberately tiny. testbed_knight.ron gives the knight a 400px route, which
+// is right for testing patrol and wrong for testing a fight: a combat tape
+// that has to chase a walking target across a ledge encodes the walk speed,
+// the run speed, and the knockback distance all at once, and breaks if any of
+// them is tuned. Here the knight is always within a couple of strides.
+//
+// Fixture map — do not move anything already here; tapes encode its pixels.
+//
+//   room    x 32..288, floor top y=128
+//   spawn   col 2, row 3   world (70, 94)
+//   knight  col 7, row 3   world (229, 98)
+Level(
+    tileset: "castle",
+    grid: [
+        "##########",
+        "#........#",
+        "#........#",
+        "#.P....K.#",
+        "##########",
+        "##########",
+    ],
+    entities: [],
+)

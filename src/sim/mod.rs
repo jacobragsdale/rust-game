@@ -23,15 +23,16 @@ use anyhow::Context as _;
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::assets::{Assets, Clip, ClipSet};
+use crate::assets::{AttackTable, Assets, Clip, ClipSet};
 use crate::ecs::components::{
-    AnimationState, Avatar, Body, Kind, Patrol, Position, Size, Sprite, Velocity,
+    AnimationState, Attacking, Avatar, Body, Health, Kind, Patrol, Position, Size, Sprite,
+    Velocity,
 };
 use crate::ecs::spawn;
 use crate::level::LevelData;
 use crate::physics::{Aabb, SolidRect};
 use crate::systems::input::PlayerInput;
-use crate::systems::{animation, avatar, body, npc};
+use crate::systems::{animation, avatar, body, combat, npc};
 
 pub use event::GameEvent;
 pub use probe::{NpcProbe, Probe};
@@ -47,6 +48,8 @@ pub struct Sim {
     pub level: LevelData,
     /// Solids + one-way platforms, pre-flattened for the physics pass.
     pub geometry: Vec<SolidRect>,
+    /// Every attack's timing and effect, shared by every attacker.
+    pub attacks: Arc<AttackTable>,
     /// Ticks elapsed since the sim was created.
     pub tick: u64,
     /// What happened during the most recent [`Sim::step`]. Cleared at the
@@ -77,7 +80,8 @@ impl Sim {
             }
         }
 
-        Ok(Self::new(level, &clip_sets))
+        let attacks = assets.attacks()?;
+        Ok(Self::new(level, &clip_sets, attacks))
     }
 
     /// A sim built from an inline ASCII grid, with placeholder animation
@@ -98,14 +102,23 @@ impl Sim {
     /// does not parse is a mistake in the test, not a condition to handle.
     pub fn fixture(grid: &[&str]) -> Self {
         let level = LevelData::from_grid(grid).expect("fixture grid should parse");
-        Sim::new(level, &fixture_clip_sets())
+        // Fixtures read the real attack table: combat numbers are content, and
+        // a test that invents its own would not be testing the game.
+        let attacks = Assets::new()
+            .attacks()
+            .expect("assets/data/attacks.ron should load");
+        Sim::new(level, &fixture_clip_sets(), attacks)
     }
 
     /// Build a sim from level data and a clip set per entity kind (plus
     /// `"player"`). Panics if a kind the level places has no clip set — callers
     /// are expected to have loaded one, and there is nothing sensible to draw
     /// otherwise.
-    pub fn new(level: LevelData, clip_sets: &HashMap<String, Arc<ClipSet>>) -> Self {
+    pub fn new(
+        level: LevelData,
+        clip_sets: &HashMap<String, Arc<ClipSet>>,
+        attacks: Arc<AttackTable>,
+    ) -> Self {
         let mut geometry: Vec<SolidRect> =
             level.solids.iter().map(|&r| SolidRect::solid(r)).collect();
         geometry.extend(level.one_way.iter().map(|&r| SolidRect::one_way(r)));
@@ -138,6 +151,7 @@ impl Sim {
             world,
             level,
             geometry,
+            attacks,
             tick: 0,
             events: Vec::new(),
         }
@@ -151,6 +165,12 @@ impl Sim {
     /// grows past one entity.
     pub fn step(&mut self, input: PlayerInput) {
         self.events.clear();
+
+        // Combat timers first, so a controller asking "am I stunned?" reads
+        // this tick's answer rather than last tick's.
+        combat::tick_timers(&mut self.world);
+        combat::advance_attacks(&mut self.world, &self.attacks);
+
         avatar::control(
             &mut self.world,
             &self.level,
@@ -162,6 +182,12 @@ impl Sim {
         npc::patrol(&mut self.world, &self.geometry);
         body::move_bodies(&mut self.world, &self.geometry, TICK);
         avatar::after_move(&mut self.world, &self.level, input, &mut self.events);
+
+        // Hitboxes are tested once everything has finished moving, so a swing
+        // connects where the bodies actually ended the tick.
+        combat::resolve(&mut self.world, &self.attacks, &mut self.events);
+        combat::settle_dead(&mut self.world);
+
         animation::select_avatar_clip(&mut self.world);
         animation::select_patrol_clip(&mut self.world);
         animation::advance(&mut self.world, TICK);
@@ -201,11 +227,17 @@ impl Sim {
             .filter_map(|entity| {
                 let mut query = self
                     .world
-                    .query_one::<(&Kind, &Patrol, &Position, &Velocity, &Body, &AnimationState)>(
-                        entity,
-                    )
+                    .query_one::<(
+                        &Kind,
+                        &Patrol,
+                        &Position,
+                        &Velocity,
+                        &Body,
+                        &Health,
+                        &AnimationState,
+                    )>(entity)
                     .ok()?;
-                let (kind, patrol, pos, vel, body, anim) = query.get()?;
+                let (kind, patrol, pos, vel, body, health, anim) = query.get()?;
                 Some(NpcProbe {
                     kind: kind.0.clone(),
                     x: pos.0.x,
@@ -214,6 +246,9 @@ impl Sim {
                     vy: vel.0.y,
                     dir: patrol.dir,
                     grounded: body.grounded,
+                    hp: health.current,
+                    hitstun: health.hitstun,
+                    dead: health.dead(),
                     clip: anim.clip.clone(),
                     frame: anim.frame,
                 })
@@ -238,10 +273,12 @@ impl Sim {
     pub fn probe(&self) -> Probe {
         let mut query = self
             .world
-            .query::<(&Avatar, &Body, &Position, &Velocity, &AnimationState)>();
-        let (_, (avatar, body, pos, vel, anim)) =
+            .query::<(&Avatar, &Body, &Health, &Attacking, &Position, &Velocity, &AnimationState)>();
+        let (_, (avatar, body, health, attacking, pos, vel, anim)) =
             query.iter().next().expect("sim has no avatar to probe");
-        Probe::new(self.tick, avatar, body, pos.0, vel.0, anim)
+        Probe::new(
+            self.tick, avatar, body, health, attacking, pos.0, vel.0, anim,
+        )
     }
 
     /// Things that must be true at the end of every tick. Debug builds only,
@@ -358,7 +395,7 @@ mod tests {
         let mut level = LevelData::empty(20, 10, 32.0);
         level.solids = vec![Aabb::new(0.0, 256.0, 400.0, 64.0)];
         level.player_spawn = Vec2::new(100.0, 256.0 - Avatar::HEIGHT);
-        Sim::new(level, &fixture_clip_sets())
+        Sim::new(level, &fixture_clip_sets(), Assets::new().attacks().unwrap())
     }
 
     const JUMP: PlayerInput = PlayerInput {
@@ -367,6 +404,7 @@ mod tests {
         down: false,
         jump_pressed: true,
         jump_held: true,
+        attack_pressed: false,
     };
 
     /// Step until `pred` holds, returning the tick it happened on. Fixture
@@ -492,6 +530,7 @@ mod tests {
         assert_eq!(
             sim.events(),
             [GameEvent::Died {
+                who: "player".to_string(),
                 cause: DeathCause::Hazard
             }]
         );

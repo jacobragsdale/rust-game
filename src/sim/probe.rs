@@ -7,7 +7,7 @@
 use ggez::glam::Vec2;
 use serde::{Deserialize, Serialize};
 
-use crate::ecs::components::{AnimationState, Avatar, Body};
+use crate::ecs::components::{AnimationState, Attacking, Avatar, Body, Health};
 
 /// `coyote_ticks` uses `u32::MAX`-ish sentinels to mean "no coyote jump
 /// available". Clamping keeps traces readable; any value past the coyote
@@ -16,7 +16,9 @@ const TICK_DISPLAY_CAP: u32 = 999;
 
 /// Numeric fields addressable by tape assertions. Kept beside `Probe::field`
 /// so the two cannot drift apart — a test enforces it.
-const FIELD_NAMES: &[&str] = &["x", "y", "vx", "vy", "tick", "air_jumps", "frame"];
+const FIELD_NAMES: &[&str] = &[
+    "x", "y", "vx", "vy", "tick", "air_jumps", "frame", "hp", "iframes", "hitstun",
+];
 
 /// Boolean fields addressable by tape assertions.
 const FLAG_NAMES: &[&str] = &[
@@ -27,6 +29,7 @@ const FLAG_NAMES: &[&str] = &[
     "crouching",
     "dead",
     "on_one_way_only",
+    "attacking",
 ];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -47,15 +50,19 @@ pub struct Probe {
     pub coyote_ticks: u32,
     pub wall_coyote_ticks: u32,
     pub jump_buffer: u32,
+    pub hp: i32,
+    pub iframes: u32,
+    pub hitstun: u32,
+    pub attacking: bool,
     pub clip: String,
     pub frame: usize,
 }
 
 /// Numeric fields of an NPC, addressable as `<kind>.<index>.<field>`.
-const NPC_FIELD_NAMES: &[&str] = &["x", "y", "vx", "vy", "dir", "frame"];
+const NPC_FIELD_NAMES: &[&str] = &["x", "y", "vx", "vy", "dir", "frame", "hp", "hitstun"];
 
 /// Boolean fields of an NPC.
-const NPC_FLAG_NAMES: &[&str] = &["grounded", "facing_right"];
+const NPC_FLAG_NAMES: &[&str] = &["grounded", "facing_right", "dead"];
 
 /// A snapshot of one NPC.
 ///
@@ -72,6 +79,9 @@ pub struct NpcProbe {
     /// Travel direction: -1 left, +1 right.
     pub dir: f32,
     pub grounded: bool,
+    pub hp: i32,
+    pub hitstun: u32,
+    pub dead: bool,
     pub clip: String,
     pub frame: usize,
 }
@@ -85,6 +95,8 @@ impl NpcProbe {
             "vy" => self.vy,
             "dir" => self.dir,
             "frame" => self.frame as f32,
+            "hp" => self.hp as f32,
+            "hitstun" => self.hitstun as f32,
             _ => return None,
         })
     }
@@ -93,6 +105,7 @@ impl NpcProbe {
         Some(match name {
             "grounded" => self.grounded,
             "facing_right" => self.dir >= 0.0,
+            "dead" => self.dead,
             _ => return None,
         })
     }
@@ -113,10 +126,13 @@ impl NpcProbe {
 }
 
 impl Probe {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tick: u64,
         avatar: &Avatar,
         body: &Body,
+        health: &Health,
+        attacking: &Attacking,
         pos: Vec2,
         vel: Vec2,
         anim: &AnimationState,
@@ -138,6 +154,10 @@ impl Probe {
             coyote_ticks: avatar.coyote_ticks.min(TICK_DISPLAY_CAP),
             wall_coyote_ticks: avatar.wall_coyote_ticks.min(TICK_DISPLAY_CAP),
             jump_buffer: avatar.jump_buffer,
+            hp: health.current,
+            iframes: health.iframes,
+            hitstun: health.hitstun,
+            attacking: attacking.busy(),
             clip: anim.clip.clone(),
             frame: anim.frame,
         }
@@ -153,6 +173,9 @@ impl Probe {
             "tick" => self.tick as f32,
             "air_jumps" => self.air_jumps as f32,
             "frame" => self.frame as f32,
+            "hp" => self.hp as f32,
+            "iframes" => self.iframes as f32,
+            "hitstun" => self.hitstun as f32,
             _ => return None,
         })
     }
@@ -167,6 +190,7 @@ impl Probe {
             "crouching" => self.crouching,
             "dead" => self.dead,
             "on_one_way_only" => self.on_one_way_only,
+            "attacking" => self.attacking,
             _ => return None,
         })
     }
@@ -217,6 +241,8 @@ mod tests {
             0,
             &Avatar::new(),
             &Avatar::body(Vec2::ZERO),
+            &Health::new(Avatar::MAX_HEALTH),
+            &Attacking::default(),
             Vec2::ZERO,
             Vec2::ZERO,
             &AnimationState::new("idle"),

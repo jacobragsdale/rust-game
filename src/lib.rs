@@ -10,6 +10,7 @@ pub mod assets;
 pub mod config;
 pub mod debug;
 pub mod ecs;
+pub mod hud;
 pub mod level;
 pub mod physics;
 pub mod scenes;

@@ -27,6 +27,8 @@ const EVENT_NAMES: &[&str] = &[
     "dropped_through",
     "died",
     "respawned",
+    "attacked",
+    "damaged",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,11 +36,12 @@ const EVENT_NAMES: &[&str] = &[
 pub enum DeathCause {
     Hazard,
     FellOutOfWorld,
+    Slain,
 }
 
 /// Serialized into the trace as `{"event": "landed", ...}`, so a JSONL trace
 /// stays greppable by event name.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum GameEvent {
     Jumped,
@@ -51,10 +54,26 @@ pub enum GameEvent {
         on_one_way: bool,
     },
     DroppedThrough,
+    /// `who` is the victim's kind — `"player"`, `"knight"`. Counting with
+    /// `expect died == 1` cannot yet filter on it, but a trace that does not
+    /// record who died is unreadable the moment two things can die.
     Died {
+        who: String,
         cause: DeathCause,
     },
     Respawned,
+    /// A swing started. Fires whether or not it goes on to connect, which is
+    /// what lets a tape tell "missed" from "never swung".
+    Attacked {
+        attack: String,
+    },
+    /// A hit landed. `remaining` is the victim's health after it, so a tape
+    /// can follow a fight without also tracking the damage table.
+    Damaged {
+        who: String,
+        amount: i32,
+        remaining: i32,
+    },
 }
 
 impl GameEvent {
@@ -68,6 +87,8 @@ impl GameEvent {
             GameEvent::DroppedThrough => "dropped_through",
             GameEvent::Died { .. } => "died",
             GameEvent::Respawned => "respawned",
+            GameEvent::Attacked { .. } => "attacked",
+            GameEvent::Damaged { .. } => "damaged",
         }
     }
 
@@ -120,9 +141,18 @@ mod tests {
             GameEvent::Landed { on_one_way: false },
             GameEvent::DroppedThrough,
             GameEvent::Died {
+                who: "player".to_string(),
                 cause: DeathCause::Hazard,
             },
             GameEvent::Respawned,
+            GameEvent::Attacked {
+                attack: "player_slash".to_string(),
+            },
+            GameEvent::Damaged {
+                who: "knight".to_string(),
+                amount: 1,
+                remaining: 2,
+            },
         ]
     }
 

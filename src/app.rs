@@ -12,7 +12,7 @@ use crate::assets::Assets;
 use crate::config::Config;
 use crate::scenes::{main_menu::MainMenuScene, Resources, Scene, Transition};
 use crate::sim::TICKS_PER_SECOND;
-use crate::systems::input::JumpLatch;
+use crate::systems::input::InputLatch;
 
 pub struct App {
     scenes: Vec<Box<dyn Scene>>,
@@ -24,7 +24,7 @@ impl App {
         let mut resources = Resources {
             config,
             assets: Assets::new(),
-            jump: JumpLatch::default(),
+            input: InputLatch::default(),
         };
         let mut scenes = Self::initial_stack();
 
@@ -62,7 +62,7 @@ impl App {
         // The key that changed scenes must not also be a jump: unpausing with
         // a jump key held, or a stray press while the menu is up, should not
         // launch the player the moment the level resumes.
-        self.resources.jump.clear();
+        self.resources.input.clear();
     }
 
     /// Index of the deepest scene that should be processed, honoring the
@@ -118,7 +118,7 @@ impl EventHandler for App {
                 // Latch here, not in the tick loop: this is the only place
                 // that sees every press exactly once. (`repeated` is filtered
                 // above, so holding the key does not re-arm it.)
-                self.resources.jump.key_down(key);
+                self.resources.input.key_down(key);
                 let top = self.scenes.len() - 1;
                 let transition = self.scenes[top].key_down(ctx, &mut self.resources, key);
                 self.apply(transition);

@@ -145,6 +145,11 @@ impl Avatar {
     pub const DROP_TICKS: u32 = 8;
     /// Death freeze before respawning (0.6 s).
     pub const DEATH_TICKS: u32 = 36;
+    pub const MAX_HEALTH: i32 = 5;
+    /// The attack this key press performs, from `assets/data/attacks.ron`.
+    /// A single attack for now; the sheet has the frames for a three-hit
+    /// combo when there is a reason to chain them.
+    pub const ATTACK: &'static str = "player_slash";
 
     pub fn new() -> Self {
         Avatar {
@@ -176,6 +181,104 @@ impl Default for Avatar {
     fn default() -> Self {
         Avatar::new()
     }
+}
+
+/// Hit points, plus the two timers that follow from losing some.
+///
+/// The same component on the player and on every enemy, so one damage system
+/// serves both and they cannot drift apart.
+#[derive(Clone, Copy, Debug)]
+pub struct Health {
+    pub current: i32,
+    pub max: i32,
+    /// Ticks of invulnerability left. Prevents a single swing that overlaps
+    /// for six ticks from dealing six hits.
+    pub iframes: u32,
+    /// Ticks left during which the controller does not steer.
+    ///
+    /// Distinct from `Body::frozen`, which stops movement dead. Knockback has
+    /// to keep flying while the victim has no say in it, so this suppresses
+    /// the *controller* and leaves the body integrating normally.
+    pub hitstun: u32,
+}
+
+impl Health {
+    /// Invulnerability after taking a hit, for everyone. Long enough that a
+    /// lingering hitbox lands once, short enough not to trivialise a fight.
+    pub const IFRAME_TICKS: u32 = 30;
+
+    pub fn new(max: i32) -> Self {
+        Health {
+            current: max,
+            max,
+            iframes: 0,
+            hitstun: 0,
+        }
+    }
+
+    pub fn dead(&self) -> bool {
+        self.current <= 0
+    }
+
+    /// Can this be hit right now?
+    pub fn vulnerable(&self) -> bool {
+        !self.dead() && self.iframes == 0
+    }
+
+    /// Has this taken any damage? Enemies only show a health bar once it has.
+    pub fn damaged(&self) -> bool {
+        self.current < self.max
+    }
+
+    pub fn fraction(&self) -> f32 {
+        if self.max <= 0 {
+            0.0
+        } else {
+            (self.current.max(0) as f32) / (self.max as f32)
+        }
+    }
+}
+
+/// A swing in progress.
+///
+/// One component rather than an added/removed marker: mutating an entity's
+/// component set at runtime reshuffles hecs archetype order, which is exactly
+/// what `Sim::npcs` has to defend against. Idle attackers just carry `None`.
+#[derive(Clone, Debug, Default)]
+pub struct Attacking {
+    /// Which attack from `assets/data/attacks.ron`, if any is running.
+    pub attack: Option<String>,
+    /// Ticks since the swing started.
+    pub elapsed: u32,
+    /// Everything this swing has already connected with, so a hitbox that is
+    /// live for six ticks still deals one hit per target.
+    pub hit: Vec<hecs::Entity>,
+}
+
+impl Attacking {
+    pub fn busy(&self) -> bool {
+        self.attack.is_some()
+    }
+
+    pub fn start(&mut self, attack: &str) {
+        self.attack = Some(attack.to_string());
+        self.elapsed = 0;
+        self.hit.clear();
+    }
+
+    pub fn stop(&mut self) {
+        self.attack = None;
+        self.elapsed = 0;
+        self.hit.clear();
+    }
+}
+
+/// Which side of a fight an entity is on. Hitboxes only damage the other team,
+/// so the knight's sword cannot clip another knight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Team {
+    Player,
+    Enemy,
 }
 
 /// What the map called this entity — `"knight"`, later `"goblin"`.
