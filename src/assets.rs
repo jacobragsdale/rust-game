@@ -6,26 +6,48 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::Context as _;
 use ggez::graphics::{Image, ImageFormat, Rect};
 use ggez::Context;
 use serde::Deserialize;
 
-/// A named animation: frames are (col, row) cells on a uniform sprite-sheet
-/// grid of `ClipSet::frame_size` pixels.
+/// A named animation: frames are (col, row) cells on a uniform grid.
+///
+/// `sheet` and `frame_size` default to the [`ClipSet`]'s, and override it when
+/// present. The player is one atlas with one cell size, but art packs commonly
+/// ship a file per animation with a different frame width each — the knight's
+/// idle is 64px wide and its attack is 144 — and a set that could only name one
+/// grid could not describe that at all.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Clip {
     pub frames: Vec<(u32, u32)>,
     pub fps: f32,
     pub looping: bool,
+    /// Image name (under `assets/graphics/`, without extension).
+    #[serde(default)]
+    pub sheet: Option<String>,
+    #[serde(default)]
+    pub frame_size: Option<(f32, f32)>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ClipSet {
-    /// Image name (under `assets/graphics/`, without extension).
-    pub sheet: String,
-    pub frame_size: (f32, f32),
+    /// Default image for clips that do not name their own.
+    #[serde(default)]
+    pub sheet: Option<String>,
+    #[serde(default)]
+    pub frame_size: Option<(f32, f32)>,
+    /// Drawing nudge for art that is not bottom-aligned inside its own frame.
+    ///
+    /// Sprites are drawn standing on their collider, which assumes the artist
+    /// put the character's feet at the bottom of the cell. The knight pack does
+    /// not: every one of its animations leaves 20px of empty space below the
+    /// feet, so without this the knight floats two thirds of a tile above the
+    /// ground it is standing on.
+    #[serde(default)]
+    pub offset: Option<(f32, f32)>,
     pub clips: HashMap<String, Clip>,
 }
 
@@ -34,15 +56,61 @@ impl ClipSet {
         self.clips.get(name)
     }
 
-    /// Normalized source rect for a frame, given the sheet's pixel size.
-    pub fn src_rect(&self, frame: (u32, u32), sheet_w: f32, sheet_h: f32) -> Rect {
-        let (fw, fh) = self.frame_size;
+    /// Drawing nudge for this art, or none.
+    pub fn offset(&self) -> (f32, f32) {
+        self.offset.unwrap_or((0.0, 0.0))
+    }
+
+    /// The sheet a clip's frames live on. The result borrows from whichever of
+    /// the two provided it, hence the shared lifetime.
+    pub fn sheet_of<'a>(&'a self, clip: &'a Clip) -> &'a str {
+        clip.sheet
+            .as_deref()
+            .or(self.sheet.as_deref())
+            .expect("clip set was validated on load")
+    }
+
+    /// The cell size a clip's frames are laid out on.
+    pub fn frame_size_of(&self, clip: &Clip) -> (f32, f32) {
+        clip.frame_size
+            .or(self.frame_size)
+            .expect("clip set was validated on load")
+    }
+
+    /// Normalized source rect for a frame of `clip`, given its sheet's size.
+    pub fn src_rect(&self, clip: &Clip, frame: (u32, u32), sheet_w: f32, sheet_h: f32) -> Rect {
+        let (fw, fh) = self.frame_size_of(clip);
         Rect::new(
             frame.0 as f32 * fw / sheet_w,
             frame.1 as f32 * fh / sheet_h,
             fw / sheet_w,
             fh / sheet_h,
         )
+    }
+
+    /// Every clip must resolve to a sheet and a frame size, one way or another.
+    ///
+    /// Checked once at load so that `sheet_of` and `frame_size_of` can be
+    /// infallible everywhere else — a missing sheet is an authoring mistake in
+    /// a RON file, not a condition the renderer should have to handle per frame.
+    fn validate(&self, name: &str) -> anyhow::Result<()> {
+        let mut missing: Vec<String> = self
+            .clips
+            .iter()
+            .filter(|(_, clip)| {
+                clip.sheet.is_none() && self.sheet.is_none()
+                    || clip.frame_size.is_none() && self.frame_size.is_none()
+            })
+            .map(|(clip_name, _)| clip_name.clone())
+            .collect();
+        missing.sort();
+
+        anyhow::ensure!(
+            missing.is_empty(),
+            "clip set `{name}`: clips {missing:?} have no sheet or frame_size, \
+             and the set does not provide a default"
+        );
+        Ok(())
     }
 }
 
@@ -94,7 +162,7 @@ impl TilesetDef {
 pub struct Assets {
     base: PathBuf,
     images: HashMap<String, Image>,
-    clip_sets: HashMap<String, Rc<ClipSet>>,
+    clip_sets: HashMap<String, Arc<ClipSet>>,
     tilesets: HashMap<String, Rc<TilesetDef>>,
 }
 
@@ -168,7 +236,7 @@ impl Assets {
     }
 
     /// Load `assets/data/animations/{name}.ron`.
-    pub fn clip_set(&mut self, name: &str) -> anyhow::Result<Rc<ClipSet>> {
+    pub fn clip_set(&mut self, name: &str) -> anyhow::Result<Arc<ClipSet>> {
         if let Some(set) = self.clip_sets.get(name) {
             return Ok(set.clone());
         }
@@ -177,7 +245,8 @@ impl Assets {
             .join("data/animations")
             .join(format!("{name}.ron"));
         let set: ClipSet = load_ron(&path)?;
-        let set = Rc::new(set);
+        set.validate(name)?;
+        let set = Arc::new(set);
         self.clip_sets.insert(name.to_string(), set.clone());
         Ok(set)
     }
@@ -195,8 +264,17 @@ impl Assets {
     }
 }
 
+/// Parse a RON data file.
+///
+/// `implicit_some` is on so that an optional field can be written as
+/// `sheet: "knight/knightIdle"` rather than `sheet: Some("knight/knightIdle")`.
+/// These files are hand-authored content; making every optional field announce
+/// its optionality is noise for whoever is writing the twentieth NPC.
 fn load_ron<T: serde::de::DeserializeOwned>(path: &std::path::Path) -> anyhow::Result<T> {
     let text =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    ron::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))
+    ron::Options::default()
+        .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME)
+        .from_str(&text)
+        .with_context(|| format!("failed to parse {}", path.display()))
 }

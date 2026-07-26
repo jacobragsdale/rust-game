@@ -1,0 +1,35 @@
+// Knight testbed: a patrolling knight on a plain ledge, in view of the spawn.
+//
+// The knight turns at both ends of the ledge and never falls off, which is the
+// whole of its behaviour in M2. The pillars at each end give it a wall to turn
+// at on one side and a drop to turn at on the other, so both reasons to
+// reverse are exercised on the same map.
+//
+// Fixture map — do not move anything already here; tapes encode its pixels.
+//
+//   spawn   col 2,  row 10   world (70, 318), feet on the floor at y=352
+//   knight  col 8,  row 10   world (261, 322), feet on the same floor
+//   ledge   row 11, cols 6-14                  world x 192..480, top y=352
+//   wall    rows 9-11, col 15                  the knight's right-hand stop
+Level(
+    tileset: "castle",
+    grid: [
+        "##################",
+        "#................#",
+        "#................#",
+        "#................#",
+        "#................#",
+        "#................#",
+        "#................#",
+        "#................#",
+        "#................#",
+        "#..............#.#",
+        "#.P.....K......#.#",
+        "#.##############.#",
+        "#................#",
+        "#................#",
+        "##################",
+        "##################",
+    ],
+    entities: [],
+)

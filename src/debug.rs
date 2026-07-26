@@ -125,10 +125,15 @@ impl DebugOverlay {
         // Per-entity: the collider the physics uses, and the sprite drawn for
         // it. When these two disagree, the game looks subtly wrong in a way
         // no amount of staring at the art will explain.
-        let (frame_w, frame_h) = sim.clips.frame_size;
-        for (_, (pos, size, sprite, vel)) in sim
+        for (_, (pos, size, sprite, anim, vel)) in sim
             .world
-            .query::<(&Position, &Size, Option<&Sprite>, &Velocity)>()
+            .query::<(
+                &Position,
+                &Size,
+                Option<&Sprite>,
+                Option<&AnimationState>,
+                &Velocity,
+            )>()
             .iter()
         {
             let collider = Rect::new(
@@ -139,13 +144,19 @@ impl DebugOverlay {
             );
             mb.rectangle(DrawMode::stroke(STROKE), collider, COLLIDER)?;
 
-            if let Some(sprite) = sprite {
-                let origin = pos.0 + sprite.offset - offset;
-                mb.rectangle(
-                    DrawMode::stroke(STROKE),
-                    Rect::new(origin.x, origin.y, frame_w, frame_h),
-                    SPRITE_BOUNDS,
-                )?;
+            // The frame box is per clip now, so the outline has to follow the
+            // clip actually playing — otherwise it would be drawn at the wrong
+            // size for every entity whose animations differ in frame width.
+            if let (Some(sprite), Some(anim)) = (sprite, anim) {
+                if let Some(clip) = sprite.clips.clip(&anim.clip) {
+                    let (fw, fh) = sprite.clips.frame_size_of(clip);
+                    let origin = sprite.draw_origin(pos.0, size.0, (fw, fh)) - offset;
+                    mb.rectangle(
+                        DrawMode::stroke(STROKE),
+                        Rect::new(origin.x, origin.y, fw, fh),
+                        SPRITE_BOUNDS,
+                    )?;
+                }
             }
 
             if vel.0.length_squared() > 1.0 {

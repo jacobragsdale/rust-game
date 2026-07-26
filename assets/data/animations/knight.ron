@@ -1,0 +1,59 @@
+// Knight enemy. Unlike the player, this pack ships one file per animation,
+// each with its own frame width -- so every clip names its own sheet and cell
+// size instead of inheriting a set-level default.
+//
+// All sheets are single rows of 64px-tall cells, so every frame is (col, 0).
+//
+//   knightIdle          64x64  x15
+//   knightRun           96x64  x8
+//   knightJumpAndFall  144x64  x15   (0-6 jump, 7-9 fall, 10-13 land, 14 blank)
+//   knightAttack       144x64  x22   } added in M3, when there is combat
+//   knightShield        96x64  x7    } to select them
+//   knightRoll         180x64  x15   }
+//   knightDeath         96x64  x15   }
+//
+// Quirk to know about before the knight can jump: the jump/fall frames carry
+// the character across the cell (its head drifts from -4 to +60 px of centre),
+// so once it is airborne for real the sprite will slide relative to a position
+// that comes from physics. Fine while it only walks.
+ClipSet(
+    // Every knight animation draws the feet at row 44 of its 64px cell,
+    // leaving 20px of empty space below. Push the art down by that much so it
+    // stands on its collider instead of hovering above it.
+    offset: (0.0, 20.0),
+    clips: {
+        "idle": Clip(
+            sheet: "knight/knightIdle",
+            frame_size: (64.0, 64.0),
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0),
+                     (8, 0), (9, 0), (10, 0), (11, 0), (12, 0), (13, 0), (14, 0)],
+            fps: 10.0,
+            looping: true,
+        ),
+        "run": Clip(
+            sheet: "knight/knightRun",
+            frame_size: (96.0, 64.0),
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0)],
+            fps: 12.0,
+            looping: true,
+        ),
+        // Anticipation plus the rise. The knight cannot jump yet; this exists
+        // so that an airborne knight has something to play.
+        "jump": Clip(
+            sheet: "knight/knightJumpAndFall",
+            frame_size: (144.0, 64.0),
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0)],
+            fps: 12.0,
+            looping: false,
+        ),
+        // The descent only. Frames 10-13 are a landing recovery the clip
+        // selector has no state for, and 14 is blank.
+        "fall": Clip(
+            sheet: "knight/knightJumpAndFall",
+            frame_size: (144.0, 64.0),
+            frames: [(7, 0), (8, 0), (9, 0)],
+            fps: 8.0,
+            looping: true,
+        ),
+    },
+)

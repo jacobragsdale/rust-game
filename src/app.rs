@@ -28,14 +28,13 @@ impl App {
         };
         let mut scenes = Self::initial_stack();
 
-        // Dev shortcut: SUPERGAME_SCENE=adventure boots straight into the
-        // castle map, skipping the menu.
+        // Dev shortcut: SUPERGAME_SCENE=adventure boots straight into a map,
+        // skipping the menu. SUPERGAME_MAP picks which one — a testbed map is
+        // often the only way to get a specific thing on screen to look at.
         if std::env::var("SUPERGAME_SCENE").as_deref() == Ok("adventure") {
-            match crate::scenes::adventure::AdventureScene::new(
-                ctx,
-                &mut resources,
-                "maps/castle.ron",
-            ) {
+            let map = std::env::var("SUPERGAME_MAP")
+                .unwrap_or_else(|_| "maps/castle.ron".to_string());
+            match crate::scenes::adventure::AdventureScene::new(ctx, &mut resources, &map) {
                 Ok(scene) => scenes.push(Box::new(scene)),
                 Err(err) => eprintln!("failed to boot into adventure: {err:#}"),
             }

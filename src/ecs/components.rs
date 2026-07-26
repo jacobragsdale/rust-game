@@ -1,6 +1,10 @@
 //! Components are plain data. Behavior lives in `crate::systems`.
 
+use std::sync::Arc;
+
 use ggez::glam::Vec2;
+
+use crate::assets::ClipSet;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Position(pub Vec2);
@@ -174,13 +178,58 @@ impl Default for Avatar {
     }
 }
 
-/// A sprite-sheet image drawn at `Position + offset`, animated by
-/// `AnimationState` against a clip set.
+/// Walks back and forth, turning at walls and at the edges of what it is
+/// standing on. No awareness of the player at all.
+///
+/// Deliberately needs no authoring: a `K` dropped anywhere in any map is the
+/// whole specification, and the geometry decides the route. Patrol bounds in
+/// the map data would be one more thing to get wrong, and would stop working
+/// the moment a level was edited underneath them.
+#[derive(Clone, Copy, Debug)]
+pub struct Patrol {
+    pub speed: f32,
+    /// Facing and travel direction: -1 left, +1 right.
+    pub dir: f32,
+}
+
+impl Patrol {
+    /// How far ahead of the collider to look for a wall, or for missing floor.
+    /// A little under half a tile: far enough to stop before the edge, close
+    /// enough that a one-tile ledge is still walkable.
+    pub const LOOKAHEAD: f32 = 6.0;
+    /// How far below the feet counts as "there is still floor here".
+    pub const FLOOR_PROBE: f32 = 4.0;
+
+    pub fn new(dir: f32, speed: f32) -> Self {
+        Patrol { dir, speed }
+    }
+}
+
+/// How an entity is drawn: which animations it owns, and any nudge to where
+/// they sit relative to its collider.
+///
+/// The clip set lives here rather than on the `Sim` because entities do not
+/// share one — the player is a single atlas of 50x37 cells, the knight is
+/// seven files of four different frame widths.
 #[derive(Clone, Debug)]
 pub struct Sprite {
-    /// Drawing offset from the entity's collider position (the collider is
-    /// smaller than the sprite).
+    pub clips: Arc<ClipSet>,
+    /// Adjustment on top of the default placement, for art that is not
+    /// centred in its own frame. Usually zero.
     pub offset: Vec2,
+}
+
+impl Sprite {
+    /// Where to draw a `frame`-sized image for a body at `pos` with a
+    /// `collider`-sized box.
+    ///
+    /// Sprites are centred horizontally on the collider and stand on its
+    /// bottom edge. Computing this per frame rather than storing it is what
+    /// lets one entity mix clips of different frame sizes without its feet
+    /// sliding around.
+    pub fn draw_origin(&self, pos: Vec2, collider: Vec2, frame: (f32, f32)) -> Vec2 {
+        pos + Vec2::new((collider.x - frame.0) / 2.0, collider.y - frame.1) + self.offset
+    }
 }
 
 #[derive(Clone, Debug)]

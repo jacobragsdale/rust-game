@@ -3,8 +3,7 @@
 
 use hecs::World;
 
-use crate::assets::ClipSet;
-use crate::ecs::components::{AnimationState, Avatar, Body, Velocity};
+use crate::ecs::components::{AnimationState, Avatar, Body, Patrol, Sprite, Velocity};
 
 /// Every clip [`select_avatar_clip`] can ask for. A clip set that is missing
 /// one of these freezes the sprite silently, so `Sim::check_invariants` fails
@@ -49,10 +48,36 @@ pub fn select_avatar_clip(world: &mut World) {
     }
 }
 
-/// Advance every animation against its clip set.
-pub fn advance(world: &mut World, clips: &ClipSet, dt: f32) {
-    for (_, anim) in world.query_mut::<&mut AnimationState>() {
-        let Some(clip) = clips.clip(&anim.clip) else {
+/// Every clip [`select_patrol_clip`] can ask for. Shorter than the avatar's
+/// list because a patroller has fewer states, not because its art is poorer —
+/// the knight's attack, shield, roll, and death sheets are all in the repo
+/// waiting for something to select them.
+pub const PATROL_CLIPS: &[&str] = &["idle", "run", "jump", "fall"];
+
+/// Map a patroller's movement state to a clip name.
+pub fn select_patrol_clip(world: &mut World) {
+    for (_, (_, body, vel, anim)) in
+        world.query_mut::<(&Patrol, &Body, &Velocity, &mut AnimationState)>()
+    {
+        let clip = if !body.grounded {
+            if vel.0.y < 0.0 {
+                "jump"
+            } else {
+                "fall"
+            }
+        } else if vel.0.x.abs() > 5.0 {
+            "run"
+        } else {
+            "idle"
+        };
+        anim.switch_to(clip);
+    }
+}
+
+/// Advance every animation against its own entity's clip set.
+pub fn advance(world: &mut World, dt: f32) {
+    for (_, (sprite, anim)) in world.query_mut::<(&Sprite, &mut AnimationState)>() {
+        let Some(clip) = sprite.clips.clip(&anim.clip) else {
             continue;
         };
         if clip.frames.is_empty() || clip.fps <= 0.0 {
@@ -76,8 +101,10 @@ pub fn advance(world: &mut World, clips: &ClipSet, dt: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::Clip;
+    use crate::assets::{Clip, ClipSet};
+    use ggez::glam::Vec2;
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     fn clip_set() -> ClipSet {
         let mut clips = HashMap::new();
@@ -87,6 +114,8 @@ mod tests {
                 frames: vec![(0, 0), (1, 0), (2, 0)],
                 fps: 10.0,
                 looping: true,
+                sheet: None,
+                frame_size: None,
             },
         );
         clips.insert(
@@ -95,34 +124,45 @@ mod tests {
                 frames: vec![(0, 1), (1, 1)],
                 fps: 10.0,
                 looping: false,
+                sheet: None,
+                frame_size: None,
             },
         );
         ClipSet {
-            sheet: "test".to_string(),
-            frame_size: (50.0, 37.0),
+            sheet: Some("test".to_string()),
+            frame_size: Some((50.0, 37.0)),
+            offset: None,
             clips,
         }
     }
 
+    fn spawn_animated(world: &mut World, clip: &str) -> hecs::Entity {
+        world.spawn((
+            Sprite {
+                clips: Arc::new(clip_set()),
+                offset: Vec2::ZERO,
+            },
+            AnimationState::new(clip),
+        ))
+    }
+
     #[test]
     fn looping_clip_wraps() {
-        let clips = clip_set();
         let mut world = World::new();
-        let e = world.spawn((AnimationState::new("loop3"),));
+        let e = spawn_animated(&mut world, "loop3");
 
         // 10 fps -> 0.1s per frame; 0.35s -> 3 advances -> frame 0 again
-        advance(&mut world, &clips, 0.35);
+        advance(&mut world, 0.35);
         let anim = world.get::<&AnimationState>(e).unwrap();
         assert_eq!(anim.frame, 0);
     }
 
     #[test]
     fn non_looping_clip_holds_last_frame() {
-        let clips = clip_set();
         let mut world = World::new();
-        let e = world.spawn((AnimationState::new("once2"),));
+        let e = spawn_animated(&mut world, "once2");
 
-        advance(&mut world, &clips, 1.0);
+        advance(&mut world, 1.0);
         let anim = world.get::<&AnimationState>(e).unwrap();
         assert_eq!(anim.frame, 1);
     }

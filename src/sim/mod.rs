@@ -16,17 +16,22 @@ pub mod run;
 pub mod tape;
 pub mod trace;
 
-use std::rc::Rc;
+use std::collections::{hash_map, HashMap};
+use std::sync::Arc;
 
+use anyhow::Context as _;
 use ggez::glam::Vec2;
 use hecs::World;
 
 use crate::assets::{Assets, Clip, ClipSet};
-use crate::ecs::components::{AnimationState, Avatar, Body, Position, Size, Sprite, Velocity};
+use crate::ecs::components::{
+    AnimationState, Avatar, Body, Patrol, Position, Size, Sprite, Velocity,
+};
+use crate::ecs::spawn;
 use crate::level::LevelData;
 use crate::physics::{Aabb, SolidRect};
 use crate::systems::input::PlayerInput;
-use crate::systems::{animation, avatar, body};
+use crate::systems::{animation, avatar, body, npc};
 
 pub use event::GameEvent;
 pub use probe::Probe;
@@ -42,7 +47,6 @@ pub struct Sim {
     pub level: LevelData,
     /// Solids + one-way platforms, pre-flattened for the physics pass.
     pub geometry: Vec<SolidRect>,
-    pub clips: Rc<ClipSet>,
     /// Ticks elapsed since the sim was created.
     pub tick: u64,
     /// What happened during the most recent [`Sim::step`]. Cleared at the
@@ -52,12 +56,25 @@ pub struct Sim {
 }
 
 impl Sim {
-    /// Load a map (path relative to the assets directory) and spawn the player.
+    /// Load a map (path relative to the assets directory), spawn the player,
+    /// and spawn everything the map places.
     pub fn load(assets: &mut Assets, map: &str) -> anyhow::Result<Self> {
         let map_path = assets.base_dir().join(map);
         let level = LevelData::load(&map_path, assets)?;
-        let clips = assets.clip_set("player")?;
-        Ok(Self::new(level, clips))
+
+        // One clip set per kind actually present, so a map that places no
+        // knights does not need the knight art to exist.
+        let mut clip_sets: HashMap<String, Arc<ClipSet>> = HashMap::new();
+        clip_sets.insert("player".to_string(), assets.clip_set("player")?);
+        for placement in &level.entities {
+            if let hash_map::Entry::Vacant(slot) = clip_sets.entry(placement.kind.clone()) {
+                slot.insert(assets.clip_set(&placement.kind).with_context(|| {
+                    format!("map places `{}` but its clip set is missing", placement.kind)
+                })?);
+            }
+        }
+
+        Ok(Self::new(level, &clip_sets))
     }
 
     /// A sim built from an inline ASCII grid, with placeholder animation
@@ -78,35 +95,46 @@ impl Sim {
     /// does not parse is a mistake in the test, not a condition to handle.
     pub fn fixture(grid: &[&str]) -> Self {
         let level = LevelData::from_grid(grid).expect("fixture grid should parse");
-        Sim::new(level, Rc::new(fixture_clips()))
+        Sim::new(level, &fixture_clip_sets())
     }
 
-    pub fn new(level: LevelData, clips: Rc<ClipSet>) -> Self {
+    /// Build a sim from level data and a clip set per entity kind (plus
+    /// `"player"`). Panics if a kind the level places has no clip set — callers
+    /// are expected to have loaded one, and there is nothing sensible to draw
+    /// otherwise.
+    pub fn new(level: LevelData, clip_sets: &HashMap<String, Arc<ClipSet>>) -> Self {
         let mut geometry: Vec<SolidRect> =
             level.solids.iter().map(|&r| SolidRect::solid(r)).collect();
         geometry.extend(level.one_way.iter().map(|&r| SolidRect::one_way(r)));
 
+        let clips_for = |kind: &str| -> Arc<ClipSet> {
+            clip_sets
+                .get(kind)
+                .unwrap_or_else(|| panic!("no clip set loaded for `{kind}`"))
+                .clone()
+        };
+
         let mut world = World::new();
-        let spawn = level.player_spawn;
-        let (fw, fh) = clips.frame_size;
-        world.spawn((
-            Avatar::new(),
-            Avatar::body(spawn),
-            Position(spawn),
-            Velocity(Vec2::ZERO),
-            Size(Vec2::new(Avatar::WIDTH, Avatar::HEIGHT)),
-            Sprite {
-                // sprite centered horizontally on the collider, feet aligned
-                offset: Vec2::new((Avatar::WIDTH - fw) / 2.0, Avatar::HEIGHT - fh),
-            },
-            AnimationState::new("idle"),
-        ));
+        spawn::player(&mut world, level.player_spawn, clips_for("player"));
+
+        // Map order, which is the grid scanned top-left to bottom-right and
+        // then the explicit entity list. Spawn order decides `npc.<n>` in
+        // traces and tape assertions, so it has to be a property of the map
+        // rather than of iteration luck.
+        for placement in &level.entities {
+            spawn::entity(
+                &mut world,
+                placement,
+                level.tile_size,
+                clips_for(&placement.kind),
+            )
+            .expect("level entities were validated on load");
+        }
 
         Sim {
             world,
             level,
             geometry,
-            clips,
             tick: 0,
             events: Vec::new(),
         }
@@ -128,10 +156,12 @@ impl Sim {
             TICK,
             &mut self.events,
         );
+        npc::patrol(&mut self.world, &self.geometry);
         body::move_bodies(&mut self.world, &self.geometry, TICK);
         avatar::after_move(&mut self.world, &self.level, input, &mut self.events);
         animation::select_avatar_clip(&mut self.world);
-        animation::advance(&mut self.world, &self.clips, TICK);
+        animation::select_patrol_clip(&mut self.world);
+        animation::advance(&mut self.world, TICK);
         self.tick += 1;
 
         #[cfg(debug_assertions)]
@@ -141,6 +171,32 @@ impl Sim {
     /// What happened during the most recent [`Sim::step`].
     pub fn events(&self) -> &[GameEvent] {
         &self.events
+    }
+
+    /// NPC entities in spawn order, which is map order.
+    ///
+    /// Sorted by entity id rather than taken in query order. hecs iterates
+    /// archetypes in creation order, so the moment anything adds or removes a
+    /// component at runtime — a stun, a damage flash — query order reshuffles.
+    /// `npc.0` in a tape has to keep meaning the same knight, so the ordering
+    /// is made explicit here instead of being inherited from iteration luck.
+    pub fn npcs(&self) -> Vec<hecs::Entity> {
+        let mut entities: Vec<hecs::Entity> = self
+            .world
+            .query::<&Patrol>()
+            .iter()
+            .map(|(entity, _)| entity)
+            .collect();
+        entities.sort_by_key(|entity| entity.id());
+        entities
+    }
+
+    /// Every NPC's position, in spawn order.
+    pub fn npc_positions(&self) -> Vec<Vec2> {
+        self.npcs()
+            .into_iter()
+            .map(|entity| self.world.get::<&Position>(entity).expect("npc has a position").0)
+            .collect()
     }
 
     /// Snapshot the player's state for tracing and assertions.
@@ -159,24 +215,25 @@ impl Sim {
     /// a loud failure naming the exact tick.
     #[cfg(debug_assertions)]
     fn check_invariants(&self) {
-        for (_, (pos, vel, size, anim)) in self
+        for (_, (pos, vel, size, sprite, anim)) in self
             .world
-            .query::<(&Position, &Velocity, &Size, &AnimationState)>()
+            .query::<(&Position, &Velocity, &Size, &Sprite, &AnimationState)>()
             .iter()
         {
             assert!(
                 pos.0.is_finite() && vel.0.is_finite(),
-                "tick {}: non-finite avatar state (pos {:?}, vel {:?})",
+                "tick {}: non-finite state (pos {:?}, vel {:?})",
                 self.tick,
                 pos.0,
                 vel.0
             );
 
             // A missing clip freezes the sprite silently; catch it here
-            // instead of wondering why the animation stopped.
+            // instead of wondering why the animation stopped. Checked against
+            // the entity's own clip set, since they no longer share one.
             assert!(
-                self.clips.clip(&anim.clip).is_some(),
-                "tick {}: animation clip `{}` is not defined in the clip set",
+                sprite.clips.clip(&anim.clip).is_some(),
+                "tick {}: animation clip `{}` is not defined in this entity's clip set",
                 self.tick,
                 anim.clip
             );
@@ -200,13 +257,25 @@ impl Sim {
     }
 }
 
-/// Placeholder clips for [`Sim::fixture`]: every clip the avatar's selector
-/// can ask for, each two frames at 10 fps on a sheet that does not exist.
-/// Nothing headless reads the pixels, and `Sim::check_invariants` fails loudly
-/// if the selector ever reaches a name that is missing here.
-fn fixture_clips() -> ClipSet {
+/// Placeholder clips for [`Sim::fixture`]: every clip any selector can ask
+/// for, each two frames at 10 fps on a sheet that does not exist.
+///
+/// One set serves every entity kind, since nothing headless reads the pixels.
+/// `Sim::check_invariants` fails loudly if a selector ever reaches a name that
+/// is missing here, which is what keeps the clip lists honest.
+/// The placeholder clip set, registered under every kind a map can place.
+pub(crate) fn fixture_clip_sets() -> HashMap<String, Arc<ClipSet>> {
+    let stub = Arc::new(fixture_clips());
+    std::iter::once("player")
+        .chain(spawn::KINDS.iter().copied())
+        .map(|kind| (kind.to_string(), stub.clone()))
+        .collect()
+}
+
+pub(crate) fn fixture_clips() -> ClipSet {
     let clips = animation::AVATAR_CLIPS
         .iter()
+        .chain(animation::PATROL_CLIPS)
         .map(|&name| {
             (
                 name.to_string(),
@@ -214,13 +283,16 @@ fn fixture_clips() -> ClipSet {
                     frames: vec![(0, 0), (1, 0)],
                     fps: 10.0,
                     looping: true,
+                    sheet: None,
+                    frame_size: None,
                 },
             )
         })
         .collect();
     ClipSet {
-        sheet: "fixture".to_string(),
-        frame_size: (50.0, 37.0),
+        sheet: Some("fixture".to_string()),
+        frame_size: Some((50.0, 37.0)),
+        offset: None,
         clips,
     }
 }
@@ -248,7 +320,7 @@ mod tests {
         let mut level = LevelData::empty(20, 10, 32.0);
         level.solids = vec![Aabb::new(0.0, 256.0, 400.0, 64.0)];
         level.player_spawn = Vec2::new(100.0, 256.0 - Avatar::HEIGHT);
-        Sim::new(level, Rc::new(fixture_clips()))
+        Sim::new(level, &fixture_clip_sets())
     }
 
     const JUMP: PlayerInput = PlayerInput {

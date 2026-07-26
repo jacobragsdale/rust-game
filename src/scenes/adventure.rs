@@ -6,6 +6,7 @@
 //! `update` does is feed the sim one tick of input, which is why the game and
 //! the `sim` binary can never disagree about what happens.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use ggez::glam::Vec2;
@@ -17,7 +18,7 @@ use ggez::{Context, GameResult};
 
 use crate::assets::TilesetDef;
 use crate::debug::DebugOverlay;
-use crate::ecs::components::{AnimationState, Avatar, Position, Sprite};
+use crate::ecs::components::{AnimationState, Avatar, Patrol, Position, Size, Sprite};
 use crate::scenes::{pause::PauseScene, Resources, Scene, Transition};
 use crate::sim::Sim;
 use crate::systems::{camera::Camera, input};
@@ -41,7 +42,9 @@ pub struct AdventureScene {
     tileset: Rc<TilesetDef>,
     tile_batch: InstanceArray,
     tile_sheet_size: Vec2,
-    player_image: Image,
+    /// Every sprite sheet the world's entities reference, by name. Uploaded
+    /// once at scene construction rather than per frame.
+    sheets: HashMap<String, Image>,
     debug: DebugOverlay,
 }
 
@@ -56,7 +59,22 @@ impl AdventureScene {
         let tile_sheet_size = Vec2::new(tile_image.width() as f32, tile_image.height() as f32);
         let tile_batch = InstanceArray::new(ctx, tile_image);
 
-        let player_image = res.assets.image(ctx, &sim.clips.sheet, None)?;
+        // Collect the distinct sheets across every entity's clip set. Doing it
+        // from the world means adding an NPC needs no change here.
+        let mut wanted: Vec<String> = Vec::new();
+        for (_, sprite) in sim.world.query::<&Sprite>().iter() {
+            for clip in sprite.clips.clips.values() {
+                let sheet = sprite.clips.sheet_of(clip);
+                if !wanted.iter().any(|s| s == sheet) {
+                    wanted.push(sheet.to_string());
+                }
+            }
+        }
+        let mut sheets = HashMap::new();
+        for name in wanted {
+            let image = res.assets.image(ctx, &name, None)?;
+            sheets.insert(name, image);
+        }
 
         let internal = Image::new_canvas_image(
             ctx,
@@ -78,7 +96,7 @@ impl AdventureScene {
             tileset,
             tile_batch,
             tile_sheet_size,
-            player_image,
+            sheets,
             debug: DebugOverlay::from_env(),
         })
     }
@@ -142,27 +160,35 @@ impl AdventureScene {
         Ok(())
     }
 
-    fn draw_player(&self, canvas: &mut Canvas) {
+    /// Draw every sprite in the world, whatever sheet it comes from.
+    ///
+    /// Entities no longer share one atlas — the player is one image of 50x37
+    /// cells, the knight is several with different cell sizes — so the sheet
+    /// is looked up per entity and each frame's placement is computed from its
+    /// own frame size.
+    fn draw_sprites(&self, canvas: &mut Canvas) {
         let offset = self.camera.offset();
-        let clips = &self.sim.clips;
-        let (fw, _) = clips.frame_size;
-        let sheet_w = self.player_image.width() as f32;
-        let sheet_h = self.player_image.height() as f32;
 
-        for (_, (pos, sprite, anim, avatar)) in self
+        for (entity, (pos, size, sprite, anim)) in self
             .sim
             .world
-            .query::<(&Position, &Sprite, &AnimationState, &Avatar)>()
+            .query::<(&Position, &Size, &Sprite, &AnimationState)>()
             .iter()
         {
-            let Some(clip) = clips.clip(&anim.clip) else {
+            let Some(clip) = sprite.clips.clip(&anim.clip) else {
                 continue;
             };
-            let frame = clip.frames[anim.frame.min(clip.frames.len() - 1)];
-            let src = clips.src_rect(frame, sheet_w, sheet_h);
-            let draw_pos = (pos.0 + sprite.offset - offset).floor();
+            let Some(image) = self.sheets.get(sprite.clips.sheet_of(clip)) else {
+                continue;
+            };
 
-            let param = if avatar.facing_right {
+            let (sheet_w, sheet_h) = (image.width() as f32, image.height() as f32);
+            let (fw, fh) = sprite.clips.frame_size_of(clip);
+            let frame = clip.frames[anim.frame.min(clip.frames.len() - 1)];
+            let src = sprite.clips.src_rect(clip, frame, sheet_w, sheet_h);
+            let draw_pos = (sprite.draw_origin(pos.0, size.0, (fw, fh)) - offset).floor();
+
+            let param = if self.faces_right(entity) {
                 DrawParam::new().src(src).dest(draw_pos)
             } else {
                 // mirror around the sprite's own width
@@ -171,8 +197,20 @@ impl AdventureScene {
                     .dest(draw_pos + Vec2::new(fw, 0.0))
                     .scale(Vec2::new(-1.0, 1.0))
             };
-            canvas.draw(&self.player_image, param);
+            canvas.draw(image, param);
         }
+    }
+
+    /// Which way an entity is facing. The player tracks it on `Avatar`, a
+    /// patroller in its walk direction; anything else faces right.
+    fn faces_right(&self, entity: hecs::Entity) -> bool {
+        if let Ok(avatar) = self.sim.world.get::<&Avatar>(entity) {
+            return avatar.facing_right;
+        }
+        if let Ok(patrol) = self.sim.world.get::<&Patrol>(entity) {
+            return patrol.dir >= 0.0;
+        }
+        true
     }
 }
 
@@ -191,7 +229,7 @@ impl Scene for AdventureScene {
         canvas.set_sampler(Sampler::nearest_clamp());
         canvas.draw(&self.tile_batch, DrawParam::default());
         self.draw_hazards(ctx, &mut canvas)?;
-        self.draw_player(&mut canvas);
+        self.draw_sprites(&mut canvas);
         self.debug.draw(
             ctx,
             &mut canvas,

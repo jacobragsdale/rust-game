@@ -114,30 +114,84 @@ fn tilesets_without_a_color_key_have_real_transparency() {
     }
 }
 
+fn clip_set_names() -> Vec<String> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/data/animations");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", dir.display()))
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|p: &PathBuf| p.extension().is_some_and(|e| e == "ron"))
+        .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .collect();
+    names.sort();
+    names
+}
+
 /// Every frame an animation clip references must exist on its sheet. A clip
 /// pointing off the edge of the atlas renders garbage or nothing.
+///
+/// Checked per clip rather than per set, because clips no longer share a sheet
+/// or a cell size — the knight's idle is a 64px grid and its jump is 144px, on
+/// different files.
 #[test]
 fn animation_frames_are_inside_their_sheet() {
     let mut assets = Assets::new();
-    let clips = assets.clip_set("player").expect("player clips load");
-    let sheet = assets
-        .decode_image(&clips.sheet, None)
-        .expect("player sheet decodes");
-
-    let (fw, fh) = clips.frame_size;
-    let (sheet_w, sheet_h) = sheet.dimensions();
-    let cols = (sheet_w as f32 / fw) as u32;
-    let rows = (sheet_h as f32 / fh) as u32;
-
     let mut problems: Vec<String> = Vec::new();
-    for (name, clip) in &clips.clips {
-        for &(col, row) in &clip.frames {
-            if col >= cols || row >= rows {
-                problems.push(format!(
-                    "clip `{name}` frame ({col}, {row}) is outside the \
-                     {cols}x{rows} grid of `{}`",
-                    clips.sheet
-                ));
+
+    for set_name in clip_set_names() {
+        let set = assets
+            .clip_set(&set_name)
+            .unwrap_or_else(|e| panic!("{set_name}: {e:#}"));
+
+        for (clip_name, clip) in &set.clips {
+            let sheet_name = set.sheet_of(clip);
+            let sheet = match assets.decode_image(sheet_name, None) {
+                Ok(sheet) => sheet,
+                Err(e) => {
+                    problems.push(format!(
+                        "{set_name}/{clip_name}: sheet `{sheet_name}` does not load: {e:#}"
+                    ));
+                    continue;
+                }
+            };
+
+            let (fw, fh) = set.frame_size_of(clip);
+            let (sheet_w, sheet_h) = sheet.dimensions();
+            let cols = (sheet_w as f32 / fw) as u32;
+            let rows = (sheet_h as f32 / fh) as u32;
+
+            for &(col, row) in &clip.frames {
+                if col >= cols || row >= rows {
+                    problems.push(format!(
+                        "{set_name}/{clip_name}: frame ({col}, {row}) is outside the \
+                         {cols}x{rows} grid of `{sheet_name}`"
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(problems.is_empty(), "{}", problems.join("\n  "));
+}
+
+/// A clip set has to define everything its selector can ask for. A missing
+/// clip freezes the sprite, and `Sim::check_invariants` only catches it once
+/// the game actually reaches that state — which for `hurt` or `fall` may be
+/// minutes into a session, or never during a test.
+#[test]
+fn shipped_clip_sets_cover_every_state_their_selector_can_reach() {
+    use supergame::systems::animation::{AVATAR_CLIPS, PATROL_CLIPS};
+
+    let mut assets = Assets::new();
+    let mut problems: Vec<String> = Vec::new();
+
+    let expected: [(&str, &[&str]); 2] = [("player", AVATAR_CLIPS), ("knight", PATROL_CLIPS)];
+    for (set_name, required) in expected {
+        let set = assets
+            .clip_set(set_name)
+            .unwrap_or_else(|e| panic!("{set_name}: {e:#}"));
+        for clip in required {
+            if set.clip(clip).is_none() {
+                problems.push(format!("{set_name}.ron is missing the `{clip}` clip"));
             }
         }
     }
