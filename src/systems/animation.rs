@@ -67,15 +67,22 @@ pub fn select_avatar_clip(world: &mut World) {
 /// list because a patroller has fewer states, not because its art is poorer —
 /// the knight's attack, shield, roll, and death sheets are all in the repo
 /// waiting for something to select them.
-pub const PATROL_CLIPS: &[&str] = &["idle", "run", "jump", "fall", "death"];
+pub const PATROL_CLIPS: &[&str] = &["idle", "run", "jump", "fall", "death", "attack"];
 
 /// Map a patroller's movement state to a clip name.
 pub fn select_patrol_clip(world: &mut World) {
-    for (_, (_, body, vel, anim, health)) in
-        world.query_mut::<(&Patrol, &Body, &Velocity, &mut AnimationState, &Health)>()
-    {
+    for (_, (_, body, vel, anim, health, attacking)) in world.query_mut::<(
+        &Patrol,
+        &Body,
+        &Velocity,
+        &mut AnimationState,
+        &Health,
+        &Attacking,
+    )>() {
         let clip = if health.dead() {
             "death"
+        } else if attacking.busy() {
+            "attack"
         } else if !body.grounded {
             if vel.0.y < 0.0 {
                 "jump"

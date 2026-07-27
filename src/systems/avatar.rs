@@ -199,8 +199,8 @@ pub fn after_move(
 ) {
     let dir = f32::from(input.right) - f32::from(input.left);
 
-    for (_, (avatar, pos, vel, size, body)) in
-        world.query_mut::<(&mut Avatar, &mut Position, &mut Velocity, &Size, &Body)>()
+    for (_, (avatar, pos, vel, size, body, health)) in
+        world.query_mut::<(&mut Avatar, &mut Position, &mut Velocity, &Size, &Body, &mut Health)>()
     {
         // Frozen bodies did not move, so there is no new contact to read and
         // nothing new can have killed them.
@@ -234,11 +234,18 @@ pub fn after_move(
         }
 
         // --- lethal stuff ---
+        //
+        // Two ways to die and one death. Hazards kill outright rather than
+        // dealing damage, so spikes stay lethal however much health the player
+        // is carrying; being cut down runs out of health first, and combat has
+        // already emitted the `Died` for it by the time this sees it.
         let hitbox = Aabb::new(pos.0.x, pos.0.y, size.0.x, size.0.y);
         let spiked = level.hazards.iter().any(|h| hitbox.overlaps(h));
         let fell_out = pos.0.y > level.pixel_height() + 100.0;
+
         if spiked || fell_out {
             avatar.dead_ticks = Avatar::DEATH_TICKS;
+            health.current = 0;
             vel.0 = Vec2::ZERO;
             events.push(GameEvent::Died {
                 who: "player".to_string(),
@@ -248,6 +255,9 @@ pub fn after_move(
                     DeathCause::FellOutOfWorld
                 },
             });
+        } else if health.dead() {
+            avatar.dead_ticks = Avatar::DEATH_TICKS;
+            vel.0 = Vec2::ZERO;
         }
     }
 }

@@ -26,4 +26,18 @@ Attacks({
         knockback: (170.0, -90.0),
         hitstun: 14,
     ),
+
+    // The knight's lunging thrust. Slower and longer than the player's, with
+    // a visible wind-up before the hitbox appears -- an enemy attack you
+    // cannot read is just damage on a timer.
+    "knight_slash": AttackDef(
+        clip: "attack",
+        duration: 36,
+        active: (16, 24),
+        offset: (16.0, 2.0),
+        size: (28.0, 22.0),
+        damage: 1,
+        knockback: (200.0, -140.0),
+        hitstun: 18,
+    ),
 })

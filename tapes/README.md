@@ -115,10 +115,11 @@ Events: `jumped`, `double_jumped`, `wall_jumped`, `landed`, `dropped_through`,
 
 Three things to know:
 
-**`expect` counts by event name only**, not by who it happened to. `damaged`
-and `died` record a `who` in the trace, but `expect damaged == 3` counts every
-hit on anything. That is unambiguous while only enemies can be hurt; it will
-need per-subject filtering once the knight can fight back.
+**Narrow to a victim with `<subject>.<event>`.** `damaged` and `died` record
+who they happened to, so `expect knight.damaged == 3` counts hits on the knight
+and `expect player.damaged == 4` counts hits on you. A bare `expect damaged`
+counts every hit on anything, which is rarely what you mean now that both sides
+bleed. Only `damaged` and `died` can be narrowed; the rest have no subject.
 
 **Counts are cumulative** from the start of the tape, not per-tick — you rarely
 know which tick a landing happened on, but you always know it should have
@@ -141,8 +142,13 @@ do not move what is already there.
 | `testbed.ron` | running, jumping, gap clearing, spike death |
 | `testbed_platform.ron` | one-way platforms and drop-through |
 | `testbed_chimney.ron` | wall slide, wall jump, wall-contact grace |
-| `testbed_knight.ron` | a patrolling knight, with a wall at one end and a drop at the other |
+| `testbed_knight.ron` | patrolling: a knight on a ledge, with the player on a shelf below and out of its sight |
 | `testbed_arena.ron` | fighting: a small walled room with a knight and nowhere to run |
+
+`testbed_knight.ron` keeps the player two tiles below the knight's ledge on
+purpose. Once the knight became hostile, a player standing on the same ledge
+got chased, hit and knocked into the pit — correct behaviour, and useless for
+testing a patrol route.
 
 `castle_spawn.tape` is the exception: it runs on the real map but asserts only
 that the player spawns on solid ground and is not standing in a hazard, so

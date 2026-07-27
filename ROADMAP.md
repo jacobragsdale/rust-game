@@ -127,10 +127,16 @@ Notes for what comes next:
 death, and the HUD. The player's health bar is in; the mana bar's space is
 reserved and it arrives with the spell in M3c.
 
-**M3b** — the knight fights back: the Patrol → Chase → Attack → Return state
-machine, the knight's own hitbox, the player taking damage and dying into the
-respawn that already exists. Also where `expect` needs per-subject filtering,
-since `damaged` stops being unambiguous.
+**M3b ✅ done** — the knight fights back. `Hostile` layered on `Patrol` for the
+Patrol → Chase → Attack → Return state machine, the knight's own attack, the
+player dying into the respawn that already existed, and `expect
+knight.damaged` / `expect player.damaged` now that the unqualified count means
+nothing.
+
+Notes: sight is a box *in front*, not a radius, so walking up behind a
+patrolling knight works. Being hit interrupts your swing, which is what makes
+an exchange readable — whoever connects first wins it, both ways. Hazards kill
+outright rather than dealing damage, so spikes stay lethal at any health.
 
 **M3c** — the shock spell: mana, a projectile entity, cooldown. And the seeded
 RNG, if nothing before it has needed one.

@@ -103,8 +103,10 @@ pub enum Check {
         op: Op,
         value: f32,
     },
-    /// How many times an event has fired since the tape started.
+    /// How many times an event has fired since the tape started, optionally
+    /// narrowed to who it happened to.
     Event {
+        subject: Option<String>,
         name: String,
         op: Op,
         count: u32,
@@ -150,13 +152,25 @@ impl Assertion {
                     ))
                 }
             }
-            Check::Event { name, op, count } => {
-                let actual = events.count(name);
+            Check::Event {
+                subject,
+                name,
+                op,
+                count,
+            } => {
+                let actual = match subject {
+                    Some(who) => events.count_for(who, name),
+                    None => events.count(name),
+                };
                 if op.apply(actual as f32, *count as f32) {
                     Ok(())
                 } else {
+                    let label = match subject {
+                        Some(who) => format!("{who}.{name}"),
+                        None => name.clone(),
+                    };
                     Err(format!(
-                        "expected `{name}` {} {count} times by now, but it fired {actual}",
+                        "expected `{label}` {} {count} times by now, but it fired {actual}",
                         op_str(*op)
                     ))
                 }
@@ -173,8 +187,17 @@ impl Assertion {
             Check::Compare { field, op, value } => {
                 format!("assert {field} {} {value}", op_str(*op))
             }
-            Check::Event { name, op, count } => {
-                format!("expect {name} {} {count}", op_str(*op))
+            Check::Event {
+                subject,
+                name,
+                op,
+                count,
+            } => {
+                let label = match subject {
+                    Some(who) => format!("{who}.{name}"),
+                    None => name.clone(),
+                };
+                format!("expect {label} {} {count}", op_str(*op))
             }
         }
     }
@@ -372,7 +395,8 @@ fn parse_check(tokens: &[&str]) -> anyhow::Result<Check> {
     }
 }
 
-/// `expect <event>`, `expect no <event>`, or `expect <event> <op> <count>`.
+/// `expect <event>`, `expect no <event>`, or `expect <event> <op> <count>`,
+/// where `<event>` may be qualified as `<subject>.<event>`.
 ///
 /// Counts are cumulative over every tick so far, which is how a tape actually
 /// reads: after writing `right+jump 25` you want to say the player landed
@@ -395,13 +419,28 @@ fn parse_expect(tokens: &[&str]) -> anyhow::Result<Check> {
         ),
     };
 
+    // `knight.damaged` narrows to one victim; a bare `damaged` counts every
+    // one. Only events that record a subject can be narrowed.
+    let (subject, name) = match name.split_once('.') {
+        Some((who, event)) => (Some(who.to_string()), event),
+        None => (None, name),
+    };
+
     if !GameEvent::names().contains(&name) {
         bail!(
             "`{name}` is not an event (known events: {})",
             GameEvent::known_names()
         );
     }
+    if subject.is_some() && !GameEvent::has_subject(name) {
+        bail!(
+            "`{name}` does not record who it happened to, so it cannot be \
+             narrowed to one (events that can: {})",
+            GameEvent::subject_names()
+        );
+    }
     Ok(Check::Event {
+        subject,
         name: name.to_string(),
         op,
         count,

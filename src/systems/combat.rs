@@ -38,8 +38,13 @@ pub fn tick_timers(world: &mut World) {
 /// against is this tick's.
 pub fn advance_attacks(world: &mut World, attacks: &AttackTable) {
     for (_, (attacking, health)) in world.query_mut::<(&mut Attacking, Option<&Health>)>() {
-        // Dying mid-swing drops the sword.
-        if health.is_some_and(|h| h.dead()) {
+        // Dying mid-swing drops the sword, and so does being hit during one.
+        //
+        // Interrupting on hitstun is what makes an exchange readable: whoever
+        // connects first wins it, so closing in on a knight already committed
+        // to a wind-up is a real opening rather than a mutual trade. It cuts
+        // both ways — the player's swing dies to a knight's the same way.
+        if health.is_some_and(|h| h.dead() || h.hitstun > 0) {
             attacking.stop();
             continue;
         }

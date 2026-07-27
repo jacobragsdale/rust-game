@@ -7,7 +7,7 @@
 //   knightIdle          64x64  x15
 //   knightRun           96x64  x8
 //   knightJumpAndFall  144x64  x15   (0-6 jump, 7-9 fall, 10-13 land, 14 blank)
-//   knightAttack       144x64  x22   } added in M3, when there is combat
+//   knightAttack       144x64  x22   -- frames 0-11 used
 //   knightShield        96x64  x7    } to select them
 //   knightRoll         180x64  x15   }
 //   knightDeath         96x64  x15   -- used
@@ -54,6 +54,17 @@ ClipSet(
             frames: [(7, 0), (8, 0), (9, 0)],
             fps: 8.0,
             looping: true,
+        ),
+        // Frames 0-11 of the attack sheet: wind-up (0-3), lunging thrust
+        // (4-9), overhead crescent (10-11). 12 frames at 20 fps is 36 ticks,
+        // which is what `attacks.ron` commits the knight for.
+        "attack": Clip(
+            sheet: "knight/knightAttack",
+            frame_size: (144.0, 64.0),
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0),
+                     (6, 0), (7, 0), (8, 0), (9, 0), (10, 0), (11, 0)],
+            fps: 20.0,
+            looping: false,
         ),
         "death": Clip(
             sheet: "knight/knightDeath",

@@ -290,8 +290,71 @@ pub enum Team {
 #[derive(Clone, Debug)]
 pub struct Kind(pub String);
 
+/// What a hostile NPC is currently doing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stance {
+    /// Walking its route, unaware.
+    Patrol,
+    /// Closing on the player.
+    Chase,
+    /// Committed to a swing, standing still.
+    Attack,
+    /// Lost the player; walking back to where it started.
+    Return,
+}
+
+/// The fight brain, layered on top of [`Patrol`].
+///
+/// Separate from `Patrol` so the two compose: a village blacksmith can pace
+/// back and forth without also being willing to stab you. Everything hostile
+/// about the knight lives here.
+#[derive(Clone, Debug)]
+pub struct Hostile {
+    pub stance: Stance,
+    /// Where it spawned. It walks back here after losing the player, so a
+    /// chase does not permanently relocate every enemy on the map.
+    pub home: f32,
+    /// Ticks until it may swing again.
+    pub cooldown: u32,
+    /// Which attack it throws, from `assets/data/attacks.ron`.
+    pub attack: String,
+}
+
+impl Hostile {
+    /// How far ahead it notices the player. Sight is a box in front of it, not
+    /// a radius: walking up behind a patrolling knight should work.
+    pub const SIGHT: f32 = 130.0;
+    /// Vertical tolerance on that box. Roughly a body height, so a player on
+    /// the platform above is not "in front of" anything.
+    pub const SIGHT_HEIGHT: f32 = 36.0;
+    /// Gives up once the player is this far away — wider than `SIGHT`, so a
+    /// knight at the edge of its vision does not flicker between states.
+    pub const LOSE: f32 = 200.0;
+    /// Close enough to swing.
+    pub const REACH: f32 = 30.0;
+    /// Ticks between swings. Long enough that closing in, landing a hit and
+    /// backing out is a plan rather than a gamble — a first enemy that wins
+    /// every exchange teaches the player nothing except to avoid it.
+    pub const COOLDOWN: u32 = 75;
+    /// How close to home counts as home.
+    pub const HOME_SLACK: f32 = 8.0;
+    /// Chasing is faster than strolling, but still much slower than the
+    /// player runs: backing off has to work.
+    pub const CHASE_MULTIPLIER: f32 = 1.25;
+
+    pub fn new(home: f32, attack: &str) -> Self {
+        Hostile {
+            stance: Stance::Patrol,
+            home,
+            cooldown: 0,
+            attack: attack.to_string(),
+        }
+    }
+}
+
 /// Walks back and forth, turning at walls and at the edges of what it is
-/// standing on. No awareness of the player at all.
+/// standing on. On its own, no awareness of the player at all — [`Hostile`]
+/// is what adds that.
 ///
 /// Deliberately needs no authoring: a `K` dropped anywhere in any map is the
 /// whole specification, and the geometry decides the route. Patrol bounds in

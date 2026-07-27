@@ -17,8 +17,8 @@ use hecs::World;
 
 use crate::assets::ClipSet;
 use crate::ecs::components::{
-    AnimationState, Attacking, Avatar, Body, Health, Kind, Patrol, Position, Size, Sprite, Team,
-    Velocity,
+    AnimationState, Attacking, Avatar, Body, Health, Hostile, Kind, Patrol, Position, Size,
+    Sprite, Team, Velocity,
 };
 use crate::level::EntitySpawn;
 
@@ -31,6 +31,7 @@ pub const KINDS: &[&str] = &["knight"];
 pub const KNIGHT_SIZE: Vec2 = Vec2::new(22.0, 30.0);
 pub const KNIGHT_SPEED: f32 = 55.0;
 pub const KNIGHT_HEALTH: i32 = 3;
+pub const KNIGHT_ATTACK: &str = "knight_slash";
 pub const KNIGHT_GRAVITY: f32 = 1400.0;
 pub const KNIGHT_MAX_FALL: f32 = 900.0;
 
@@ -67,6 +68,7 @@ pub fn entity(
             Ok(world.spawn((
                 Kind(placement.kind.clone()),
                 Patrol::new(1.0, KNIGHT_SPEED),
+                Hostile::new(pos.x, KNIGHT_ATTACK),
                 Team::Enemy,
                 Health::new(KNIGHT_HEALTH),
                 Attacking::default(),

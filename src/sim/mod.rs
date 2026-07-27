@@ -179,7 +179,7 @@ impl Sim {
             TICK,
             &mut self.events,
         );
-        npc::patrol(&mut self.world, &self.geometry);
+        npc::think(&mut self.world, &self.geometry, &mut self.events);
         body::move_bodies(&mut self.world, &self.geometry, TICK);
         avatar::after_move(&mut self.world, &self.level, input, &mut self.events);
 

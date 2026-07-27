@@ -1,16 +1,20 @@
-// Knight testbed: a patrolling knight on a plain ledge, in view of the spawn.
+// Knight patrol testbed: a knight pacing a ledge, with the player watching
+// from a shelf below.
 //
-// The knight turns at both ends of the ledge and never falls off, which is the
-// whole of its behaviour in M2. The pillars at each end give it a wall to turn
-// at on one side and a drop to turn at on the other, so both reasons to
-// reverse are exercised on the same map.
+// The knight turns at both ends of the ledge and never falls off, which is
+// what this fixture is for. The player is deliberately two tiles below it,
+// outside the knight's sight box — once the knight became hostile, a player
+// standing on the same ledge got chased, attacked and knocked into the pit,
+// which is correct behaviour and useless for testing a patrol route.
+// testbed_arena.ron is where they fight.
 //
 // Fixture map — do not move anything already here; tapes encode its pixels.
 //
-//   spawn   col 2,  row 10   world (70, 318), feet on the floor at y=352
-//   knight  col 8,  row 10   world (261, 322), feet on the same floor
-//   ledge   row 11, cols 6-14                  world x 192..480, top y=352
-//   wall    rows 9-11, col 15                  the knight's right-hand stop
+//   knight ledge  row 10, cols 2-15      world x 64..512, top y=320
+//   wall          rows 8-9, col 15       the knight's right-hand stop
+//   knight        col 8,  row 9          world (261, 290)
+//   player floor  row 13                 top y=416
+//   spawn         col 1,  row 12         world (38, 382)
 Level(
     tileset: "castle",
     grid: [
@@ -22,12 +26,12 @@ Level(
         "#................#",
         "#................#",
         "#................#",
-        "#................#",
         "#..............#.#",
-        "#.P.....K......#.#",
+        "#.......K......#.#",
         "#.##############.#",
         "#................#",
-        "#................#",
+        "#P...............#",
+        "##################",
         "##################",
         "##################",
     ],

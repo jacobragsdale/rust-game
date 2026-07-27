@@ -76,7 +76,28 @@ pub enum GameEvent {
     },
 }
 
+/// Events that record who they happened to, and can therefore be filtered by
+/// subject in an `expect`.
+const SUBJECT_EVENTS: &[&str] = &["died", "damaged"];
+
 impl GameEvent {
+    /// Who this happened to, for events that record it.
+    pub fn subject(&self) -> Option<&str> {
+        match self {
+            GameEvent::Died { who, .. } | GameEvent::Damaged { who, .. } => Some(who),
+            _ => None,
+        }
+    }
+
+    /// Whether `expect <subject>.<name>` is meaningful for this event name.
+    pub fn has_subject(name: &str) -> bool {
+        SUBJECT_EVENTS.contains(&name)
+    }
+
+    pub fn subject_names() -> String {
+        SUBJECT_EVENTS.join(", ")
+    }
+
     /// The name a tape refers to this event by.
     pub fn kind(&self) -> &'static str {
         match self {
@@ -108,7 +129,14 @@ impl GameEvent {
 /// time you have written `right+jump 25`, you want to assert the player landed
 /// *somewhere* in there, not guess which tick it was.
 #[derive(Clone, Debug, Default)]
-pub struct EventCounts(HashMap<&'static str, u32>);
+pub struct EventCounts {
+    by_kind: HashMap<&'static str, u32>,
+    /// Counted separately by who it happened to, so that `damaged` can mean
+    /// "any damage" and `knight.damaged` can mean "damage to the knight".
+    /// Once both sides of a fight can bleed, the unqualified count stops
+    /// being a useful assertion on its own.
+    by_subject: HashMap<(String, &'static str), u32>,
+}
 
 impl EventCounts {
     pub fn new() -> Self {
@@ -117,12 +145,27 @@ impl EventCounts {
 
     pub fn record(&mut self, events: &[GameEvent]) {
         for event in events {
-            *self.0.entry(event.kind()).or_insert(0) += 1;
+            *self.by_kind.entry(event.kind()).or_insert(0) += 1;
+            if let Some(subject) = event.subject() {
+                *self
+                    .by_subject
+                    .entry((subject.to_string(), event.kind()))
+                    .or_insert(0) += 1;
+            }
         }
     }
 
+    /// How many times `name` fired, whoever it happened to.
     pub fn count(&self, name: &str) -> u32 {
-        self.0.get(name).copied().unwrap_or(0)
+        self.by_kind.get(name).copied().unwrap_or(0)
+    }
+
+    /// How many times `name` fired for `subject`.
+    pub fn count_for(&self, subject: &str, name: &str) -> u32 {
+        self.by_subject
+            .get(&(subject.to_string(), name))
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -189,6 +232,50 @@ mod tests {
             0,
             "unseen kinds count zero, not absent"
         );
+    }
+
+    /// Once both sides can bleed, "three damage events" is not an assertion
+    /// about anyone in particular.
+    #[test]
+    fn damage_is_countable_per_victim() {
+        let mut counts = EventCounts::new();
+        counts.record(&[
+            GameEvent::Damaged {
+                who: "knight".to_string(),
+                amount: 1,
+                remaining: 2,
+            },
+            GameEvent::Damaged {
+                who: "player".to_string(),
+                amount: 1,
+                remaining: 4,
+            },
+            GameEvent::Damaged {
+                who: "knight".to_string(),
+                amount: 1,
+                remaining: 1,
+            },
+        ]);
+
+        assert_eq!(counts.count("damaged"), 3, "everything, unqualified");
+        assert_eq!(counts.count_for("knight", "damaged"), 2);
+        assert_eq!(counts.count_for("player", "damaged"), 1);
+        assert_eq!(counts.count_for("goblin", "damaged"), 0);
+    }
+
+    #[test]
+    fn only_some_events_have_a_subject() {
+        assert!(GameEvent::has_subject("damaged"));
+        assert!(GameEvent::has_subject("died"));
+        assert!(!GameEvent::has_subject("jumped"));
+        for event in every_variant() {
+            assert_eq!(
+                event.subject().is_some(),
+                GameEvent::has_subject(event.kind()),
+                "`{}` disagrees about whether it has a subject",
+                event.kind()
+            );
+        }
     }
 
     /// Events go into the trace, so they have to survive the round trip.
