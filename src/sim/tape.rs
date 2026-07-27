@@ -103,6 +103,14 @@ pub enum Check {
         op: Op,
         value: f32,
     },
+    /// A string field against a literal. Only equality makes sense, which is
+    /// enough for what these are: `assert clip == die`, `assert knight.0.kind
+    /// == knight`.
+    CompareText {
+        field: String,
+        op: Op,
+        value: String,
+    },
     /// How many times an event has fired since the tape started, optionally
     /// narrowed to who it happened to.
     Event {
@@ -152,6 +160,20 @@ impl Assertion {
                     ))
                 }
             }
+            Check::CompareText { field, op, value } => {
+                let actual = frame
+                    .text(field)
+                    .ok_or_else(|| format!("`{field}` does not resolve in this frame"))?;
+                let equal = actual == value;
+                if (*op == Op::Eq) == equal {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected {field} {} {value}, but {field} was {actual}",
+                        op_str(*op)
+                    ))
+                }
+            }
             Check::Event {
                 subject,
                 name,
@@ -185,6 +207,9 @@ impl Assertion {
                 format!("assert {}{name}", if *expected { "" } else { "!" })
             }
             Check::Compare { field, op, value } => {
+                format!("assert {field} {} {value}", op_str(*op))
+            }
+            Check::CompareText { field, op, value } => {
                 format!("assert {field} {} {value}", op_str(*op))
             }
             Check::Event {
@@ -373,20 +398,36 @@ fn parse_check(tokens: &[&str]) -> anyhow::Result<Check> {
         [field, op, value] => {
             let op =
                 Op::parse(op).with_context(|| format!("`{op}` is not a comparison operator"))?;
-            let value: f32 = value
-                .parse()
-                .with_context(|| format!("`{value}` is not a number"))?;
             let path = ProbePath::parse(field)
                 .with_context(|| format!("`{field}` is not a valid path"))?;
+
+            // The field decides how the literal is read. Numeric fields parse
+            // it as a number; text fields take it verbatim, so a clip called
+            // `attack2` is not mistaken for arithmetic.
             if path.is_field() {
+                let value: f32 = value
+                    .parse()
+                    .with_context(|| format!("`{value}` is not a number"))?;
                 Ok(Check::Compare {
                     field: field.to_string(),
                     op,
                     value,
                 })
+            } else if path.is_text() {
+                if !matches!(op, Op::Eq | Op::Ne) {
+                    bail!(
+                        "`{field}` is text, so only `==` and `!=` apply, not `{}`",
+                        op_str(op)
+                    );
+                }
+                Ok(Check::CompareText {
+                    field: field.to_string(),
+                    op,
+                    value: value.to_string(),
+                })
             } else {
                 bail!(
-                    "`{field}` is not a numeric field (known: {})",
+                    "`{field}` is not a comparable field (known: {})",
                     path.known_names()
                 )
             }
@@ -539,6 +580,35 @@ mod tests {
         assert_eq!(tape.ticks(), 2, "the directive costs no ticks");
     }
 
+    /// Clip names are what make animation *selection* testable: that the
+    /// death animation plays when something dies, and that a swing is not
+    /// painted over by the run cycle.
+    #[test]
+    fn text_fields_compare_by_equality() {
+        let tape =
+            Tape::parse("assert clip == idle\nassert clip != run\nassert knight.0.clip == death")
+                .unwrap();
+        assert_eq!(tape.asserts.len(), 3);
+        assert!(matches!(tape.asserts[0].check, Check::CompareText { .. }));
+    }
+
+    #[test]
+    fn ordering_operators_are_rejected_on_text() {
+        let err = Tape::parse("assert clip > run").unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("only `==` and `!=`"), "{text}");
+    }
+
+    /// A clip named `attack2` must not be read as a number.
+    #[test]
+    fn a_numeric_looking_clip_name_stays_text() {
+        let tape = Tape::parse("assert clip == attack2").unwrap();
+        match &tape.asserts[0].check {
+            Check::CompareText { value, .. } => assert_eq!(value, "attack2"),
+            other => panic!("expected a text comparison, got {other:?}"),
+        }
+    }
+
     #[test]
     fn rejects_bad_input() {
         assert!(Tape::parse("map").is_err(), "map without a path");
@@ -554,5 +624,13 @@ mod tests {
         assert!(Tape::parse("assert x ~ 3").is_err(), "bad operator");
         assert!(Tape::parse("assert grounded > 3").is_err(), "flag as field");
         assert!(Tape::parse("assert x > yes").is_err(), "bad value");
+        assert!(
+            Tape::parse("assert clip < run").is_err(),
+            "ordering on text"
+        );
+        assert!(
+            Tape::parse("assert nonsense == x").is_err(),
+            "unknown text field"
+        );
     }
 }

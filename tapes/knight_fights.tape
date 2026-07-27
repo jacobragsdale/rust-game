@@ -23,6 +23,7 @@ expect no player.damaged
 wait 390
 assert hp <= 0
 assert dead
+assert clip == die
 expect player.damaged == 5
 expect player.died == 1
 

@@ -32,6 +32,10 @@ expect player_slash1.attacked == 1
 expect player_slash2.attacked == 1
 expect player_slash3.attacked == 1
 assert attacking
+# Each link animates as itself. Until clip names became assertable this was
+# only checkable by eye — a swing painted over by the run cycle looked exactly
+# like an attack that never happened.
+assert clip == attack3
 
 # the finisher has the longest recovery, so commitment outlasts its animation
 wait 40
@@ -46,6 +50,7 @@ assert !crouching
 right+down+jump 1
 expect slid == 1
 assert vx > 200
+assert clip == slide
 
 # it bleeds back to running speed rather than stopping dead
 wait 25
@@ -62,6 +67,8 @@ assert !grounded
 attack 1
 wait 4
 expect player_air.attacked == 1
+assert clip == air_attack
+assert clip != attack1
 attack 1
 attack 1
 wait 30

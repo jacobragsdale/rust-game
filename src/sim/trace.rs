@@ -60,6 +60,14 @@ impl Frame {
         }
     }
 
+    /// Resolve a dotted path to a string, for tape assertions.
+    pub fn text(&self, path: &str) -> Option<&str> {
+        match ProbePath::parse(path)? {
+            ProbePath::Player(name) => self.probe.text(name),
+            ProbePath::Npc { kind, index, name } => self.npc(kind, index)?.text(name),
+        }
+    }
+
     /// The `index`-th NPC of `kind`, in spawn order.
     fn npc(&self, kind: &str, index: usize) -> Option<&NpcProbe> {
         self.npcs.iter().filter(|n| n.kind == kind).nth(index)
@@ -105,6 +113,14 @@ impl<'a> ProbePath<'a> {
         match self {
             ProbePath::Player(name) => Probe::flag_names().contains(name),
             ProbePath::Npc { name, .. } => NpcProbe::flag_names().contains(name),
+        }
+    }
+
+    /// Whether this path names a string field — a clip name, a kind.
+    pub fn is_text(&self) -> bool {
+        match self {
+            ProbePath::Player(name) => Probe::text_names().contains(name),
+            ProbePath::Npc { name, .. } => NpcProbe::text_names().contains(name),
         }
     }
 

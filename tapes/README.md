@@ -72,6 +72,7 @@ Assertions read `assert <flag>`, `assert !<flag>`, or `assert <field> <op>
   `iframes`, `hitstun`
 - boolean: `grounded`, `facing_right`, `wall_sliding`, `double_jumping`,
   `crouching`, `dead`, `on_one_way_only`, `attacking`
+- text: `clip` — compared with `==` or `!=` only
 
 ## Asserting on NPCs
 
@@ -89,6 +90,7 @@ assert player.grounded        # the long way round, if you want the symmetry
 
 - numeric: `x`, `y`, `vx`, `vy`, `dir`, `frame`, `hp`, `hitstun`
 - boolean: `grounded`, `facing_right`, `dead`
+- text: `clip`, `kind`
 
 Spawn order is stable across a run even as components are added and removed —
 `Sim::npcs` sorts by entity id rather than trusting query order, and
@@ -96,10 +98,25 @@ Spawn order is stable across a run even as components are added and removed —
 down. It is *not* stable across map edits: move a `K` and `knight.0` may be a
 different knight.
 
-Clips are not assertable yet. `assert knight.0.clip == run` would need string
-comparison in the tape language, which does not exist; the trace records the
-clip name, so a golden trace catches an animation change even though no
-assertion can name one.
+## Checking animations
+
+`assert clip == die` and `assert knight.0.clip == death` say which animation is
+playing. That covers animation *selection* — a swing painted over by the run
+cycle looks exactly like an attack that never happened, and this is what tells
+them apart.
+
+It does not cover animation *mapping*: which sheet cells a clip resolves to.
+Traces record clip names and frame indices, not cells, so a clip set pointing
+`wall_slide` at the wrong art produces byte-identical traces before and after
+the fix. Nothing automated catches that, because "is this the right animation?"
+is a question about pixels. What there is instead is a way to look cheaply:
+
+```bash
+cargo run --bin sheet -- player          # one PNG per clip, named after it
+cargo run --bin sheet -- knight --clip run
+cargo run --bin sheet -- player --grid   # the raw sheet with a cell grid,
+                                         # for deriving a new pack's layout
+```
 
 ## Events
 

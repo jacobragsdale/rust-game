@@ -17,8 +17,20 @@ const TICK_DISPLAY_CAP: u32 = 999;
 /// Numeric fields addressable by tape assertions. Kept beside `Probe::field`
 /// so the two cannot drift apart — a test enforces it.
 const FIELD_NAMES: &[&str] = &[
-    "x", "y", "vx", "vy", "tick", "air_jumps", "frame", "hp", "iframes", "hitstun",
+    "x",
+    "y",
+    "vx",
+    "vy",
+    "tick",
+    "air_jumps",
+    "frame",
+    "hp",
+    "iframes",
+    "hitstun",
 ];
+
+/// Text fields addressable by tape assertions. Only `==` and `!=` apply.
+const TEXT_NAMES: &[&str] = &["clip"];
 
 /// Boolean fields addressable by tape assertions.
 const FLAG_NAMES: &[&str] = &[
@@ -63,6 +75,9 @@ const NPC_FIELD_NAMES: &[&str] = &["x", "y", "vx", "vy", "dir", "frame", "hp", "
 
 /// Boolean fields of an NPC.
 const NPC_FLAG_NAMES: &[&str] = &["grounded", "facing_right", "dead"];
+
+/// Text fields of an NPC.
+const NPC_TEXT_NAMES: &[&str] = &["clip", "kind"];
 
 /// A snapshot of one NPC.
 ///
@@ -110,6 +125,14 @@ impl NpcProbe {
         })
     }
 
+    pub fn text(&self, name: &str) -> Option<&str> {
+        match name {
+            "clip" => Some(&self.clip),
+            "kind" => Some(&self.kind),
+            _ => None,
+        }
+    }
+
     pub fn field_names() -> &'static [&'static str] {
         NPC_FIELD_NAMES
     }
@@ -118,9 +141,14 @@ impl NpcProbe {
         NPC_FLAG_NAMES
     }
 
+    pub fn text_names() -> &'static [&'static str] {
+        NPC_TEXT_NAMES
+    }
+
     pub fn known_names() -> String {
         let mut all: Vec<&str> = NPC_FIELD_NAMES.to_vec();
         all.extend_from_slice(NPC_FLAG_NAMES);
+        all.extend_from_slice(NPC_TEXT_NAMES);
         all.join(", ")
     }
 }
@@ -195,6 +223,14 @@ impl Probe {
         })
     }
 
+    /// Text field lookup, used by tape assertions.
+    pub fn text(&self, name: &str) -> Option<&str> {
+        match name {
+            "clip" => Some(&self.clip),
+            _ => None,
+        }
+    }
+
     pub fn field_names() -> &'static [&'static str] {
         FIELD_NAMES
     }
@@ -203,10 +239,15 @@ impl Probe {
         FLAG_NAMES
     }
 
-    /// Every name `field` or `flag` accepts, for error messages.
+    pub fn text_names() -> &'static [&'static str] {
+        TEXT_NAMES
+    }
+
+    /// Every name `field`, `flag` or `text` accepts, for error messages.
     pub fn known_names() -> String {
         let mut all: Vec<&str> = FIELD_NAMES.to_vec();
         all.extend_from_slice(FLAG_NAMES);
+        all.extend_from_slice(TEXT_NAMES);
         all.join(", ")
     }
 

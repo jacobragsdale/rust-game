@@ -89,6 +89,7 @@ wait 60
 assert knight.0.dead
 assert knight.0.grounded
 assert knight.0.vx == 0
+assert knight.0.clip == death
 
 # All three links of the combo saw use, not just the opener.
 expect player_slash1.attacked >= 3
