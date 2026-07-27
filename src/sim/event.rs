@@ -29,6 +29,7 @@ const EVENT_NAMES: &[&str] = &[
     "respawned",
     "attacked",
     "damaged",
+    "slid",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +55,7 @@ pub enum GameEvent {
         on_one_way: bool,
     },
     DroppedThrough,
+    Slid,
     /// `who` is the victim's kind — `"player"`, `"knight"`. Counting with
     /// `expect died == 1` cannot yet filter on it, but a trace that does not
     /// record who died is unreadable the moment two things can die.
@@ -76,15 +78,17 @@ pub enum GameEvent {
     },
 }
 
-/// Events that record who they happened to, and can therefore be filtered by
-/// subject in an `expect`.
-const SUBJECT_EVENTS: &[&str] = &["died", "damaged"];
+/// Events carrying a discriminating name that `expect` can filter on:
+/// `knight.damaged`, `player_slash3.attacked`.
+const SUBJECT_EVENTS: &[&str] = &["died", "damaged", "attacked"];
 
 impl GameEvent {
-    /// Who this happened to, for events that record it.
+    /// The name this event can be filtered by: the victim for damage and
+    /// death, the attack id for a swing.
     pub fn subject(&self) -> Option<&str> {
         match self {
             GameEvent::Died { who, .. } | GameEvent::Damaged { who, .. } => Some(who),
+            GameEvent::Attacked { attack } => Some(attack),
             _ => None,
         }
     }
@@ -106,6 +110,7 @@ impl GameEvent {
             GameEvent::WallJumped { .. } => "wall_jumped",
             GameEvent::Landed { .. } => "landed",
             GameEvent::DroppedThrough => "dropped_through",
+            GameEvent::Slid => "slid",
             GameEvent::Died { .. } => "died",
             GameEvent::Respawned => "respawned",
             GameEvent::Attacked { .. } => "attacked",
@@ -183,6 +188,7 @@ mod tests {
             GameEvent::WallJumped { wall_dir: 1.0 },
             GameEvent::Landed { on_one_way: false },
             GameEvent::DroppedThrough,
+            GameEvent::Slid,
             GameEvent::Died {
                 who: "player".to_string(),
                 cause: DeathCause::Hazard,

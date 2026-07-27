@@ -109,6 +109,10 @@ pub struct Avatar {
     /// Currently in the rising arc of a double jump (drives the animation).
     pub double_jumping: bool,
     pub crouching: bool,
+    /// Ticks left in a slide (0 when not sliding).
+    pub slide_ticks: u32,
+    /// Ticks until another slide may start.
+    pub slide_cooldown: u32,
     /// Death freeze countdown; respawns when it reaches zero.
     pub dead_ticks: u32,
 }
@@ -146,10 +150,18 @@ impl Avatar {
     /// Death freeze before respawning (0.6 s).
     pub const DEATH_TICKS: u32 = 36;
     pub const MAX_HEALTH: i32 = 5;
-    /// The attack this key press performs, from `assets/data/attacks.ron`.
-    /// A single attack for now; the sheet has the frames for a three-hit
-    /// combo when there is a reason to chain them.
-    pub const ATTACK: &'static str = "player_slash";
+    /// The first link of the ground combo, from `assets/data/attacks.ron`.
+    /// The rest of the chain is data: each attack names its own successor.
+    pub const ATTACK: &'static str = "player_slash1";
+    /// What a press in mid-air performs instead.
+    pub const AIR_ATTACK: &'static str = "player_air";
+    /// How long a slide lasts, matching the `slide` clip.
+    pub const SLIDE_TICKS: u32 = 20;
+    /// Slides start faster than a run and bleed off across their length.
+    pub const SLIDE_SPEED: f32 = 300.0;
+    /// Ticks after a slide before another may start, so it is a move rather
+    /// than a faster way to walk.
+    pub const SLIDE_COOLDOWN: u32 = 20;
 
     pub fn new() -> Self {
         Avatar {
@@ -163,8 +175,14 @@ impl Avatar {
             wall_coyote_ticks: u32::MAX,
             double_jumping: false,
             crouching: false,
+            slide_ticks: 0,
+            slide_cooldown: 0,
             dead_ticks: 0,
         }
+    }
+
+    pub fn sliding(&self) -> bool {
+        self.slide_ticks > 0
     }
 
     /// The body the player drives, at its spawn point.
@@ -200,19 +218,28 @@ pub struct Health {
     /// to keep flying while the victim has no say in it, so this suppresses
     /// the *controller* and leaves the body integrating normally.
     pub hitstun: u32,
+    /// How long invulnerability lasts after a hit, for this entity.
+    ///
+    /// Per-entity because the two sides want opposite things. The player's is
+    /// long: a mercy window that stops a bad moment becoming a death spiral.
+    /// An enemy's must be shorter than the gap between combo links, or only
+    /// the first hit of a combo ever lands and the other two are decoration.
+    pub iframe_ticks: u32,
 }
 
 impl Health {
-    /// Invulnerability after taking a hit, for everyone. Long enough that a
-    /// lingering hitbox lands once, short enough not to trivialise a fight.
-    pub const IFRAME_TICKS: u32 = 30;
+    /// The player's mercy window, half a second.
+    pub const PLAYER_IFRAMES: u32 = 30;
+    /// An enemy's, short enough that every link of a combo connects.
+    pub const ENEMY_IFRAMES: u32 = 10;
 
-    pub fn new(max: i32) -> Self {
+    pub fn new(max: i32, iframe_ticks: u32) -> Self {
         Health {
             current: max,
             max,
             iframes: 0,
             hitstun: 0,
+            iframe_ticks,
         }
     }
 
@@ -253,6 +280,11 @@ pub struct Attacking {
     /// Everything this swing has already connected with, so a hitbox that is
     /// live for six ticks still deals one hit per target.
     pub hit: Vec<hecs::Entity>,
+    /// The next link of a combo, buffered by pressing attack during the
+    /// current one's chain window. Buffered rather than immediate so a combo
+    /// reads as one motion — you press on the swing you can see, and the next
+    /// starts when this one's animation is done.
+    pub chained: Option<String>,
 }
 
 impl Attacking {
@@ -264,12 +296,14 @@ impl Attacking {
         self.attack = Some(attack.to_string());
         self.elapsed = 0;
         self.hit.clear();
+        self.chained = None;
     }
 
     pub fn stop(&mut self) {
         self.attack = None;
         self.elapsed = 0;
         self.hit.clear();
+        self.chained = None;
     }
 }
 

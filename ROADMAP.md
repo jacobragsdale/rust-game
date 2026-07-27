@@ -138,11 +138,32 @@ patrolling knight works. Being hit interrupts your swing, which is what makes
 an exchange readable — whoever connects first wins it, both ways. Hazards kill
 outright rather than dealing damage, so spikes stay lethal at any health.
 
-**M3c** — the shock spell: mana, a projectile entity, cooldown. And the seeded
-RNG, if nothing before it has needed one.
+**M3-melee ✅ done** — the full melee kit, and a correctness fix underneath it.
+The Adventurer sheet's animations run *sequentially across rows*, not one per
+row; the clip set had been authored by row, which put `wall_slide` on the
+spell-cast frames, started `hurt` on the last frame of attack 3, and made the
+attack clip span a wall-slide frame and an attack-2 frame. Rewritten from the
+verified layout, which also turned up `die`, `slide`, both air attacks, and
+the `cast` frames M3c needs.
 
-Remaining from the original scope: a three-hit ground combo and air attacks
-(the sheet has the frames), and moving stats to RON.
+On top of that: a three-hit ground combo (each attack names its successor in
+`attacks.ron` — no state machine in code), a separate air attack, the slide
+(down+jump while running), attack recovery so a miss costs something, a white
+hit flash, and four ticks of hitstop on every connect.
+
+Two things worth carrying forward. I-frames are per-entity now: the player's
+window is long as a mercy, an enemy's is short enough that every link of a
+combo lands — with one shared value only the first hit of a combo ever landed.
+And golden traces cannot see an animation remapping at all: they record clip
+*names* and frame indices, not which cells those point at, so all three
+mapping fixes were verifiable only by eye.
+
+**M3c** — the shock spell: mana, a projectile entity, cooldown, and the mana
+bar whose space is already reserved in the HUD. And the seeded RNG, if nothing
+before it has needed one.
+
+Remaining from the original scope: moving stats to RON, and the plunge attack
+(frames 94-108, a long ready/loop/impact sequence).
 
 **Harness work:** combat is almost entirely event-shaped, which is why events
 landed in Tier 1. Add `Damaged`, `Died`, `Attacked`, `SpellCast`, `Blocked`

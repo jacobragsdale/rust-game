@@ -126,6 +126,13 @@ pub struct AttackDef {
     pub duration: u32,
     /// `[start, end)` in ticks, during which the hitbox exists.
     pub active: (u32, u32),
+    /// Extra ticks of commitment after the animation ends. A miss should cost
+    /// something, or mashing is always the best play.
+    #[serde(default)]
+    pub recovery: u32,
+    /// What pressing attack again turns this into, if anything.
+    #[serde(default)]
+    pub chain: Option<String>,
     /// Hitbox position relative to the attacker's collider, facing right.
     pub offset: (f32, f32),
     pub size: (f32, f32),
@@ -141,8 +148,20 @@ impl AttackDef {
         elapsed >= self.active.0 && elapsed < self.active.1
     }
 
+    /// The animation is over; the attacker is still committed until
+    /// [`AttackDef::released`].
     pub fn finished(&self, elapsed: u32) -> bool {
         elapsed >= self.duration
+    }
+
+    /// Free to act again.
+    pub fn released(&self, elapsed: u32) -> bool {
+        elapsed >= self.duration + self.recovery
+    }
+
+    /// Does this attack continue into another?
+    pub fn chains(&self) -> bool {
+        self.chain.is_some()
     }
 
     /// The hitbox in world space for an attacker whose collider is at `pos`

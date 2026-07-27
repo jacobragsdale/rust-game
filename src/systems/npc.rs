@@ -240,7 +240,7 @@ mod tests {
         world.spawn((
             Patrol::new(dir, SPEED),
             Team::Enemy,
-            Health::new(3),
+            Health::new(3, Health::ENEMY_IFRAMES),
             Attacking::default(),
             Position(pos),
             Velocity(Vec2::ZERO),
@@ -262,7 +262,7 @@ mod tests {
     fn spawn_target(world: &mut World, pos: Vec2) -> hecs::Entity {
         world.spawn((
             Team::Player,
-            Health::new(5),
+            Health::new(5, Health::PLAYER_IFRAMES),
             Position(pos),
             Velocity(Vec2::ZERO),
             Size(SIZE),

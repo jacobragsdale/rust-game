@@ -1,13 +1,45 @@
 // Adventurer sprite sheet: 7 columns x 16 rows of 50x37 frames.
-// Frames are (col, row) grid cells. Clip names are what the animation
-// state machine selects; more clips (attacks, slide, wall-slide, ...)
-// get added here in Phase 3 without touching code.
+//
+// IMPORTANT: this sheet's animations run SEQUENTIALLY across rows, not one per
+// row. Frame index i lives at cell (i % 7, i / 7), and an animation whose
+// length does not divide by seven wraps onto the next row mid-swing.
+//
+// The clips here were originally authored one-per-row, which happened to be
+// right for the first six (idle 4, crouch 4, run 6, jump 4, somersault 4,
+// fall 2 -- 24 frames, exactly filling rows 0-3) and wrong for everything
+// after. That put `wall_slide` on the spell-cast frames and started `hurt` on
+// the last frame of attack 3.
+//
+// The sequential layout, verified frame by frame against the art:
+//
+//    0-3   idle             43-47  attack1
+//    4-7   crouch           48-53  attack2
+//    8-13  run              54-59  attack3
+//   14-17  jump             60-62  hurt
+//   18-21  somersault       63-69  die
+//   22-23  fall             70-73  sword draw
+//   24-28  slide            74-77  sword sheath
+//   29-31  stand            78-81  cast          <- M3c wants these
+//   32-35  corner grab      82-85  cast loop     <- and these
+//   36-40  corner climb     86-89  air attack 1
+//   41-42  wall slide       90-93  air attack 2
+//                           94-96  plunge ready/loop
+//                          97-108  plunge strike and impact
+//   109-111 blank
+//
+// 15 fps is exactly 4 ticks per frame, so an attack clip's length in ticks is
+// frames * 4 -- which is what `attacks.ron` commits an attacker for.
 ClipSet(
     sheet: "playerSpriteSheet",
     frame_size: (50.0, 37.0),
     clips: {
         "idle": Clip(
             frames: [(0, 0), (1, 0), (2, 0), (3, 0)],
+            fps: 8.0,
+            looping: true,
+        ),
+        "crouch": Clip(
+            frames: [(4, 0), (5, 0), (6, 0), (0, 1)],
             fps: 8.0,
             looping: true,
         ),
@@ -21,37 +53,63 @@ ClipSet(
             fps: 12.0,
             looping: false,
         ),
-        "fall": Clip(
-            frames: [(1, 3), (2, 3)],
-            fps: 8.0,
-            looping: true,
-        ),
-        "crouch": Clip(
-            frames: [(4, 0), (5, 0), (6, 0), (0, 1)],
-            fps: 8.0,
-            looping: true,
-        ),
         "double_jump": Clip(
             frames: [(4, 2), (5, 2), (6, 2), (0, 3)],
             fps: 14.0,
             looping: false,
         ),
-        "wall_slide": Clip(
-            frames: [(2, 11), (3, 11)],
+        "fall": Clip(
+            frames: [(1, 3), (2, 3)],
             fps: 8.0,
             looping: true,
         ),
-        // Row 6: wind-up, a wide downward crescent on frames 2-3, then a
-        // recovery. 7 frames at 20 fps is 21 ticks, which is what
-        // `attacks.ron` commits the player for.
-        "attack": Clip(
-            frames: [(0, 6), (1, 6), (2, 6), (3, 6), (4, 6), (5, 6), (6, 6)],
-            fps: 20.0,
+        // 24-28. Five frames of going low and fast.
+        "slide": Clip(
+            frames: [(3, 3), (4, 3), (5, 3), (6, 3), (0, 4)],
+            fps: 15.0,
             looping: false,
         ),
-        "hurt": Clip(
-            frames: [(3, 8), (4, 8), (5, 8), (6, 8)],
+        // 41-42. Was pointing at 79-80, the cast frames, which is why the
+        // player threw a spell-hand up while clinging to a wall.
+        "wall_slide": Clip(
+            frames: [(6, 5), (0, 6)],
             fps: 8.0,
+            looping: true,
+        ),
+        // 43-47. The big downward crescent lands on frame 1.
+        "attack1": Clip(
+            frames: [(1, 6), (2, 6), (3, 6), (4, 6), (5, 6)],
+            fps: 15.0,
+            looping: false,
+        ),
+        // 48-53. A wider sweep, crescent on frame 2.
+        "attack2": Clip(
+            frames: [(6, 6), (0, 7), (1, 7), (2, 7), (3, 7), (4, 7)],
+            fps: 15.0,
+            looping: false,
+        ),
+        // 54-59. The finisher: a long forward thrust.
+        "attack3": Clip(
+            frames: [(5, 7), (6, 7), (0, 8), (1, 8), (2, 8), (3, 8)],
+            fps: 15.0,
+            looping: false,
+        ),
+        // 86-89.
+        "air_attack": Clip(
+            frames: [(2, 12), (3, 12), (4, 12), (5, 12)],
+            fps: 15.0,
+            looping: false,
+        ),
+        // 60-62. Was starting at 59, the last frame of attack3.
+        "hurt": Clip(
+            frames: [(4, 8), (5, 8), (6, 8)],
+            fps: 10.0,
+            looping: false,
+        ),
+        // 63-69. A real death, rather than reusing `hurt` for it.
+        "die": Clip(
+            frames: [(0, 9), (1, 9), (2, 9), (3, 9), (4, 9), (5, 9), (6, 9)],
+            fps: 12.0,
             looping: false,
         ),
     },

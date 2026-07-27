@@ -18,13 +18,16 @@ use ggez::{Context, GameResult};
 
 use crate::assets::TilesetDef;
 use crate::debug::DebugOverlay;
-use crate::ecs::components::{AnimationState, Avatar, Patrol, Position, Size, Sprite};
+use crate::ecs::components::{AnimationState, Avatar, Health, Patrol, Position, Size, Sprite};
 use crate::scenes::{pause::PauseScene, Resources, Scene, Transition};
 use crate::sim::Sim;
 use crate::systems::{camera::Camera, input};
 
 pub const INTERNAL_WIDTH: f32 = 640.0;
 pub const INTERNAL_HEIGHT: f32 = 360.0;
+
+/// How long the white hit flash lasts.
+const FLASH_TICKS: u32 = 6;
 
 const CLEAR_COLOR: Color = Color {
     r: 0.04,
@@ -197,7 +200,26 @@ impl AdventureScene {
                     .dest(draw_pos + Vec2::new(fw, 0.0))
                     .scale(Vec2::new(-1.0, 1.0))
             };
-            canvas.draw(image, param);
+            canvas.draw(image, param.color(self.hit_tint(entity)));
+        }
+    }
+
+    /// A blown-out tint for the first few ticks after being hit.
+    ///
+    /// The knight's art has no hurt animation, so without this a hit changes
+    /// nothing about it except a number — the blow lands on something that
+    /// does not react. Driven off the tail of the i-frame window so it flashes
+    /// on the hit rather than for the whole invulnerable period.
+    fn hit_tint(&self, entity: hecs::Entity) -> Color {
+        let flashing = self
+            .sim
+            .world
+            .get::<&Health>(entity)
+            .is_ok_and(|h| h.iframes + FLASH_TICKS > h.iframe_ticks && !h.dead());
+        if flashing {
+            Color::new(3.0, 3.0, 3.0, 1.0)
+        } else {
+            Color::WHITE
         }
     }
 

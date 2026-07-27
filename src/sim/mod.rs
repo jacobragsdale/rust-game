@@ -43,6 +43,10 @@ pub use probe::{NpcProbe, Probe};
 pub const TICKS_PER_SECOND: u32 = 60;
 pub const TICK: f32 = 1.0 / TICKS_PER_SECOND as f32;
 
+/// How long the world freezes when a hit lands. Four ticks is about 65 ms —
+/// long enough to register as impact, short enough not to read as a hitch.
+const HITSTOP_TICKS: u32 = 4;
+
 pub struct Sim {
     pub world: World,
     pub level: LevelData,
@@ -52,6 +56,11 @@ pub struct Sim {
     pub attacks: Arc<AttackTable>,
     /// Ticks elapsed since the sim was created.
     pub tick: u64,
+    /// Ticks of impact freeze remaining. A hit stops the whole world for a
+    /// few frames, which is the cheapest way to make a sword feel like it
+    /// weighs something — the blow reads as landing rather than as a number
+    /// changing. Input is still read, so it never feels like a stall.
+    hitstop: u32,
     /// What happened during the most recent [`Sim::step`]. Cleared at the
     /// start of each tick, so this is never a running log — the tape runner
     /// and the trace are what accumulate.
@@ -153,6 +162,7 @@ impl Sim {
             geometry,
             attacks,
             tick: 0,
+            hitstop: 0,
             events: Vec::new(),
         }
     }
@@ -166,15 +176,25 @@ impl Sim {
     pub fn step(&mut self, input: PlayerInput) {
         self.events.clear();
 
+        // Impact freeze: hold everything for a few ticks after a hit lands.
+        // The tick counter still advances, so traces and tapes stay aligned
+        // with wall-clock time and a frozen frame is visible as one.
+        if self.hitstop > 0 {
+            self.hitstop -= 1;
+            self.tick += 1;
+            return;
+        }
+
         // Combat timers first, so a controller asking "am I stunned?" reads
         // this tick's answer rather than last tick's.
         combat::tick_timers(&mut self.world);
-        combat::advance_attacks(&mut self.world, &self.attacks);
+        combat::advance_attacks(&mut self.world, &self.attacks, &mut self.events);
 
         avatar::control(
             &mut self.world,
             &self.level,
             &self.geometry,
+            &self.attacks,
             input,
             TICK,
             &mut self.events,
@@ -187,8 +207,11 @@ impl Sim {
         // connects where the bodies actually ended the tick.
         combat::resolve(&mut self.world, &self.attacks, &mut self.events);
         combat::settle_dead(&mut self.world);
+        if self.events.iter().any(|e| matches!(e, GameEvent::Damaged { .. })) {
+            self.hitstop = HITSTOP_TICKS;
+        }
 
-        animation::select_avatar_clip(&mut self.world);
+        animation::select_avatar_clip(&mut self.world, &self.attacks);
         animation::select_patrol_clip(&mut self.world);
         animation::advance(&mut self.world, TICK);
         self.tick += 1;

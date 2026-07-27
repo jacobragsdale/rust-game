@@ -241,7 +241,7 @@ mod tests {
             0,
             &Avatar::new(),
             &Avatar::body(Vec2::ZERO),
-            &Health::new(Avatar::MAX_HEALTH),
+            &Health::new(Avatar::MAX_HEALTH, Health::PLAYER_IFRAMES),
             &Attacking::default(),
             Vec2::ZERO,
             Vec2::ZERO,

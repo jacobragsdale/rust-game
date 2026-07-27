@@ -36,7 +36,7 @@ pub fn tick_timers(world: &mut World) {
 ///
 /// Also at the start of the tick, so that the elapsed count a hitbox is tested
 /// against is this tick's.
-pub fn advance_attacks(world: &mut World, attacks: &AttackTable) {
+pub fn advance_attacks(world: &mut World, attacks: &AttackTable, events: &mut Vec<GameEvent>) {
     for (_, (attacking, health)) in world.query_mut::<(&mut Attacking, Option<&Health>)>() {
         // Dying mid-swing drops the sword, and so does being hit during one.
         //
@@ -57,8 +57,21 @@ pub fn advance_attacks(world: &mut World, attacks: &AttackTable) {
         };
 
         attacking.elapsed += 1;
+
+        // A buffered press taken during the chain window starts the next link
+        // the moment this one's animation ends -- so a combo reads as one
+        // continuous motion rather than three separate swings.
         if def.finished(attacking.elapsed) {
-            attacking.stop();
+            match attacking.chained.take().filter(|_| def.chains()) {
+                Some(next) => {
+                    attacking.start(&next);
+                    // Each link announces itself, so a tape can tell a combo
+                    // from three separate swings.
+                    events.push(GameEvent::Attacked { attack: next });
+                }
+                None if def.released(attacking.elapsed) => attacking.stop(),
+                None => {}
+            }
         }
     }
 }
@@ -128,7 +141,7 @@ pub fn resolve(world: &mut World, attacks: &AttackTable, events: &mut Vec<GameEv
                 continue;
             }
             health.current -= def.damage;
-            health.iframes = Health::IFRAME_TICKS;
+            health.iframes = health.iframe_ticks;
             health.hitstun = def.hitstun;
             died = health.dead();
 
@@ -208,6 +221,8 @@ mod tests {
                 clip: "attack".to_string(),
                 duration: 10,
                 active: (2, 5),
+                recovery: 0,
+                chain: None,
                 offset: (14.0, 0.0),
                 size: (24.0, 24.0),
                 damage: 2,
@@ -228,19 +243,23 @@ mod tests {
             Position(Vec2::new(x, 100.0)),
             Velocity(Vec2::ZERO),
             Size(SIZE),
-            Health::new(5),
+            Health::new(5, Health::PLAYER_IFRAMES),
             Body::new(Vec2::new(x, 100.0), 0.0, 900.0),
         ))
     }
 
     fn victim(world: &mut World, x: f32, hp: i32) -> hecs::Entity {
+        victim_with(world, x, hp, Health::PLAYER_IFRAMES)
+    }
+
+    fn victim_with(world: &mut World, x: f32, hp: i32, iframes: u32) -> hecs::Entity {
         world.spawn((
             Kind("knight".to_string()),
             Team::Enemy,
             Position(Vec2::new(x, 100.0)),
             Velocity(Vec2::ZERO),
             Size(SIZE),
-            Health::new(hp),
+            Health::new(hp, iframes),
             Body::new(Vec2::new(x, 100.0), 0.0, 900.0),
         ))
     }
@@ -251,7 +270,7 @@ mod tests {
         let mut events = Vec::new();
         for _ in 0..ticks {
             tick_timers(world);
-            advance_attacks(world, &attacks);
+            advance_attacks(world, &attacks, &mut events);
             resolve(world, &attacks, &mut events);
             settle_dead(world);
         }
@@ -306,6 +325,26 @@ mod tests {
         assert_eq!(hp(&world, ahead), 8, "the one in front takes it");
     }
 
+    /// Per-entity i-frames are what make a combo work. An enemy's window is
+    /// deliberately shorter than the gap between combo links, so the second
+    /// and third hits land; the player's is long enough to break a chain.
+    #[test]
+    fn a_short_i_frame_window_lets_a_follow_up_land() {
+        let mut world = World::new();
+        let a = attacker(&mut world, 100.0, true);
+        let v = victim_with(&mut world, 122.0, 10, Health::ENEMY_IFRAMES);
+
+        world.get::<&mut Attacking>(a).unwrap().start("swing");
+        run(&mut world, 10);
+        assert_eq!(hp(&world, v), 8);
+
+        // straight into another swing: the short window has lapsed by the
+        // time this one's hitbox is live
+        world.get::<&mut Attacking>(a).unwrap().start("swing");
+        run(&mut world, 10);
+        assert_eq!(hp(&world, v), 6, "the follow-up connected");
+    }
+
     #[test]
     fn i_frames_stop_a_second_swing_landing_immediately() {
         let mut world = World::new();
@@ -322,7 +361,7 @@ mod tests {
         assert_eq!(hp(&world, v), 8, "still invulnerable");
 
         // and once it expires, the next one lands
-        run(&mut world, Health::IFRAME_TICKS);
+        run(&mut world, Health::PLAYER_IFRAMES);
         world.get::<&mut Attacking>(a).unwrap().start("swing");
         run(&mut world, 10);
         assert_eq!(hp(&world, v), 6);
@@ -353,7 +392,7 @@ mod tests {
             Position(Vec2::new(122.0, 100.0)),
             Velocity(Vec2::ZERO),
             Size(SIZE),
-            Health::new(10),
+            Health::new(10, Health::ENEMY_IFRAMES),
             Body::new(Vec2::new(122.0, 100.0), 0.0, 900.0),
         ));
         world.get::<&mut Attacking>(a).unwrap().start("swing");
@@ -372,7 +411,7 @@ mod tests {
         for _ in 0..3 {
             world.get::<&mut Attacking>(a).unwrap().start("swing");
             events.extend(run(&mut world, 10));
-            events.extend(run(&mut world, Health::IFRAME_TICKS));
+            events.extend(run(&mut world, Health::PLAYER_IFRAMES));
         }
 
         assert!(

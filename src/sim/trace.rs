@@ -223,7 +223,7 @@ mod tests {
             tick,
             &Avatar::new(),
             &Avatar::body(Vec2::ZERO),
-            &Health::new(Avatar::MAX_HEALTH),
+            &Health::new(Avatar::MAX_HEALTH, Health::PLAYER_IFRAMES),
             &Attacking::default(),
             Vec2::new(1.5, 2.5),
             Vec2::ZERO,

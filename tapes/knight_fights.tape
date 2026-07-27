@@ -8,7 +8,7 @@ map maps/testbed_arena.ron
 # spike pit take over, and the fight starts again from full health.
 #
 #   player  spawns x=70, 5 hp
-#   knight  spawns x=229, swings once every 75 ticks
+#   knight  spawns x=229 with 6 hp, swings once every 75 ticks
 
 assert hp == 5
 assert !dead
@@ -20,7 +20,7 @@ assert hp == 5
 expect no player.damaged
 
 # five swings, five hits, one dead player
-wait 370
+wait 390
 assert hp <= 0
 assert dead
 expect player.damaged == 5
@@ -35,4 +35,4 @@ expect respawned == 1
 
 # ...and the knight, which never took a scratch, starts again
 expect no knight.damaged
-assert knight.0.hp == 3
+assert knight.0.hp == 6

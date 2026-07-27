@@ -56,6 +56,10 @@ assert !grounded
 Keys are `left`, `right`, `down`, `jump`, `attack`, and `wait`/`none`. The
 count defaults to 1. `#` starts a comment.
 
+Combined keys do double duty: `down+jump` while running is a slide, `down`
+alone on a one-way platform is a drop-through, and `attack` during a swing
+chains the next link of the combo.
+
 **Jump and attack are edge-triggered.** `jump 10` is one jump held for ten
 ticks — exactly what holding the key does — not ten jumps. Releasing and
 pressing again is what produces a second. `attack 1` is the usual way to write
@@ -111,15 +115,16 @@ expect wall_jumped == 1  # fired exactly once
 ```
 
 Events: `jumped`, `double_jumped`, `wall_jumped`, `landed`, `dropped_through`,
-`died`, `respawned`, `attacked`, `damaged`.
+`slid`, `died`, `respawned`, `attacked`, `damaged`.
 
 Three things to know:
 
-**Narrow to a victim with `<subject>.<event>`.** `damaged` and `died` record
-who they happened to, so `expect knight.damaged == 3` counts hits on the knight
-and `expect player.damaged == 4` counts hits on you. A bare `expect damaged`
-counts every hit on anything, which is rarely what you mean now that both sides
-bleed. Only `damaged` and `died` can be narrowed; the rest have no subject.
+**Narrow with `<name>.<event>`.** Three events carry a discriminating name.
+`damaged` and `died` carry the victim, so `expect knight.damaged == 3` counts
+hits on the knight and `expect player.damaged == 4` counts hits on you.
+`attacked` carries the attack id, so `expect player_slash3.attacked >= 3` says
+the finisher actually saw use. A bare `expect damaged` counts every hit on
+anything, which is rarely what you mean now that both sides bleed.
 
 **Counts are cumulative** from the start of the tape, not per-tick — you rarely
 know which tick a landing happened on, but you always know it should have

@@ -3,6 +3,7 @@
 
 use hecs::World;
 
+use crate::assets::AttackTable;
 use crate::ecs::components::{
     AnimationState, Attacking, Avatar, Body, Health, Patrol, Sprite, Velocity,
 };
@@ -20,11 +21,16 @@ pub const AVATAR_CLIPS: &[&str] = &[
     "double_jump",
     "wall_slide",
     "hurt",
-    "attack",
+    "die",
+    "slide",
+    "attack1",
+    "attack2",
+    "attack3",
+    "air_attack",
 ];
 
 /// Map the avatar's movement state to a clip name.
-pub fn select_avatar_clip(world: &mut World) {
+pub fn select_avatar_clip(world: &mut World, attacks: &AttackTable) {
     for (_, (avatar, body, vel, anim, health, attacking)) in world.query_mut::<(
         &Avatar,
         &Body,
@@ -35,13 +41,21 @@ pub fn select_avatar_clip(world: &mut World) {
     )>() {
         // A swing outranks everything except dying: committing to an attack
         // and then having the run cycle paint over it looks like the attack
-        // never happened.
+        // never happened. The attack's own clip comes from its definition, so
+        // each link of the combo animates as itself.
         let clip = if avatar.dead() {
-            "hurt"
-        } else if attacking.busy() {
-            "attack"
+            "die"
+        } else if let Some(clip) = attacking
+            .attack
+            .as_deref()
+            .and_then(|id| attacks.get(id))
+            .map(|def| def.clip.as_str())
+        {
+            clip
         } else if health.hitstun > 0 {
             "hurt"
+        } else if avatar.sliding() {
+            "slide"
         } else if avatar.wall_sliding {
             "wall_slide"
         } else if !body.grounded {

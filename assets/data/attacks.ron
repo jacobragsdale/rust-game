@@ -3,37 +3,94 @@
 // Timing is in ticks (60 = 1 second). `active` is the half-open window during
 // which the hitbox exists, measured from the tick the swing started; outside
 // it the attacker is committed but harmless, which is what makes an attack a
-// decision rather than a free action.
+// decision rather than a free action. `recovery` extends that commitment past
+// the animation — the price of a miss, and the reason spacing matters.
+//
+// `chain` names what this attack becomes if the player presses again at any
+// point during it. That is the whole combo system: three entries and a
+// pointer each, no state machine in code. Buffering any press rather than
+// only ones inside a window makes the combo discoverable by mashing, which is
+// what a player will do first.
 //
 // `offset` is measured from the attacker's collider, facing right, and is
-// mirrored automatically when facing left. `knockback` is likewise given
-// rightward and mirrored.
+// mirrored automatically when facing left. `knockback` is likewise rightward
+// and mirrored.
 //
 // These numbers are balance, not art, which is why they are not in the clip
-// set: the animation table should not have to be reopened to make a sword hit
-// harder. `duration` does need to roughly match the clip's natural length, or
-// the sprite finishes before the swing does — `tests/assets.rs` checks that.
+// set: the animation table should not be reopened to make a sword hit harder.
+// `duration` does need to match the clip's natural length (frames * 4 ticks at
+// 15 fps) or the sprite finishes before the swing does.
 Attacks({
-    // The player's ground slash: a wind-up, a wide downward crescent, and a
-    // recovery you can be punished during.
-    "player_slash": AttackDef(
-        clip: "attack",
-        duration: 21,
-        active: (6, 12),
+    // --- the player's three-hit ground combo -------------------------------
+    //
+    // Each link is slower and stronger than the last, and the finisher is what
+    // actually moves an enemy. Pressing again during a swing continues the
+    // chain; letting it end drops back to the first.
+    "player_slash1": AttackDef(
+        clip: "attack1",
+        duration: 20,
+        active: (4, 10),
+        recovery: 4,
+        chain: "player_slash2",
         offset: (14.0, 2.0),
         size: (26.0, 26.0),
         damage: 1,
-        knockback: (170.0, -90.0),
-        hitstun: 14,
+        knockback: (140.0, -70.0),
+        hitstun: 12,
+    ),
+    "player_slash2": AttackDef(
+        clip: "attack2",
+        duration: 24,
+        active: (8, 14),
+        recovery: 4,
+        chain: "player_slash3",
+        offset: (14.0, 2.0),
+        size: (28.0, 26.0),
+        damage: 1,
+        knockback: (150.0, -80.0),
+        hitstun: 12,
+    ),
+    // The finisher commits hardest: longest recovery, biggest knockback, and
+    // nothing to chain into.
+    "player_slash3": AttackDef(
+        clip: "attack3",
+        duration: 24,
+        active: (5, 13),
+        recovery: 10,
+        offset: (16.0, 2.0),
+        size: (34.0, 24.0),
+        damage: 2,
+        knockback: (240.0, -110.0),
+        hitstun: 18,
     ),
 
-    // The knight's lunging thrust. Slower and longer than the player's, with
-    // a visible wind-up before the hitbox appears -- an enemy attack you
-    // cannot read is just damage on a timer.
+    // --- in the air -------------------------------------------------------
+    //
+    // Shorter and cheaper than the ground combo, and it does not chain: an air
+    // attack is a way to hit something on the way past, not a rotation to
+    // stand in mid-air and grind out.
+    "player_air": AttackDef(
+        clip: "air_attack",
+        duration: 16,
+        active: (4, 10),
+        recovery: 0,
+        offset: (14.0, 0.0),
+        size: (26.0, 26.0),
+        damage: 1,
+        knockback: (120.0, -60.0),
+        hitstun: 10,
+    ),
+
+    // --- the knight -------------------------------------------------------
+    //
+    // Slower and longer than anything the player has, with a visible wind-up
+    // before the hitbox appears: an enemy attack you cannot read is just
+    // damage on a timer.
     "knight_slash": AttackDef(
         clip: "attack",
         duration: 36,
         active: (16, 24),
+        recovery: 0,
         offset: (16.0, 2.0),
         size: (28.0, 22.0),
         damage: 1,

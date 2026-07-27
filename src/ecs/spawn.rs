@@ -30,7 +30,7 @@ pub const KINDS: &[&str] = &["knight"];
 /// drawn body of about 26x30 px.
 pub const KNIGHT_SIZE: Vec2 = Vec2::new(22.0, 30.0);
 pub const KNIGHT_SPEED: f32 = 55.0;
-pub const KNIGHT_HEALTH: i32 = 3;
+pub const KNIGHT_HEALTH: i32 = 6;
 pub const KNIGHT_ATTACK: &str = "knight_slash";
 pub const KNIGHT_GRAVITY: f32 = 1400.0;
 pub const KNIGHT_MAX_FALL: f32 = 900.0;
@@ -42,7 +42,7 @@ pub fn player(world: &mut World, spawn: Vec2, clips: Arc<ClipSet>) -> hecs::Enti
         Avatar::new(),
         Avatar::body(spawn),
         Team::Player,
-        Health::new(Avatar::MAX_HEALTH),
+        Health::new(Avatar::MAX_HEALTH, Health::PLAYER_IFRAMES),
         Attacking::default(),
         Position(spawn),
         Velocity(Vec2::ZERO),
@@ -70,7 +70,7 @@ pub fn entity(
                 Patrol::new(1.0, KNIGHT_SPEED),
                 Hostile::new(pos.x, KNIGHT_ATTACK),
                 Team::Enemy,
-                Health::new(KNIGHT_HEALTH),
+                Health::new(KNIGHT_HEALTH, Health::ENEMY_IFRAMES),
                 Attacking::default(),
                 Position(pos),
                 Velocity(Vec2::ZERO),

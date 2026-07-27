@@ -18,6 +18,7 @@
 use ggez::glam::Vec2;
 use hecs::World;
 
+use crate::assets::{AttackDef, AttackTable};
 use crate::ecs::components::{Attacking, Avatar, Body, Health, Position, Size, Velocity};
 use crate::level::LevelData;
 use crate::physics::{self, Aabb, SolidRect};
@@ -25,10 +26,12 @@ use crate::sim::event::{DeathCause, GameEvent};
 use crate::systems::input::PlayerInput;
 
 /// Phase 1: turn this tick's input into a velocity and body settings.
+#[allow(clippy::too_many_arguments)]
 pub fn control(
     world: &mut World,
     level: &LevelData,
     geometry: &[SolidRect],
+    attacks: &AttackTable,
     input: PlayerInput,
     dt: f32,
     events: &mut Vec<GameEvent>,
@@ -46,7 +49,15 @@ pub fn control(
         if avatar.dead() {
             avatar.dead_ticks -= 1;
             if avatar.dead_ticks == 0 {
-                respawn(avatar, pos, vel, body, health, attacking, level.player_spawn);
+                respawn(
+                    avatar,
+                    pos,
+                    vel,
+                    body,
+                    health,
+                    attacking,
+                    level.player_spawn,
+                );
                 events.push(GameEvent::Respawned);
             }
             // Still frozen on the tick of the respawn itself, so the player
@@ -77,35 +88,89 @@ pub fn control(
             avatar.jump_buffer = avatar.jump_buffer.saturating_sub(1);
         }
         avatar.drop_ticks = avatar.drop_ticks.saturating_sub(1);
+        avatar.slide_ticks = avatar.slide_ticks.saturating_sub(1);
+        avatar.slide_cooldown = avatar.slide_cooldown.saturating_sub(1);
 
-        // --- attack: one press, one swing, and no swinging mid-swing ---
-        if input.attack_pressed && !attacking.busy() {
-            attacking.start(Avatar::ATTACK);
-            events.push(GameEvent::Attacked {
-                attack: Avatar::ATTACK.to_string(),
-            });
+        let dir = f32::from(input.right) - f32::from(input.left);
+
+        // --- attack ---
+        //
+        // On the ground this is the head of a three-link combo; in the air it
+        // is a single cheaper swing. Which link comes next is data: pressing
+        // during the current attack's chain window buffers its successor, and
+        // `combat::advance_attacks` starts it when this animation ends.
+        if input.attack_pressed && !avatar.sliding() {
+            match current_attack(attacking, attacks) {
+                Some(def) if def.chains() => {
+                    attacking.chained = def.chain.clone();
+                }
+                Some(_) => {}
+                None => {
+                    let attack = if body.grounded {
+                        Avatar::ATTACK
+                    } else {
+                        Avatar::AIR_ATTACK
+                    };
+                    attacking.start(attack);
+                    events.push(GameEvent::Attacked {
+                        attack: attack.to_string(),
+                    });
+                }
+            }
+        }
+
+        // --- slide: down + jump while running along the ground ---
+        //
+        // Distinct from drop-through, which is down alone on a platform, and
+        // from crouching, which is down while standing still.
+        if input.jump_pressed
+            && input.down
+            && body.grounded
+            && !body.on_one_way_only()
+            && dir != 0.0
+            && avatar.slide_cooldown == 0
+            && !attacking.busy()
+        {
+            avatar.slide_ticks = Avatar::SLIDE_TICKS;
+            avatar.slide_cooldown = Avatar::SLIDE_TICKS + Avatar::SLIDE_COOLDOWN;
+            avatar.jump_buffer = 0;
+            vel.0.x = dir * Avatar::SLIDE_SPEED;
+            avatar.facing_right = dir > 0.0;
+            events.push(GameEvent::Slid);
         }
 
         // --- horizontal: accelerate toward the target speed, brake to zero ---
-        let dir = f32::from(input.right) - f32::from(input.left);
+        //
         // Rooted on the ground while committed to a swing, so an attack costs
         // something. Air momentum is left alone -- stopping dead mid-jump
-        // reads as a bug rather than as commitment.
-        let target = if attacking.busy() && body.grounded {
+        // reads as a bug rather than as commitment. A slide overrides both:
+        // it carries its own speed and bleeds off on its own.
+        let target = if avatar.sliding() {
+            avatar.facing_right as u8 as f32 * 2.0 - 1.0
+        } else if attacking.busy() && body.grounded {
             0.0
         } else {
-            dir * Avatar::RUN_SPEED
+            dir
+        } * if avatar.sliding() {
+            Avatar::SLIDE_SPEED
+        } else {
+            Avatar::RUN_SPEED
         };
-        let rate = if dir != 0.0 {
+        let rate = if avatar.sliding() {
+            // Bleed from slide speed to run speed across the slide.
+            (Avatar::SLIDE_SPEED - Avatar::RUN_SPEED) / (Avatar::SLIDE_TICKS as f32 * dt)
+        } else if dir != 0.0 {
             Avatar::ACCEL
         } else {
             Avatar::DECEL
         };
         vel.0.x = move_toward(vel.0.x, target, rate * dt);
-        if dir > 0.0 {
-            avatar.facing_right = true;
-        } else if dir < 0.0 {
-            avatar.facing_right = false;
+        if !avatar.sliding() {
+            if dir > 0.0 {
+                avatar.facing_right = true;
+            } else if dir < 0.0 {
+                avatar.facing_right = false;
+            }
         }
 
         // --- wall contact, tracked apart from the slide ---
@@ -199,9 +264,14 @@ pub fn after_move(
 ) {
     let dir = f32::from(input.right) - f32::from(input.left);
 
-    for (_, (avatar, pos, vel, size, body, health)) in
-        world.query_mut::<(&mut Avatar, &mut Position, &mut Velocity, &Size, &Body, &mut Health)>()
-    {
+    for (_, (avatar, pos, vel, size, body, health)) in world.query_mut::<(
+        &mut Avatar,
+        &mut Position,
+        &mut Velocity,
+        &Size,
+        &Body,
+        &mut Health,
+    )>() {
         // Frozen bodies did not move, so there is no new contact to read and
         // nothing new can have killed them.
         if body.frozen {
@@ -221,7 +291,7 @@ pub fn after_move(
             avatar.double_jumping = false;
         }
 
-        avatar.crouching = body.grounded && input.down && dir == 0.0;
+        avatar.crouching = body.grounded && input.down && dir == 0.0 && !avatar.sliding();
 
         // --- map bounds ---
         let max_x = level.pixel_width() - size.0.x;
@@ -288,10 +358,15 @@ fn respawn(
 ) {
     *avatar = Avatar::new();
     *body = Avatar::body(spawn);
-    *health = Health::new(Avatar::MAX_HEALTH);
+    *health = Health::new(Avatar::MAX_HEALTH, Health::PLAYER_IFRAMES);
     attacking.stop();
     pos.0 = spawn;
     vel.0 = Vec2::ZERO;
+}
+
+/// The definition of whatever attack is running, if one is.
+fn current_attack<'a>(attacking: &Attacking, attacks: &'a AttackTable) -> Option<&'a AttackDef> {
+    attacking.attack.as_deref().and_then(|id| attacks.get(id))
 }
 
 fn move_toward(current: f32, target: f32, max_delta: f32) -> f32 {
@@ -324,7 +399,10 @@ mod tests {
         dt: f32,
     ) {
         let mut events = Vec::new();
-        super::control(world, level, geometry, input, dt, &mut events);
+        let attacks = crate::assets::Assets::new()
+            .attacks()
+            .expect("assets/data/attacks.ron should load");
+        super::control(world, level, geometry, &attacks, input, dt, &mut events);
         crate::systems::body::move_bodies(world, geometry, dt);
         super::after_move(world, level, input, &mut events);
     }
@@ -346,7 +424,7 @@ mod tests {
         world.spawn((
             Avatar::new(),
             Avatar::body(pos),
-            Health::new(Avatar::MAX_HEALTH),
+            Health::new(Avatar::MAX_HEALTH, Health::PLAYER_IFRAMES),
             Attacking::default(),
             Position(pos),
             Velocity(Vec2::ZERO),
