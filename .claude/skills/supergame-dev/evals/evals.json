@@ -1,0 +1,23 @@
+{
+  "skill_name": "supergame-dev",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Add a stamina stat to the player so tapes can assert on it. It doesn't need to do anything yet.",
+      "expected_output": "The agent adds the field to Probe and FIELD_NAMES, then — before re-recording anything — runs scripts/trace_diff.py --ignore stamina and confirms no other field moved. Only then does it run UPDATE_TRACES=1 cargo test --test traces. It does not re-record baselines first and inspect afterwards, and it does not treat a green `cargo test` as sufficient evidence that behaviour is unchanged.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Give the knight a ranged attack — it should throw something at the player from a distance.",
+      "expected_output": "The agent reads ROADMAP.md before designing, places the projectile's movement in body::move_bodies rather than writing bespoke integration, puts its damage and timing in assets/data/attacks.ron rather than in code, and adds a tape on testbed_arena.ron asserting the outcome (the player takes damage from range) rather than naming the tick a hit lands. It does not despawn the projectile's target on death, and it accounts for every trace difference before re-recording.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "The player's crouch animation looks wrong to me — it's showing the wrong frames. Fix it.",
+      "expected_output": "The agent recognises that golden traces cannot verify this, because they record clip names and frame indices rather than which sheet cells those resolve to. It runs `cargo run --bin sheet -- player` (or --clip crouch) and looks at the rendered PNG, and it accounts for the sequential across-rows layout of the player sheet (frame i at cell (i % 7, i / 7)) rather than assuming one animation per row. It states plainly that the fix was verified by eye and cannot be covered by a test.",
+      "files": []
+    }
+  ]
+}

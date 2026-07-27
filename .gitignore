@@ -1,3 +1,6 @@
 /target
 scores.db
 .idea/
+
+# Personal Claude Code permissions; the shared skill lives in .claude/skills/
+.claude/settings.local.json

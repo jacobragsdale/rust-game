@@ -1,0 +1,34 @@
+[
+  {
+    "query": "Add a dash ability to the player — I want a quick burst forward on double-tap.",
+    "should_trigger": true
+  },
+  {
+    "query": "The knight should drop a coin when it dies, and the player should be able to pick it up.",
+    "should_trigger": true
+  },
+  {
+    "query": "Can you make the wall jump feel less floaty? It's too hard to chain them up the chimney.",
+    "should_trigger": true
+  },
+  {
+    "query": "Build the second level — a village with a couple of NPCs standing around.",
+    "should_trigger": true
+  },
+  {
+    "query": "What does resolve_move actually do with the two collision passes?",
+    "should_trigger": false
+  },
+  {
+    "query": "Commit what we have and push it.",
+    "should_trigger": false
+  },
+  {
+    "query": "Why does this Rust closure complain that it outlives the borrowed value?",
+    "should_trigger": false
+  },
+  {
+    "query": "Summarise what changed in the last three commits on this repo.",
+    "should_trigger": false
+  }
+]
