@@ -38,8 +38,8 @@ Stats({
         loot: [],
         // Two casts on a full pool, and the third has to be waited for.
         max_mana: 5,
-        // Thousandths of a point per tick: 12 is one point every 84 ticks, so
-        // an empty pool is full again in about seven seconds. Slow enough that
+        // Thousandths of a point per tick: 20 is one point every 50 ticks, so
+        // an empty pool is full again in about four seconds. Slow enough that
         // spells are a resource rather than a rotation, fast enough that a
         // fight is never decided by standing still.
         mana_regen: 20,

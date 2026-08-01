@@ -100,7 +100,8 @@ impl Rng {
         (self.next_u32() >> 8) as f32 * SCALE
     }
 
-    /// A float in `[lo, hi)`. Reversed bounds give `[hi, lo)`; an empty range
+    /// A float in `[lo, hi)`. Reversed bounds give `(hi, lo]` — the arithmetic
+    /// still works, but the open end swaps with the closed one. An empty range
     /// gives `lo`.
     pub fn range(&mut self, lo: f32, hi: f32) -> f32 {
         lo + (hi - lo) * self.next_f32()

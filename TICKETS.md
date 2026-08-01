@@ -1317,6 +1317,103 @@ the id is not finished.
 
 ---
 
+---
+
+# Open findings from the M3–M8 review
+
+An adversarial review of the whole M3–M8 build confirmed five defects, all now
+fixed: a debug-build panic reachable from spawn on `testbed_mover.ron`, two
+save/load desyncs (movers, hitstop) plus a third of the same shape (the interact
+prompt), a tape that passed with its own feature deleted, and `expect` subjects
+going unvalidated. What follows is everything it found that was **not** fixed,
+so none of it is lost. Nothing here is known to break the game today.
+
+## R-1 — `combat::resolve` trusts hecs query order where the order is observable
+
+**Severity:** latent. `src/systems/combat.rs`.
+
+`landed` is built from a raw `world.query()` for both attackers and targets. The
+comment claims collecting "fixes the order in which simultaneous hits resolve" —
+it fixes it to *archetype* order, which is the thing `Sim::npcs` exists to avoid
+relying on. Observable two ways: `Damaged` event order goes verbatim into every
+trace frame, and when two attackers reach one target on the same tick the first
+grants i-frames, so which knockback the victim takes depends on the order.
+
+Reversing `landed` in both `combat::resolve` and `spell::resolve_projectiles`
+leaves the full suite green with zero trace movement — so nothing in shipped
+content produces two simultaneous hits yet. The fix is a sort by entity id, the
+same as everywhere else. Cheap now; a real bug the first time two enemies swing
+together.
+
+## R-2 — `drop_loot`'s early `continue` makes the RNG draw count depend on components
+
+**Severity:** latent. `src/systems/inventory.rs`.
+
+`let Some(..) = drop_site(world, corpse) else { continue }` skips a corpse's
+rolls without marking `Loot.dropped`, so it retries next tick. `drop_site`
+returns `None` when the corpse has no `Stats`. That is exactly the "same seed
+produces different loot depending on which components happened to be present"
+failure the function's own doc comment says it rules out. Unreachable today,
+because every `Loot` carrier also carries `Stats`.
+
+## R-3 — save-scumming is a loot farm
+
+**Severity:** design question, not a bug. The RNG *position* survives a save;
+corpses and `Loot.dropped` do not. Kill, loot, save, load: the knight is alive
+and lootable again, rolling from the next stream position. Consistent with the
+documented "the world comes back at the map's spawn state" decision, but
+unacknowledged anywhere. Decide whether it is acceptable and write it down.
+
+## R-4 — two tapes pin a tick for a two-entity interaction
+
+**Severity:** brittleness. The skill file forbids this exactly because hit timing
+falls out of knockback, chase speed, i-frames, cooldown and hitstop at once.
+
+- `tapes/plunge.tape` — `expect knight.damaged >= 1` sits one tick into the
+  drop, with a 5.8px horizontal margin after 148 ticks of chase. The `assert
+  knight.0.hp <= 4` a few lines earlier already makes the same claim without the
+  pin.
+- `tapes/knight_fights.tape` — `wait 200 / assert hp == 5` asserts the knight has
+  *not yet arrived*, which pins chase speed and spawn distance.
+
+Bumping knight `run_speed` 55 → 58 (+5.5%) breaks four tapes. Some of that is
+inherent to scripted combat; worth knowing before the next balance pass.
+
+## R-5 — no tape covers save/load
+
+`tests/save.rs` is thorough, but the skill's own checklist item ("a tape covers
+the new behaviour") is unmet for M6's persistence. Defensible — a tape cannot
+express "write a file, reload, continue" — but the two save bugs the review
+found lived precisely in that gap. Consider a tape directive that saves and
+reloads mid-run.
+
+## R-6 — smaller items
+
+- `tests/assets.rs` checks clip sets for `player` and `knight` only; the list is
+  hand-written and did not grow when `villager` shipped. A missing
+  `PATROL_CLIPS` entry would surface as a `check_invariants` panic the first
+  time a villager falls or dies, rather than as a test failure.
+- `mover::advance`'s `sort_by_key(|m| m.id)` is the one ordering guard with no
+  test — removing it leaves the suite green. Unreachable until a map has two
+  adjacent platforms.
+- `Rng::range` and `Rng::pick` have zero production call sites; the only draw in
+  the game is `chance` in `drop_loot`. The golden vector pins `next_u64` only, so
+  changing `next_f32`'s shift would pass every test in the file while changing
+  every loot roll.
+- H-3b's acceptance criterion ("no gameplay constant remains anywhere in
+  `src/ecs/`") is marked done and is now false: `spawn::PICKUP_SIZE` is the box
+  that decides whether you walk over an item. The doc comments argue it is shape
+  rather than balance, which is reasonable — but the criterion was never revised,
+  so a later reader gets a false statement. Same for `FIRE_SIZE`, `BALL_RADIUS`,
+  `RIDE_TOLERANCE`, `HITSTOP_TICKS`.
+- All five item `sprite:` fields point at art that does not exist;
+  `assets/graphics/items/` is not a directory. Deliberate (I-2 allows
+  placeholders) but nothing checks the field, so a real typo would be invisible.
+- `tests/data.rs`'s `read_dir` guard returns silently without a `skipping()`
+  line — the one guard in the file that breaks the file's own rule.
+
+---
+
 # Sequencing summary
 
 | Wave | Tickets | Why they can run together |
