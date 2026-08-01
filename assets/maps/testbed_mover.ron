@@ -7,24 +7,42 @@
 // A new file rather than an addition to testbed_platform.ron, which is frozen —
 // its tapes encode its exact pixels. Treat this one as a fixture too.
 //
-// Legend: '#' solid  '^' spikes  'P' spawn.  Moving platforms have no grid
-// character: a character can say where something is but not where it goes, so
-// they are authored as `Platform(...)` entries below.
+// Legend: '#' solid  '=' one-way platform  '^' spikes  'P' spawn.  Moving
+// platforms have no grid character: a character can say where something is but
+// not where it goes, so they are authored as `Platform(...)` entries below.
 //
 // 24x12 tiles at 32px = 768x384 world pixels.
 //
 //   spawn        col 2, row 7      world (70, 222), feet on the ledge at y=256
 //   left ledge   cols 0-4          surface y=256, x 0..160
 //   right ledge  cols 19-23        surface y=256, x 608..768
-//   pit          cols 5-18         spikes at y 336..352, x 160..608
-//   platform     3 tiles solid, top y=256 — level with both ledges, so it is
-//                walked onto and off rather than jumped between.
-//                from (5, 8) = x 160, docked against the left ledge
-//                to   (16, 8) = x 512, right edge 608, flush with the right
-//                88 px/s over 352px = 240 ticks a leg, 480 ticks a round trip.
-//                phase 420 puts it back at the left ledge on tick 60, which is
-//                after the player has walked to the edge and stopped — the
+//   gangways     col 5 and col 18, row 8 — one-way plank, surface y=256
+//   pit          cols 5-18         spikes at y 336..352, x 160..608 — the
+//                gangways hang over its two ends
+//   platform     3 tiles solid, top y=256 — level with both ledges and both
+//                gangways, so it is walked onto and off rather than jumped
+//                between.
+//                from (6, 8) = x 192, a tile clear of the left ledge
+//                to   (15, 8) = x 480, right edge 576, a tile clear of the
+//                right one.
+//                72 px/s over 288px = 240 ticks a leg, 480 ticks a round trip.
+//                phase 420 puts it back at the left gangway on tick 60, which
+//                is after the player has walked to the edge and stopped — the
 //                whole point being that the ride is boarded, not jumped onto.
+//
+// ## Why the ferry stops a tile short, and why a plank fills the gap
+//
+// It used to dock flush against the ledge at x=160, and that was a crush: walk
+// off the ledge as it comes home and it shuts on you against the ledge face,
+// with nowhere legal for the physics to put a 20px body. A platform is only
+// ever safe against a wall if it is *always* flush with it or *never* closer
+// than a body — see the clearance rule in `tests/levels.rs`.
+//
+// So the path stops a tile short at both ends, and the last 32px is a one-way
+// plank. A plank is a floor without a wall: the walk-on ride survives, and
+// there is nothing there for the ferry to pin the player against. Falling into
+// that 32px slot is the pit doing its job, not a crush — 32px holds a 20px
+// player with room to spare.
 Level(
     tileset: "castle",
     grid: [
@@ -36,12 +54,12 @@ Level(
         "#......................#",
         "#......................#",
         "#.P....................#",
-        "#####..............#####",
+        "#####=............=#####",
         "#####..............#####",
         "#####^^^^^^^^^^^^^^#####",
         "########################",
     ],
     entities: [
-        Platform(from: (5, 8), to: (16, 8), tiles: 3, speed: 88.0, phase: 420),
+        Platform(from: (6, 8), to: (15, 8), tiles: 3, speed: 72.0, phase: 420),
     ],
 )

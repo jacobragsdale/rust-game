@@ -194,25 +194,81 @@ pub enum GameEvent {
     },
 }
 
-/// Events carrying a discriminating name that `expect` can filter on:
-/// `knight.damaged`, `player_slash3.attacked`, `shock.spell_cast`.
-const SUBJECT_EVENTS: &[&str] = &[
-    "died",
-    "damaged",
-    "attacked",
-    "spell_cast",
-    "cast_failed",
-    "mode_changed",
-    "picked_up",
-    "inventory_full",
-    "item_used",
-    "equipped",
-    "unequipped",
-    "interact_prompted",
-    "interacted",
-    "dialogue_opened",
-    "choice_taken",
-    "dialogue_closed",
+/// Where a subject's name has to come from, so that a mistyped one is a
+/// rejected tape rather than a count of zero.
+///
+/// Every one of these is a *content* namespace: a subject is an id some RON
+/// file defines, or a mode. That is what makes `expect no shcok.spell_cast`
+/// checkable at all — the set of things it could have meant is finite and
+/// loaded, so the tape parser can say which of them was probably meant. See
+/// [`crate::sim::tape`], which resolves each of these against the shipped
+/// tables.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Subject {
+    /// An entity kind from `assets/data/stats.ron`: `player`, `knight`.
+    Kind,
+    /// An attack id from `assets/data/attacks.ron`.
+    Attack,
+    /// A spell id from `assets/data/spells.ron`.
+    Spell,
+    /// An item id from `assets/data/items/`.
+    Item,
+    /// A [`Mode`], spelled the way [`Mode::name`] spells it.
+    Mode,
+    /// A dialogue graph id from `assets/data/dialogue/`.
+    Graph,
+    /// A node id inside some dialogue graph.
+    Node,
+}
+
+impl Subject {
+    /// What to call this in an error message, as "`x` is not ...".
+    pub fn label(self) -> &'static str {
+        match self {
+            Subject::Kind => "an entity kind (assets/data/stats.ron)",
+            Subject::Attack => "an attack id (assets/data/attacks.ron)",
+            Subject::Spell => "a spell id (assets/data/spells.ron)",
+            Subject::Item => "an item id (assets/data/items/)",
+            Subject::Mode => "a mode",
+            Subject::Graph => "a dialogue graph id (assets/data/dialogue/)",
+            Subject::Node => "a dialogue node id (assets/data/dialogue/)",
+        }
+    }
+}
+
+/// Every mode, by the name a tape addresses it with.
+///
+/// Hand-written for the reason `every_variant` in this file's tests is: stable
+/// Rust cannot enumerate an enum. `mode_list_is_exhaustive` below is the
+/// guard — it matches on `Mode` exhaustively, so adding a variant stops this
+/// file compiling until the variant is added here too.
+pub const MODES: &[Mode] = &[Mode::Playing, Mode::Inventory, Mode::Dialogue];
+
+/// Events carrying a discriminating name that `expect` can filter on, and
+/// where that name has to come from: `knight.damaged` is a kind,
+/// `player_slash3.attacked` an attack id, `shock.spell_cast` a spell id.
+///
+/// `interact_prompted` and `interacted` say `Graph` because what an
+/// interactable offers today is a conversation and nothing else. The day a
+/// door or a chest is interactable, that is the line to widen — and a tape
+/// naming one will be rejected here until it is, which is the point.
+const SUBJECT_EVENTS: &[(&str, Subject)] = &[
+    ("died", Subject::Kind),
+    ("damaged", Subject::Kind),
+    ("attacked", Subject::Attack),
+    ("spell_cast", Subject::Spell),
+    ("cast_failed", Subject::Spell),
+    ("mode_changed", Subject::Mode),
+    ("picked_up", Subject::Item),
+    ("inventory_full", Subject::Item),
+    ("item_used", Subject::Item),
+    ("equipped", Subject::Item),
+    ("unequipped", Subject::Item),
+    ("interact_prompted", Subject::Graph),
+    ("interacted", Subject::Graph),
+    ("dialogue_opened", Subject::Graph),
+    ("choice_taken", Subject::Node),
+    ("dialogue_closed", Subject::Graph),
 ];
 
 impl GameEvent {
@@ -247,11 +303,24 @@ impl GameEvent {
 
     /// Whether `expect <subject>.<name>` is meaningful for this event name.
     pub fn has_subject(name: &str) -> bool {
-        SUBJECT_EVENTS.contains(&name)
+        GameEvent::subject_kind(name).is_some()
+    }
+
+    /// What a subject of this event has to be a name *of*, or `None` for an
+    /// event that records nobody.
+    pub fn subject_kind(name: &str) -> Option<Subject> {
+        SUBJECT_EVENTS
+            .iter()
+            .find(|(event, _)| *event == name)
+            .map(|(_, kind)| *kind)
     }
 
     pub fn subject_names() -> String {
-        SUBJECT_EVENTS.join(", ")
+        SUBJECT_EVENTS
+            .iter()
+            .map(|(event, _)| *event)
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     /// The name a tape refers to this event by.
@@ -477,6 +546,36 @@ mod tests {
         assert_eq!(counts.count_for("knight", "damaged"), 2);
         assert_eq!(counts.count_for("player", "damaged"), 1);
         assert_eq!(counts.count_for("goblin", "damaged"), 0);
+    }
+
+    /// [`MODES`] has to be every mode, because it is the whole of what
+    /// `expect <mode>.mode_changed` will accept. The match is what enforces
+    /// it: a new variant fails to compile here, and the fix is one line in
+    /// each place.
+    #[test]
+    fn mode_list_is_exhaustive() {
+        fn index(mode: Mode) -> usize {
+            match mode {
+                Mode::Playing => 0,
+                Mode::Inventory => 1,
+                Mode::Dialogue => 2,
+            }
+        }
+        let indices: Vec<usize> = MODES.iter().copied().map(index).collect();
+        assert_eq!(indices, (0..MODES.len()).collect::<Vec<_>>());
+    }
+
+    /// Every event that records a subject has to say what kind of name that
+    /// subject is, or the tape parser cannot check it against anything.
+    #[test]
+    fn every_subject_event_names_a_namespace() {
+        for event in every_variant().iter().filter(|e| e.subject().is_some()) {
+            assert!(
+                GameEvent::subject_kind(event.kind()).is_some(),
+                "`{}` records a subject but does not say what it is a name of",
+                event.kind()
+            );
+        }
     }
 
     #[test]

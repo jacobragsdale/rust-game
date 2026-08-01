@@ -16,6 +16,10 @@ map maps/dungeon.ron
 #   rubble       x 576..608, 928..960 (knight 0's pen) and 1664..1696
 #   knight 0     spawns x=741, penned in an open room on the player's floor
 #   pit          x 1088..1472, spiked; the platform is the only way over
+#   gangways     one-way plank, x 1088..1120 and 1440..1472, surface y=320 —
+#                the clearance the ferry has to leave at each end, walked over
+#   ferry        x 1120..1216 at the near end, 1344..1440 at the far one,
+#                surface y=320, 179 ticks a leg
 #   landing      x 1472..2080, surface y=320
 #   stair        one-way, x 1536..1664, surface y=256
 #   gallery      one-way, x 1664..2144, surface y=192 — 128px over the hall
@@ -121,22 +125,28 @@ assert y == 286
 assert x > 1000
 assert x < 1068
 
-# Aboard as it docks, then ride with no input at all: everything moving the
-# player is under their feet, which is what `vx == 0` at the far end says.
-right 26
+# Over the plank gangway (x 1088..1120) and aboard as the ferry docks against
+# its far end, then ride with no input at all: everything moving the player is
+# under their feet, which is what `vx == 0` out over the pit says. `x > 1120`
+# is past the gangway entirely — on the ferry, not on the map.
+right 36
 assert grounded
 assert y == 286
-assert x > 1088
+assert x > 1120
 
-wait 148
+# The outbound leg ends at tick 979; this stops a little short of it, so the
+# walk off starts while the ferry's leading edge is still closing on the far
+# gangway rather than receding from it — step off late and the widening gap is
+# a fall into the spikes, which is the ride being a ride.
+wait 124
 assert grounded
 assert y == 286
 assert vx == 0
 assert x > 1300
 expect no player.died
 
-# Off onto the far landing.
-right 40
+# Off across the far gangway (x 1440..1472) onto the landing.
+right 54
 assert grounded
 assert y == 286
 assert x > 1472

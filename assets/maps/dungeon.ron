@@ -19,7 +19,9 @@
 //   rubble       col 18 and col 29, row 9 — one-tile steps
 //   knight 0     col 23, row 9    penned between the two rubble steps
 //   pit          cols 34-45, spikes on row 11 — x 1088..1472, 384px
-//   platform     3 tiles solid, top y=320, level with both lips
+//   gangways     col 34 and col 45, row 10 — one-way plank, surface y=320
+//   platform     3 tiles solid, top y=320, level with both lips and both
+//                gangways
 //   landing      cols 46-51
 //   stair        cols 48-51, row 8, one-way — surface y=256, its right
 //                edge flush under the gallery's left one
@@ -49,10 +51,16 @@
 //
 // 384px is not jumpable. A standing jump carries about 148px and a jump plus
 // the air jump about 283px, so the platform is the only way over and the
-// spikes are what happens if you disagree. The path is level with both lips
-// so the ride is walked onto and off rather than leapt between, and its ends
-// are flush with them (x 1088 and, at the far end, a right edge of 1472) so
-// there is no lip to clip.
+// spikes are what happens if you disagree. The path is level with both lips so
+// the ride is walked onto and off rather than leapt between.
+//
+// It does **not** dock flush against them. A platform that comes all the way
+// to a wall shuts on anything standing in front of it, with nowhere legal for
+// the physics to put a body — the clearance rule in `tests/levels.rs` has the
+// argument, and this map used to break it at both ends. So the path stops a
+// tile short each way (x 1120, and a right edge of 1440) and the last 32px is
+// a one-way plank: a floor without a wall, which carries the walk-on ride
+// across the clearance without giving the ferry anything to pin you against.
 //
 // ## Why the second knight is a different problem from the first
 //
@@ -105,7 +113,7 @@ Level(
         "#..................................................................#",
         "#...............................................====...............#",
         "#.P.......F.......#....K.....#......................#....K.........#",
-        "##################################............###################..#",
+        "##################################=..........=###################..#",
         "##################################^^^^^^^^^^^^######################",
         "####################################################################",
     ],
@@ -114,12 +122,13 @@ Level(
         // pair are never out at the same time and the corridor has a rhythm
         // rather than a gap.
         Fire(cell: (13, 9), phase: 60),
-        // The ferry. 288px of travel at 96 px/s is exactly 180 ticks a leg and
-        // 360 a round trip, which is slow enough to watch and decide on. The
-        // phase puts it back against the near lip on ticks 80, 440, 800, …;
-        // 800 is a few ticks after a player who has fought knight 0 and walked
-        // over arrives, so the ride is waited for and then boarded rather than
-        // jumped at.
-        Platform(from: (34, 10), to: (43, 10), tiles: 3, speed: 96.0, phase: 280),
+        // The ferry. A tile of clearance at each end leaves 224px of travel;
+        // at 75 px/s that is 179 ticks a leg and 358 a round trip, so the
+        // crossing still takes the three seconds the level was tuned around.
+        // The phase puts it back against the near gangway on ticks 442, 800,
+        // 1158, …; 800 is a few ticks after a player who has fought knight 0
+        // and walked over arrives, so the ride is waited for and then boarded
+        // rather than jumped at.
+        Platform(from: (35, 10), to: (42, 10), tiles: 3, speed: 75.0, phase: 274),
     ],
 )

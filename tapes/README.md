@@ -346,6 +346,18 @@ counts every hit on anything, which is rarely what you mean now that both sides
 bleed — and a bare `expect no died` counts the knight's death as well as yours,
 so what you almost always want is `expect no player.died`.
 
+**A subject has to be a name something actually has.** Every one is an id out
+of a content table — a kind from `stats.ron`, an attack from `attacks.ron`, a
+spell from `spells.ron`, an item from `items/`, a dialogue graph or node, or a
+mode — and the parser checks it against that table and names the alternatives
+when it does not resolve. This is not tidiness. A count for a subject nobody
+has is 0, and 0 is what `expect no ...` wants, so `expect no shcok.spell_cast`
+used to pass while shock was cast four times, and `expect no
+player_plunj.attacked` — one letter off the line `spell_kill.tape` proves the
+kill came from the spell and not the sword with — used to prove nothing at all,
+for ever, silently. Getting the *wrong* table is caught too: `greet` is a node
+and `elder_intro` is a graph, and swapping them counts zero just as quietly.
+
 **`inventory_full` is the pickup's `cast_failed`.** An item you have no room
 for stays on the floor and leaves nothing in any state field, so without the
 event "the pickup is broken" and "your bag is full" are the same absence. It
@@ -414,6 +426,17 @@ line. The platform's path is level with both ledges, so the crossing is walked
 onto and off rather than jumped between — which is what lets the tape assert
 `expect no jumped` and `expect landed == 1` and thereby claim that contact
 never flickered off, not even for a tick, while the ground was moving.
+
+The **32px of clearance at each end of that path, bridged by a one-way plank**,
+is the one part of the map that is not about the ride. A platform that docks
+flush against a wall shuts on anything standing in front of it, and the physics
+has nowhere legal to put a body pinned between an advancing solid and an
+immovable one; both this map and `dungeon.ron` used to do exactly that at both
+ends, and walking off the ledge as the ferry came home put the player inside
+the ledge. The rule is now enforced in `tests/levels.rs`: a gap between a
+platform and the level must be *always* zero or *always* at least a player
+wide, never something in between. A plank is what keeps the walk-on ride
+through the clearance, being a floor without a wall.
 
 `testbed_swing.ron` is the one fixture whose tape is genuinely *timed*. The
 ball is only at body height near the bottom of its arc, so the room has a
