@@ -10,7 +10,9 @@
 use ggez::glam::Vec2;
 
 use supergame::ecs::components::Avatar;
-use supergame::physics::{resolve_move, touching_wall, Aabb, Geometry, SolidQuery, SolidRect};
+use supergame::physics::{
+    resolve_move, touching_wall, Aabb, Geometry, HazardQuery, SolidQuery, SolidRect,
+};
 use supergame::sim::TICK;
 
 const SIZE: Vec2 = Vec2::new(Avatar::WIDTH, Avatar::HEIGHT);
@@ -659,4 +661,101 @@ fn landing_across_a_seam_between_two_floor_rects_is_stable() {
     assert!(landed, "failed to land while straddling a seam");
     assert_eq!(pos.y, 400.0 - SIZE.y);
     assert_eq!(pos.x, 22.0, "landing must not shove the body sideways");
+}
+
+// ---------------------------------------------------------------------------
+// 9. Hazards
+// ---------------------------------------------------------------------------
+
+/// Lethal boxes scattered through the sweep area, of the shape a fire owns:
+/// one hanging in mid-air, one on the floor, one straddling a wall.
+fn test_hazards() -> Vec<Aabb> {
+    vec![
+        Aabb::new(102.0, 366.0, 20.0, 26.0),
+        Aabb::new(230.0, 300.0, 20.0, 26.0),
+        Aabb::new(280.0, 366.0, 60.0, 26.0),
+    ]
+}
+
+/// A hazard kills; it does not obstruct. Adding hazards to a world — the
+/// level's own or an entity's, however many, wherever — must not move a body
+/// by a single bit, or fire is a wall that you happen to die on.
+///
+/// This is the property that makes it safe for `avatar::after_move` to read
+/// hazards out of the same `Geometry` resolution walks: the two halves cannot
+/// leak into each other, so unifying them costs nothing.
+#[test]
+fn hazards_never_change_a_resolution() {
+    let solids = test_geometry();
+    let plain = Geometry::from_rects(solids.clone());
+
+    let full: Vec<Aabb> = solids
+        .iter()
+        .filter(|s| !s.one_way)
+        .map(|s| s.rect)
+        .collect();
+    let one_way: Vec<Aabb> = solids
+        .iter()
+        .filter(|s| s.one_way)
+        .map(|s| s.rect)
+        .collect();
+    let mut with_hazards = Geometry::from_level(&full, &one_way, &test_hazards());
+    // ...and a second set on top, the way a lit fire arrives.
+    with_hazards.set_entity_hazards(test_hazards().into_iter().map(|mut hazard| {
+        hazard.x += 8.0;
+        hazard
+    }));
+
+    let mut rng = Lcg::new();
+    let mut divergent = Vec::new();
+
+    for _ in 0..40_000 {
+        let pos = Vec2::new(rng.f32_in(-40.0, 360.0), rng.f32_in(160.0, 440.0));
+        let vel = Vec2::new(rng.f32_in(-900.0, 900.0), rng.f32_in(-900.0, 900.0));
+
+        let (mut pos_a, mut vel_a) = (pos, vel);
+        step(&mut pos_a, &mut vel_a, &plain);
+        let (mut pos_b, mut vel_b) = (pos, vel);
+        step(&mut pos_b, &mut vel_b, &with_hazards);
+
+        if pos_a != pos_b || vel_a != vel_b {
+            divergent.push(format!(
+                "from {pos:?} vel {vel:?}: {pos_a:?}/{vel_a:?} vs {pos_b:?}/{vel_b:?}"
+            ));
+        }
+    }
+
+    assert!(
+        divergent.is_empty(),
+        "{} resolutions were changed by hazards, e.g.:\n  {}",
+        divergent.len(),
+        divergent
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+}
+
+/// The hazard query has to answer exactly what a scan over the same boxes
+/// would, wherever they came from. Half the set is the level's here and half
+/// is entity-owned, because the death check must not be able to tell which is
+/// which — that is the whole of "a spike and a lit fire kill the same way".
+#[test]
+fn a_hazard_query_matches_a_scan_over_both_halves() {
+    let all = test_hazards();
+    let mut geometry = Geometry::from_level(&[], &[], &all[..1]);
+    geometry.set_entity_hazards(all[1..].to_vec());
+
+    let mut rng = Lcg::new();
+    for _ in 0..40_000 {
+        let pos = Vec2::new(rng.f32_in(-40.0, 400.0), rng.f32_in(160.0, 440.0));
+        let body = Aabb::new(pos.x, pos.y, SIZE.x, SIZE.y);
+        assert_eq!(
+            geometry.hazard_overlapping(body),
+            all.iter().any(|hazard| body.overlaps(hazard)),
+            "hazard query disagreed with a scan at {pos:?}"
+        );
+    }
 }

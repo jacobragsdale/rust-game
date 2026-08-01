@@ -144,7 +144,7 @@ impl Sim {
         attacks: Arc<AttackTable>,
         seed: u64,
     ) -> Self {
-        let geometry = Geometry::from_level(&level.solids, &level.one_way);
+        let geometry = Geometry::from_level(&level.solids, &level.one_way, &level.hazards);
 
         let clips_for = |kind: &str| -> Arc<ClipSet> {
             clip_sets
@@ -169,6 +169,9 @@ impl Sim {
             )
             .expect("level entities were validated on load");
         }
+        // Fires last, so adding one to a map cannot renumber the NPCs that
+        // tapes and traces address by spawn index.
+        crate::systems::hazard::spawn_fires(&mut world, &level);
 
         let mut sim = Sim {
             world,
@@ -210,9 +213,15 @@ impl Sim {
     /// after every controller has decided and before anything has moved. A
     /// system that owns a collider — a fire on a cycle, a moving platform —
     /// therefore belongs in the decide phase, and its collider is picked up
-    /// the same tick. Everything from that line to the end of movement sees
-    /// one unchanging world; `avatar::control` and `npc::think` probe the
-    /// geometry as it stood when they ran, which is the previous rebuild.
+    /// the same tick; [`crate::systems::hazard::tick_schedules`] is the first
+    /// of those. Everything from that line to the end of movement sees one
+    /// unchanging world; `avatar::control` and `npc::think` probe the geometry
+    /// as it stood when they ran, which is the previous rebuild.
+    ///
+    /// The rebuild covers hazards as well as solids, which is why
+    /// `avatar::after_move` is handed the geometry rather than the level: a
+    /// spike and a lit fire are one set of boxes by the time anything dies to
+    /// either.
     pub fn step(&mut self, input: PlayerInput) {
         self.events.clear();
 
@@ -230,6 +239,10 @@ impl Sim {
         combat::tick_timers(&mut self.world);
         combat::advance_attacks(&mut self.world, &self.attacks, &mut self.events);
 
+        // Geometry that owns itself decides here, with the controllers: a fire
+        // lights or goes out, and the rebuild below picks it up this tick.
+        crate::systems::hazard::tick_schedules(&mut self.world, self.tick);
+
         avatar::control(
             &mut self.world,
             &self.level,
@@ -244,7 +257,13 @@ impl Sim {
         // The one point in the tick where the world's geometry changes.
         body::rebuild_geometry(&mut self.geometry, &self.world);
         body::move_bodies(&mut self.world, &self.geometry, TICK);
-        avatar::after_move(&mut self.world, &self.level, input, &mut self.events);
+        avatar::after_move(
+            &mut self.world,
+            &self.level,
+            &self.geometry,
+            input,
+            &mut self.events,
+        );
 
         // Hitboxes are tested once everything has finished moving, so a swing
         // connects where the bodies actually ended the tick.

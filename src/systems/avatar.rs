@@ -21,7 +21,7 @@ use hecs::World;
 use crate::assets::{AttackDef, AttackTable};
 use crate::ecs::components::{Attacking, Avatar, Body, Health, Position, Size, Velocity};
 use crate::level::LevelData;
-use crate::physics::{self, Aabb, SolidQuery};
+use crate::physics::{self, Aabb, HazardQuery, SolidQuery};
 use crate::sim::event::{DeathCause, GameEvent};
 use crate::systems::input::PlayerInput;
 
@@ -256,9 +256,15 @@ pub fn control<Q: SolidQuery + ?Sized>(
 /// Takes the same input as [`control`] because a couple of decisions depend on
 /// both what was pressed and where the body finished — crouching needs to know
 /// the player is holding down *and* is now standing on something.
-pub fn after_move(
+///
+/// `hazards` is the world's lethal geometry, not the level's. Spikes are cut
+/// into the map and a fire is an entity that owns a collider for as long as it
+/// is lit, and neither this function nor the death it emits can tell which is
+/// which — which is the point.
+pub fn after_move<H: HazardQuery + ?Sized>(
     world: &mut World,
     level: &LevelData,
+    hazards: &H,
     input: PlayerInput,
     events: &mut Vec<GameEvent>,
 ) {
@@ -310,16 +316,16 @@ pub fn after_move(
         // is carrying; being cut down runs out of health first, and combat has
         // already emitted the `Died` for it by the time this sees it.
         let hitbox = Aabb::new(pos.0.x, pos.0.y, size.0.x, size.0.y);
-        let spiked = level.hazards.iter().any(|h| hitbox.overlaps(h));
+        let burned = hazards.hazard_overlapping(hitbox);
         let fell_out = pos.0.y > level.pixel_height() + 100.0;
 
-        if spiked || fell_out {
+        if burned || fell_out {
             avatar.dead_ticks = Avatar::DEATH_TICKS;
             health.current = 0;
             vel.0 = Vec2::ZERO;
             events.push(GameEvent::Died {
                 who: "player".to_string(),
-                cause: if spiked {
+                cause: if burned {
                     DeathCause::Hazard
                 } else {
                     DeathCause::FellOutOfWorld
@@ -406,7 +412,7 @@ mod tests {
             .expect("assets/data/attacks.ron should load");
         super::control(world, level, geometry, &attacks, input, dt, &mut events);
         crate::systems::body::move_bodies(world, geometry, dt);
-        super::after_move(world, level, input, &mut events);
+        super::after_move(world, level, level.hazards.as_slice(), input, &mut events);
     }
 
     fn test_level() -> LevelData {

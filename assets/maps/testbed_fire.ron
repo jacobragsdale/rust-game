@@ -1,0 +1,39 @@
+// Fire testbed — the map tapes/fire_timing.tape runs against.
+//
+// A flat corridor with two fires on it, so a tape can walk the whole feature:
+// cross one while it is out, then stand in the other and wait for it to light.
+// Like every testbed, treat it as a fixture — the tape encodes exact pixels.
+//
+// Legend: '#' solid  'F' fire (default cycle)  'P' spawn
+//
+// 32x12 tiles at 32px = 1024x384 world pixels. Floor surface at y=352.
+//
+//   spawn        col 2,  row 10   world (70, 318), feet on the floor
+//   fire A       col 11, row 10   world box x 358..378, y 326..352
+//                grid-placed, so the default cycle: lit ticks 0-59 of every
+//                120, out 60-119. The tape crosses it during the first gap.
+//   fire B       col 30, row 10   world box x 966..986, y 326..352
+//                authored with phase 60, so it is the exact opposite of A —
+//                the pair alternate, which is what `phase` is for. It sits in
+//                the last open cell, so running right parks the player inside
+//                it against the wall with no timing to get right.
+Level(
+    tileset: "castle",
+    grid: [
+        "################################",
+        "#..............................#",
+        "#..............................#",
+        "#..............................#",
+        "#..............................#",
+        "#..............................#",
+        "#..............................#",
+        "#..............................#",
+        "#..............................#",
+        "#..............................#",
+        "#.P........F...................#",
+        "################################",
+    ],
+    entities: [
+        Fire(cell: (30, 10), period: 120, duty: 60, phase: 60),
+    ],
+)

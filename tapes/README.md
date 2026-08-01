@@ -195,6 +195,7 @@ do not move what is already there.
 | `testbed_chimney.ron` | wall slide, wall jump, wall-contact grace |
 | `testbed_knight.ron` | patrolling: a knight on a ledge, with the player on a shelf below and out of its sight |
 | `testbed_arena.ron` | fighting: a small walled room with a knight and nowhere to run |
+| `testbed_fire.ron` | fire: two alternating fires on a flat corridor, one to cross while it is out and one to stand in until it lights |
 
 `testbed_knight.ron` keeps the player two tiles below the knight's ledge on
 purpose. Once the knight became hostile, a player standing on the same ledge

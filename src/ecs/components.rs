@@ -81,13 +81,22 @@ impl Collider {
     /// that does not stop anything.
     ///
     /// Hazards are geometry but not obstruction: you walk into fire, you do
-    /// not bump into it. Wiring them into a hazard query is L-2's job; until
-    /// then they simply contribute nothing to collision.
+    /// not bump into it. They contribute nothing here and everything to
+    /// [`Collider::hazard_rect`], which is the other half of the same split.
     pub fn solid_rect(&self, pos: Vec2) -> Option<SolidRect> {
         match self.kind {
             ColliderKind::Solid => Some(SolidRect::solid(self.aabb(pos))),
             ColliderKind::OneWay => Some(SolidRect::one_way(self.aabb(pos))),
             ColliderKind::Hazard => None,
+        }
+    }
+
+    /// The box as something that kills on contact, or `None` for a kind that
+    /// is merely in the way.
+    pub fn hazard_rect(&self, pos: Vec2) -> Option<Aabb> {
+        match self.kind {
+            ColliderKind::Hazard => Some(self.aabb(pos)),
+            ColliderKind::Solid | ColliderKind::OneWay => None,
         }
     }
 }
@@ -541,4 +550,61 @@ impl AnimationState {
             self.elapsed = 0.0;
         }
     }
+}
+
+/// A duty cycle measured in ticks: `duty` ticks on out of every `period`,
+/// shifted by `phase`.
+///
+/// Evaluated as a closed-form function of `Sim::tick` rather than counted
+/// down, for the reason L-4's pendulum will be: a counter is state, and state
+/// drifts. A tick the world skips — hitstop skips several — would slide a
+/// counting fire permanently out of step with a second one, while
+/// [`Schedule::on_at`] gives the same answer for tick *t* forever, and gives
+/// it without having been stepped at all.
+///
+/// Two schedules with the same `period` and different `phase` are the
+/// authored way to make hazards alternate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Schedule {
+    /// Length of one full cycle, in ticks.
+    pub period: u32,
+    /// How much of that cycle is spent on.
+    pub duty: u32,
+    /// Ticks to shift the cycle by, so two of these can take turns.
+    pub phase: u32,
+}
+
+impl Schedule {
+    pub fn new(period: u32, duty: u32, phase: u32) -> Self {
+        Schedule {
+            period,
+            duty,
+            phase,
+        }
+    }
+
+    /// Is this on at `tick`?
+    ///
+    /// A zero `period` is a schedule that never turns over: on forever if it
+    /// has any duty at all, off forever otherwise. That is a degenerate map
+    /// rather than a crash — a fire authored `period: 0` is a permanent one.
+    pub fn on_at(&self, tick: u64) -> bool {
+        if self.period == 0 {
+            return self.duty > 0;
+        }
+        (tick + self.phase as u64) % (self.period as u64) < self.duty as u64
+    }
+}
+
+/// A hazard that lights and goes out on a [`Schedule`].
+///
+/// While it is lit the entity carries the [`Collider`] below and
+/// `body::rebuild_geometry` picks it up like any other entity-owned geometry;
+/// while it is out the entity has no collider at all. The collider's
+/// *presence* is the lit state — there is no second flag that could disagree
+/// with the geometry, which is the failure mode a `lit: bool` invites.
+#[derive(Clone, Copy, Debug)]
+pub struct Fire {
+    /// The box it presents while lit, relative to its `Position`.
+    pub collider: Collider,
 }
