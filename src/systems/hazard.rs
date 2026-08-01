@@ -121,7 +121,6 @@ pub fn is_lit(world: &World, entity: hecs::Entity) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::components::Avatar;
     use crate::physics::{Aabb, HazardQuery};
     use crate::sim::event::{DeathCause, GameEvent};
     use crate::sim::Sim;
@@ -275,6 +274,10 @@ mod tests {
 
     fn player_box(sim: &Sim) -> Aabb {
         let probe = sim.probe();
-        Aabb::new(probe.x, probe.y, Avatar::WIDTH, Avatar::HEIGHT)
+        let size = crate::assets::StatTable::shipped()
+            .get("player")
+            .expect("`player` has a stat block")
+            .size();
+        Aabb::new(probe.x, probe.y, size.x, size.y)
     }
 }

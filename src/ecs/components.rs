@@ -186,6 +186,12 @@ impl Body {
 /// body is, how fast it is going, and whether it is on the ground belong to
 /// [`Body`], which anything else in the world can have too. How fast it runs
 /// and how high it jumps belong to [`Stats`], which is data.
+///
+/// There are no numbers in this file at all. Every one of them lives in
+/// `assets/data/stats.ron` (tickets H-3 and H-3b) — including the player's
+/// collider box, which the level loaders need before any entity exists and now
+/// read from that table via [`crate::level::LevelData::load`] rather than from
+/// a `const` mirror of it kept true by hand.
 #[derive(Clone, Debug)]
 pub struct Avatar {
     pub facing_right: bool,
@@ -214,25 +220,6 @@ pub struct Avatar {
 }
 
 impl Avatar {
-    // --- the last two numbers still in code, and why -----------------------
-    //
-    // Every gameplay constant moved to `assets/data/stats.ron` (ticket H-3),
-    // read through [`Stats`]. These two could not: the level loaders
-    // (`level::ascii`, `level::tiled`) resolve a map's player spawn from the
-    // player's box *before any entity exists*, so there is no `Stats` to ask,
-    // and `tests/physics_diagnostics.rs` needs the box in a `const` context.
-    // Threading a stat table into `LevelData::load` is what deletes these.
-    //
-    // Until then they are not a second source of truth: `stats_match_the_
-    // shipped_table` below fails the build if they ever disagree with the RON.
-    pub const WIDTH: f32 = 20.0;
-    pub const HEIGHT: f32 = 34.0;
-    /// Only `tests/physics_diagnostics.rs` reads these three — it sweeps the
-    /// collision system at realistic fall and jump speeds.
-    pub const GRAVITY: f32 = 1400.0;
-    pub const MAX_FALL: f32 = 900.0;
-    pub const JUMP_SPEED: f32 = 520.0;
-
     /// A fresh avatar with a full set of air jumps.
     pub fn new(stats: &AvatarStats) -> Self {
         Avatar {
@@ -547,23 +534,83 @@ pub struct Fire {
     pub collider: Collider,
 }
 
+/// Geometry that shuttles between two points: a moving platform.
+///
+/// Like [`Schedule`], and for the same reason, this is a closed-form function
+/// of `Sim::tick` rather than something that integrates. A platform that added
+/// `speed * dt` to its position every tick would accumulate float error, would
+/// slide permanently out of step with a second platform after the ticks
+/// hitstop skips, and could not answer "where were you at tick 900?" without
+/// being stepped there. [`Mover::at`] answers that from the tick alone, gives
+/// the same answer forever, and is exactly periodic — `at(t) == at(t + period)`
+/// for every `t`, with no accumulated error, because nothing accumulates.
+///
+/// The path is a there-and-back between `from` and `to` at constant speed: a
+/// triangle wave, linear in both directions, with the turn taking no time. The
+/// leg is a whole number of *ticks* rather than a speed in px/s so that the
+/// period is an integer and the exact-periodicity above is a fact rather than
+/// an approximation; [`crate::systems::mover::leg_ticks`] is where an authored
+/// speed becomes one.
+#[derive(Clone, Copy, Debug)]
+pub struct Mover {
+    /// Top-left of the collider at the start of the path, in world pixels.
+    pub from: Vec2,
+    /// Top-left of the collider at the far end.
+    pub to: Vec2,
+    /// Ticks to travel `from` -> `to`. One full there-and-back is twice this.
+    pub leg_ticks: u32,
+    /// Ticks to shift the cycle by, so two platforms can be out of step.
+    pub phase: u32,
+}
+
+impl Mover {
+    pub fn new(from: Vec2, to: Vec2, leg_ticks: u32, phase: u32) -> Self {
+        Mover {
+            from,
+            to,
+            leg_ticks,
+            phase,
+        }
+    }
+
+    /// One full there-and-back, in ticks.
+    pub fn period(&self) -> u32 {
+        self.leg_ticks.saturating_mul(2)
+    }
+
+    /// Where this platform is at `tick`.
+    ///
+    /// A zero-length leg is a platform that is simply parked — a degenerate
+    /// map rather than a crash, the same call [`Schedule::on_at`] makes for a
+    /// zero period.
+    pub fn at(&self, tick: u64) -> Vec2 {
+        if self.leg_ticks == 0 {
+            return self.from;
+        }
+        let leg = self.leg_ticks as u64;
+        let step = (tick + self.phase as u64) % (leg * 2);
+        // Reflect the second half of the cycle back onto the first: the
+        // outbound and return legs are the same line walked in reverse, so a
+        // rider's displacement per tick has the same magnitude either way.
+        let along = if step <= leg { step } else { leg * 2 - step };
+        self.from + (self.to - self.from) * (along as f32 / leg as f32)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::StatTable;
 
-    /// The handful of player numbers still spelled as `const` (see the note on
-    /// [`Avatar`]) are a convenience for code that runs before any entity
-    /// exists, not a second opinion. If the RON is tuned and these are not,
-    /// the level loader would place the player at a spawn point computed from
-    /// the wrong box — so this fails the build instead.
+    /// The rule this file is now under: components are shape, not balance.
+    ///
+    /// `avatar_consts_match_the_shipped_stat_table` used to live here, guarding
+    /// five `const`s against the RON drifting away from them. H-3b deleted the
+    /// consts, which deletes the class of bug rather than watching for it —
+    /// there is nothing left here for the table to disagree with.
     #[test]
-    fn avatar_consts_match_the_shipped_stat_table() {
-        let player = StatTable::shipped().get("player").unwrap();
-        assert_eq!(Avatar::WIDTH, player.width, "width");
-        assert_eq!(Avatar::HEIGHT, player.height, "height");
-        assert_eq!(Avatar::GRAVITY, player.gravity, "gravity");
-        assert_eq!(Avatar::MAX_FALL, player.max_fall, "max_fall");
-        assert_eq!(Avatar::JUMP_SPEED, player.avatar().jump_speed, "jump_speed");
+    fn a_fresh_avatar_takes_its_air_jumps_from_the_stat_table() {
+        let player = crate::assets::StatTable::shipped().get("player").unwrap();
+        let avatar = Avatar::new(player.avatar());
+        assert_eq!(avatar.air_jumps, player.avatar().max_air_jumps);
     }
 }

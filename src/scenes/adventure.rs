@@ -19,7 +19,7 @@ use ggez::{Context, GameResult};
 use crate::assets::TilesetDef;
 use crate::debug::DebugOverlay;
 use crate::ecs::components::{
-    AnimationState, Avatar, Fire, Health, Patrol, Position, Size, Sprite,
+    AnimationState, Avatar, Collider, Fire, Health, Mover, Patrol, Position, Size, Sprite,
 };
 use crate::scenes::{pause::PauseScene, Resources, Scene, Transition};
 use crate::sim::Sim;
@@ -214,6 +214,48 @@ impl AdventureScene {
         Ok(())
     }
 
+    /// Draw the moving platforms.
+    ///
+    /// Placeholder art, like the spikes and the fires, but drawn from the
+    /// collider the physics actually uses rather than from the `Mover`'s path —
+    /// so if the two ever disagree, the platform visibly leaves its own
+    /// collision box behind instead of hiding the bug.
+    fn draw_movers(&self, ctx: &mut Context, canvas: &mut Canvas) -> GameResult {
+        let offset = self.camera.offset();
+        let mut any = false;
+        let mut mb = MeshBuilder::new();
+
+        for (_, (pos, collider)) in self
+            .sim
+            .world
+            .query::<(&Position, &Collider)>()
+            .with::<&Mover>()
+            .iter()
+        {
+            let box_ = collider.aabb(pos.0);
+            let rect = graphics::Rect::new(box_.x - offset.x, box_.y - offset.y, box_.w, box_.h);
+            mb.rectangle(
+                graphics::DrawMode::fill(),
+                rect,
+                Color::from_rgb(96, 88, 104),
+            )?;
+            // A bright lip along the walkable surface: the top edge is the
+            // only part of a platform the player is really aiming at.
+            mb.rectangle(
+                graphics::DrawMode::fill(),
+                graphics::Rect::new(rect.x, rect.y, rect.w, 3.0_f32.min(box_.h)),
+                Color::from_rgb(196, 186, 210),
+            )?;
+            any = true;
+        }
+
+        if any {
+            let mesh = Mesh::from_data(ctx, mb.build());
+            canvas.draw(&mesh, DrawParam::default());
+        }
+        Ok(())
+    }
+
     /// Draw every sprite in the world, whatever sheet it comes from.
     ///
     /// Entities no longer share one atlas — the player is one image of 50x37
@@ -302,6 +344,7 @@ impl Scene for AdventureScene {
         canvas.set_sampler(Sampler::nearest_clamp());
         canvas.draw(&self.tile_batch, DrawParam::default());
         self.draw_hazards(ctx, &mut canvas)?;
+        self.draw_movers(ctx, &mut canvas)?;
         self.draw_sprites(&mut canvas);
         crate::hud::draw(&mut canvas, &self.sim, self.camera.offset());
         self.debug.draw(
