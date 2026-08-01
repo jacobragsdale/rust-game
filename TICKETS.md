@@ -1183,6 +1183,40 @@ the user rather than burying it.**
 
 ---
 
+## Q-3b — wire saving to the pause menu
+
+**Size:** S. **Depends on:** Q-3. **Status:** todo.
+
+### Context
+
+Q-3 shipped the save system complete and tested at the library level, but not
+reachable from the game: saving from the pause menu meant editing `src/scenes/`,
+which belonged to a concurrent agent. A save nobody can trigger is not a feature.
+
+### Implementation
+
+- `PauseScene` gains save and load entries.
+- Saving takes the current map from `Sim::map`, which Q-3 added for exactly this.
+- Loading rebuilds the scene from the restored `Sim`, which means the scene has
+  to be reconstructible from a `Sim` rather than only from a map path — check
+  whether `AdventureScene::new` needs a second constructor.
+- Failure (no save present, version mismatch) is shown to the player, not
+  swallowed. The error messages already exist and already name the cause.
+
+### Acceptance criteria
+
+- Save from pause, quit to menu, load: the world comes back as Q-3's tests
+  describe it.
+- No gameplay logic moves into the scene. The scene calls `Sim::save` and
+  `Sim::load_save`; it decides nothing about what is in them.
+
+### Testing
+
+The library side is already covered by `tests/save.rs`. This ticket needs the
+scene wiring checked on screen, since it is a menu.
+
+---
+
 # Workstream N — M8, content
 
 ## N-1 — `tests/data.rs`: cross-reference every content file
