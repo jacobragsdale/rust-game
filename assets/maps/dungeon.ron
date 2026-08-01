@@ -1,0 +1,125 @@
+// The dungeon — the first level that uses the whole kit at once: fire on a
+// cycle, a knight to fight, a spiked pit crossed on a moving platform, a
+// gallery of one-way plank over the last hall, and a second knight that is
+// worth thinking about rather than walking into.
+//
+// Legend: '#' solid  '=' one-way platform  '^' spikes  'F' fire (house cycle)
+//         'P' spawn  'K' knight.  The moving platform and the second fire have
+// no grid character — a character can say where a thing is but not where it
+// goes, or when — so they are entries in the list below.
+//
+// 68x13 tiles at 32px = 2176x416 world pixels. The floor is row 10 the whole
+// way across, surface y=320, except where the pit is cut out of it.
+//
+//   spawn        col 2,  row 9    world (70, 286)
+//   fire A       col 10, row 9    grid F, so the house cycle: lit ticks 0-59
+//                of every 120, out 60-119. Box x 326..346.
+//   fire B       col 13, row 9    authored at phase 60, the exact opposite of
+//                A. Box x 422..442.
+//   rubble       col 18 and col 29, row 9 — one-tile steps
+//   knight 0     col 23, row 9    penned between the two rubble steps
+//   pit          cols 34-45, spikes on row 11 — x 1088..1472, 384px
+//   platform     3 tiles solid, top y=320, level with both lips
+//   landing      cols 46-51
+//   stair        cols 48-51, row 8, one-way — surface y=256, its right
+//                edge flush under the gallery's left one
+//   gallery      cols 52-66, row 6, one-way — surface y=192
+//   rubble       col 52, row 9 — the last hall's threshold
+//   knight 1     col 57, row 9    paces x 1702..2057, penned by that step at
+//                one end and the stairwell's lip at the other
+//   stairwell    cols 65-66, a step down out of row 10 — floor y=352; the way
+//                deeper, and the end of the run
+//
+// Every pen in this map is a **32px step**, which is a wall to anything that
+// walks and nothing at all to anything that jumps. It is what keeps each fight
+// in the room it was designed for without putting a door in the player's way,
+// and the stairwell's lip does the same job with a step *down*: a patroller
+// turns at the edge of what it is standing on, so nothing follows you out.
+//
+// ## The fire is a two-beat crossing, not a sprint
+//
+// A and B alternate, and they are three tiles apart — so the gap that lets you
+// past A has closed by the time you reach B. Running straight through kills
+// you at B around tick 114. The crossing is: go when A goes out, stop on the
+// clear tile between them (x 346..422 is inside neither box), and go again
+// when B goes out. `tapes/dungeon_run.tape` walks exactly that and survives
+// it; the same tape without the pause is a death.
+//
+// ## The pit is what gates the back half
+//
+// 384px is not jumpable. A standing jump carries about 148px and a jump plus
+// the air jump about 283px, so the platform is the only way over and the
+// spikes are what happens if you disagree. The path is level with both lips
+// so the ride is walked onto and off rather than leapt between, and its ends
+// are flush with them (x 1088 and, at the far end, a right edge of 1472) so
+// there is no lip to clip.
+//
+// ## Why the second knight is a different problem from the first
+//
+// `Hostile` sight is a **box in front**, not a radius:
+// `npc::sighted` rejects a target more than `sight` (130px) ahead, behind the
+// facing at all, or more than `sight_height` (36px) off the eyeline. All three
+// halves of that are used here.
+//
+// *Knight 0* is a fair fight and is meant to be. It is penned in an open room
+// with a rubble step at each end, on the player's own floor, so walking in
+// puts you inside its sight box facing it — 130px of warning, one swing each
+// way, and nowhere for either of you to be clever. That is the head-on fight
+// the level teaches first, because the second one only reads as a lesson if
+// you have already had the honest version.
+//
+// *Knight 1* is the same knight in a room with a roof over it. The gallery on
+// row 6 is 128px above the hall floor, so a player walking it is 130px off the
+// eyeline — outside `sight_height` by a factor of three, whatever the knight
+// is facing and however close it is underneath. You can therefore walk the
+// whole length of its patrol, watch it, and pick where to come down; and
+// because the gallery is one-way plank rather than stone, coming down is
+// `down` on any tile of it rather than a fixed hole the map chose for you.
+// Drop while it is walking away and you close 130px of its sight box for free
+// and open the fight with a hit instead of taking one. Drop in front of it and
+// you get knight 0 again, minus the room to back off.
+//
+// The head-on route into the same hall is still there — over the rubble at
+// col 52, at floor level, into whatever is facing you — so this is a choice
+// the map offers rather than a route it forces, which is the only way a rule
+// like the sight box is ever actually learned.
+//
+// ## What is at the end
+//
+// Knight 1 guards the stair down, and what it is carrying is the reward for
+// dealing with it: its loot table (assets/data/stats.ron) is the only source
+// of items in the game outside a conversation, so the treasure at the bottom
+// of the dungeon is the thing that was holding it. Maps cannot place a pickup
+// today — there is no `Item(...)` entity form — so this is the whole of what
+// "the item at the end" can mean without a code change.
+Level(
+    tileset: "castle",
+    grid: [
+        "####################################################################",
+        "#..................................................................#",
+        "#..................................................................#",
+        "#..................................................................#",
+        "#..................................................................#",
+        "#..................................................................#",
+        "#...................................................===============#",
+        "#..................................................................#",
+        "#...............................................====...............#",
+        "#.P.......F.......#....K.....#......................#....K.........#",
+        "##################################............###################..#",
+        "##################################^^^^^^^^^^^^######################",
+        "####################################################################",
+    ],
+    entities: [
+        // A's opposite number: same cycle, half a period out of step, so the
+        // pair are never out at the same time and the corridor has a rhythm
+        // rather than a gap.
+        Fire(cell: (13, 9), phase: 60),
+        // The ferry. 288px of travel at 96 px/s is exactly 180 ticks a leg and
+        // 360 a round trip, which is slow enough to watch and decide on. The
+        // phase puts it back against the near lip on ticks 80, 440, 800, …;
+        // 800 is a few ticks after a player who has fought knight 0 and walked
+        // over arrives, so the ride is waited for and then boarded rather than
+        // jumped at.
+        Platform(from: (34, 10), to: (43, 10), tiles: 3, speed: 96.0, phase: 280),
+    ],
+)
