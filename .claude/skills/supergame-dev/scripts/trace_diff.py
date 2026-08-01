@@ -7,10 +7,10 @@
 report which *fields* changed rather than that the files differ.
 
 This exists to answer one question before re-recording baselines: "did I change
-behaviour, or only add a column?" Adding a field to the probe rewrites all
-fifteen traces, and a plain diff cannot tell that apart from a jump arc moving
-two pixels. Ignoring the new field names and finding zero remaining differences
-is the proof.
+behaviour, or only add a column?" Adding a field to the probe rewrites every
+baseline in traces/, and a plain diff cannot tell that apart from a jump arc
+moving two pixels. Ignoring the new field names and finding zero remaining
+differences is the proof.
 
 Exits nonzero if any tape differs in a field that was not ignored, so it also
 works as a gate before `UPDATE_TRACES=1 cargo test --test traces`.
