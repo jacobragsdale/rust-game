@@ -1,0 +1,58 @@
+// Spells: what a cast costs and what it produces, separately from what it
+// looks like.
+//
+// The same split `attacks.ron` makes, for the same reason: this file is
+// balance, and balance gets tuned far more often than art does. Nothing here
+// names a PNG. `clip` is a clip on the *caster's* own clip set — the caster
+// animates its cast out of its own art, and so does its projectile — so a
+// second caster with a different sprite sheet needs no second spell, and
+// making shock hit harder never reopens the animation table.
+//
+// Timing is in ticks (60 = 1 second), measured from the tick the cast starts.
+// `cast_ticks` is the commitment before anything happens: mana is spent and
+// the cooldown starts immediately, but the bolt appears this many ticks later,
+// which is the window an enemy has to close the distance and interrupt you.
+// (Being hit cancels a cast exactly as it cancels a swing, and the mana is
+// gone either way — that is what makes casting a decision.) `recovery` is the
+// commitment after it, the price of a miss.
+//
+// `cooldown` is per-caster, not per-spell, for as long as there is one spell.
+// The second spell in this file is what turns `Casting::cooldown` into a map.
+Spells({
+    // --- the shock bolt ----------------------------------------------------
+    //
+    // The opener of the magic kit, and deliberately not a better sword. It
+    // trades reach for commitment: two of the player's five mana, three
+    // quarters of a second before it can be thrown again, and a fifth of a
+    // second rooted before the bolt exists. Against a knight that closes at
+    // 69 px/s, that is a real bet on spacing.
+    //
+    // Two bolts kill a knight (6 hp, 3 damage each) — one fewer than a clean
+    // three-hit combo, but the mana pool only pays for two before it has to
+    // refill, so a spell-only kill is slower than a melee one and costs the
+    // whole pool. Probed with tapes/spell_kill.tape.
+    "shock": SpellDef(
+        clip: "cast",
+        cost: 2,
+        cooldown: 45,          // ticks
+        cast_ticks: 12,        // committed before the projectile appears
+        recovery: 6,
+        effect: Projectile(
+            // 320 px/s is 60% faster than the player runs, so the bolt always
+            // outruns its caster and never reads as being carried along.
+            speed: 320.0,
+            damage: 2,
+            // 90 ticks at 320 px/s is 480 px, three quarters of a 640px
+            // screen: it dies off-screen rather than in view.
+            lifetime: 90,
+            // Smaller than the art, which is a 64px sprite of a bolt with a
+            // lot of empty space around the strike.
+            size: (26.0, 14.0),
+            clip: "shock_bolt",
+            // Less than a sword's, and thrown flat: it is a poke that creates
+            // room, not a launcher.
+            knockback: (110.0, -50.0),
+            hitstun: 10,
+        ),
+    ),
+})

@@ -388,6 +388,7 @@ fn attack_entry_points() -> Vec<(String, String)> {
         entries.push((kind.to_string(), block.attack.clone()));
         if let Some(avatar) = &block.avatar {
             entries.push((kind.to_string(), avatar.air_attack.clone()));
+            entries.push((kind.to_string(), avatar.plunge_attack.clone()));
         }
     }
 
@@ -556,13 +557,14 @@ fn sorted_ids(table: &AttackTable) -> Vec<String> {
 /// Only the player casts for now; when something else does, give this the
 /// same clip-set treatment the attack check has.
 ///
-/// The projectile's sheet is checked by
-/// [`every_image_a_data_file_names_exists`], which does not need to know that
-/// `effect` is an enum.
+/// A projectile's art is a clip on the *caster's* set too, rather than a raw
+/// sheet — same reason an attack names a clip and not a PNG — so both ends of
+/// a spell are checked here, and both fail the same way if the id is wrong: a
+/// spell that animates nothing, or a bolt that flies invisibly.
 #[test]
 fn every_spell_clip_exists_on_its_caster() {
     /// Deliberately minimal: serde ignores the fields it is not told about,
-    /// so cost, cooldown and the effect enum can change shape without
+    /// so cost, cooldown and the rest of the effect can change shape without
     /// touching this.
     #[derive(Deserialize)]
     #[serde(rename = "Spells")]
@@ -572,6 +574,21 @@ fn every_spell_clip_exists_on_its_caster() {
     #[serde(rename = "SpellDef")]
     struct SpellShape {
         clip: String,
+        effect: EffectShape,
+    }
+
+    #[derive(Deserialize)]
+    enum EffectShape {
+        Projectile { clip: String },
+    }
+
+    impl SpellShape {
+        /// Every clip this spell asks its caster's set for, and what each one
+        /// is for, so a failure says which end is broken.
+        fn clips(&self) -> Vec<(&'static str, &str)> {
+            let EffectShape::Projectile { clip } = &self.effect;
+            vec![("casts", self.clip.as_str()), ("throws", clip.as_str())]
+        }
     }
 
     let Some(path) = optional_content("data/spells.ron") else {
@@ -590,14 +607,52 @@ fn every_spell_clip_exists_on_its_caster() {
 
     let problems: Vec<String> = spells
         .into_iter()
-        .filter(|(_, spell)| set.clip(&spell.clip).is_none())
-        .map(|(id, spell)| {
+        .flat_map(|(id, spell)| spell.clips().into_iter().map(move |named| (id, named)))
+        .filter(|(_, (_, clip))| set.clip(clip).is_none())
+        .map(|(id, (verb, clip))| {
             format!(
-                "{}: spell `{id}` casts clip `{}`, but {} defines no such clip",
+                "{}: spell `{id}` {verb} clip `{clip}`, but {} defines no such clip",
                 rel(&path),
-                spell.clip,
                 rel(&set_path),
             )
+        })
+        .collect();
+
+    report(&problems);
+}
+
+/// The other direction: a kind whose stat block names a spell the table does
+/// not define presses the key and nothing happens, forever. The same seam
+/// [`every_attack_id_named_in_code_exists_in_the_table`] covers for swings.
+#[test]
+fn every_spell_a_kind_names_exists_in_the_table() {
+    #[derive(Deserialize)]
+    #[serde(rename = "Spells")]
+    struct SpellTable(HashMap<String, IgnoredAny>);
+
+    let Some(path) = optional_content("data/spells.ron") else {
+        skipping("spell id checks", "data/spells.ron", "ticket C-1");
+        return;
+    };
+
+    let table: SpellTable = load_ron(&path).unwrap_or_else(|e| panic!("{e:#}"));
+    let stats = stat_table();
+    let mut known: Vec<&str> = table.0.keys().map(String::as_str).collect();
+    known.sort_unstable();
+
+    let problems: Vec<String> = animated_kinds()
+        .into_iter()
+        .filter_map(|kind| {
+            let block = stats.get(kind).ok()?;
+            let spell = block.spell.clone()?;
+            (!table.0.contains_key(&spell)).then(|| {
+                format!(
+                    "{}: `{kind}` casts spell `{spell}`, which the table does not define \
+                     (defined: {})",
+                    rel(&path),
+                    known.join(", "),
+                )
+            })
         })
         .collect();
 

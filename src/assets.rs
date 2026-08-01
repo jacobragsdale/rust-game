@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::Context as _;
 use ggez::glam::Vec2;
@@ -115,6 +115,30 @@ impl ClipSet {
     }
 }
 
+/// Where an attack's hitbox sits, and which way its knockback points.
+///
+/// [`HitboxAnchor::Facing`] is every sword swing: the box is measured from the
+/// attacker's collider facing right and mirrored when facing left, and the
+/// blow throws the victim the way the attacker is looking.
+///
+/// A plunge needed something the mirrored offset cannot express. A box
+/// *underneath* the attacker is symmetric, and while a symmetric offset can be
+/// contrived for one collider width — `offset.x = (size.x - w) / 2` happens to
+/// mirror onto itself — it silently stops being centred the moment anything of
+/// a different width performs the same attack. Naming the anchor says what was
+/// meant instead of encoding it in an arithmetic coincidence.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+pub enum HitboxAnchor {
+    /// Measured from the attacker's collider facing right, mirrored when
+    /// facing left. Knockback follows the attacker's facing.
+    #[default]
+    Facing,
+    /// Centred on the attacker and never mirrored, with `offset` as a nudge.
+    /// Knockback points away from the attacker and up, so what you land on is
+    /// thrown clear rather than through you.
+    Down,
+}
+
 /// One attack's timing, reach, and effect. See `assets/data/attacks.ron`.
 /// Spelled `AttackDef(...)` in the RON file.
 #[derive(Clone, Debug, Deserialize)]
@@ -133,6 +157,10 @@ pub struct AttackDef {
     /// What pressing attack again turns this into, if anything.
     #[serde(default)]
     pub chain: Option<String>,
+    /// How [`AttackDef::offset`] is read, and which way the blow throws.
+    /// Defaults to [`HitboxAnchor::Facing`], which is every swing.
+    #[serde(default)]
+    pub anchor: HitboxAnchor,
     /// Hitbox position relative to the attacker's collider, facing right.
     pub offset: (f32, f32),
     pub size: (f32, f32),
@@ -168,11 +196,11 @@ impl AttackDef {
     /// with size `size`, facing `facing_right`.
     pub fn hitbox(&self, pos: Vec2, size: Vec2, facing_right: bool) -> Rect {
         let (w, h) = self.size;
-        let x = if facing_right {
-            pos.x + self.offset.0
-        } else {
+        let x = match self.anchor {
+            HitboxAnchor::Facing if facing_right => pos.x + self.offset.0,
             // mirror the whole box about the collider's centre
-            pos.x + size.x - self.offset.0 - w
+            HitboxAnchor::Facing => pos.x + size.x - self.offset.0 - w,
+            HitboxAnchor::Down => pos.x + (size.x - w) / 2.0 + self.offset.0,
         };
         Rect::new(x, pos.y + self.offset.1, w, h)
     }
@@ -181,6 +209,32 @@ impl AttackDef {
     pub fn impulse(&self, facing_right: bool) -> Vec2 {
         let (x, y) = self.knockback;
         Vec2::new(if facing_right { x } else { -x }, y)
+    }
+
+    /// Knockback for a blow that landed on a target at `target_centre`, from
+    /// an attacker centred at `attacker_centre`.
+    ///
+    /// Only [`HitboxAnchor::Down`] cares where the target was: a plunge lands
+    /// on top of things, and "away" is the side of the impact the victim is
+    /// standing on rather than the side the attacker is looking. A swing is
+    /// unchanged — the geometry of a sword is that it throws whatever it
+    /// reaches the way it was swung.
+    pub fn impulse_on(&self, attacker_centre: f32, target_centre: f32, facing_right: bool) -> Vec2 {
+        match self.anchor {
+            HitboxAnchor::Facing => self.impulse(facing_right),
+            HitboxAnchor::Down => {
+                // Dead centre is a real tie; break it with the facing so the
+                // result is never zero, which would read as "no knockback".
+                let away = if target_centre > attacker_centre {
+                    true
+                } else if target_centre < attacker_centre {
+                    false
+                } else {
+                    facing_right
+                };
+                self.impulse(away)
+            }
+        }
     }
 }
 
@@ -192,6 +246,108 @@ pub struct AttackTable(pub HashMap<String, AttackDef>);
 impl AttackTable {
     pub fn get(&self, id: &str) -> Option<&AttackDef> {
         self.0.get(id)
+    }
+}
+
+/// One spell's cost, timing, and what it does. See `assets/data/spells.ron`.
+/// Spelled `SpellDef(...)` in the RON file.
+///
+/// The same split [`AttackDef`] makes: this is balance, and the art it names
+/// is a clip on the *caster's* own clip set rather than a sheet, so tuning a
+/// spell never reopens the animation table and a second caster with different
+/// art needs no second spell.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "SpellDef")]
+pub struct SpellDef {
+    /// Animation clip played on the caster, from its own clip set.
+    pub clip: String,
+    /// Mana spent the moment the cast starts, not when it lands.
+    pub cost: i32,
+    /// Ticks before this spell may be cast again.
+    pub cooldown: u32,
+    /// Ticks the caster is committed for before the effect appears.
+    pub cast_ticks: u32,
+    /// Extra ticks of commitment after the effect, the way an attack's
+    /// `recovery` works: a spell that ends the instant it fires is free.
+    #[serde(default)]
+    pub recovery: u32,
+    pub effect: SpellEffect,
+}
+
+impl SpellDef {
+    /// Is this the tick the effect happens on? Exactly one tick per cast, so
+    /// a long `recovery` cannot fire a second bolt.
+    pub fn releases_at(&self, elapsed: u32) -> bool {
+        elapsed == self.cast_ticks
+    }
+
+    /// The caster is free to act again.
+    pub fn released(&self, elapsed: u32) -> bool {
+        elapsed >= self.cast_ticks + self.recovery
+    }
+}
+
+/// What a spell does when it goes off.
+///
+/// An enum with one variant from the start, because PLAN.md names `Aoe` and
+/// `Buff` as the next two and a struct that has to be widened later is worse
+/// than an enum that is trivially extended.
+#[derive(Clone, Debug, Deserialize)]
+pub enum SpellEffect {
+    /// A bolt launched from the caster, travelling the way they face.
+    Projectile {
+        /// Travel speed in px/s. Gravity does not apply.
+        speed: f32,
+        damage: i32,
+        /// Ticks it survives over open ground.
+        lifetime: u32,
+        /// Its collider, which is smaller than its art.
+        size: (f32, f32),
+        /// Clip to draw it with, from the *caster's* clip set — so the bolt's
+        /// art travels with whoever throws it.
+        clip: String,
+        knockback: (f32, f32),
+        hitstun: u32,
+        /// Carry on through whatever it hits, rather than expiring on contact.
+        #[serde(default)]
+        pierces: bool,
+    },
+}
+
+/// Every spell in the game, by id. Spelled `Spells({...})` in the RON file.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename = "Spells")]
+pub struct SpellTable(pub HashMap<String, SpellDef>);
+
+impl SpellTable {
+    pub fn get(&self, id: &str) -> Option<&SpellDef> {
+        self.0.get(id)
+    }
+
+    /// Every spell id, sorted, for error messages and for the fixture clip set.
+    pub fn ids(&self) -> Vec<&str> {
+        let mut ids: Vec<&str> = self.0.keys().map(String::as_str).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// The shipped table — the counterpart of [`StatTable::shipped`], and
+    /// what every [`crate::sim::Sim`] casts from.
+    ///
+    /// Read once per process rather than once per call, because `Sim::new`
+    /// and the fixture clip set both want it and a headless test run builds
+    /// hundreds of sims. Panics if it does not load: spells are content, and
+    /// a table that does not parse is a broken build rather than a condition
+    /// to degrade around.
+    pub fn shipped() -> Arc<SpellTable> {
+        static SHIPPED: OnceLock<Arc<SpellTable>> = OnceLock::new();
+        SHIPPED
+            .get_or_init(|| {
+                Assets::new()
+                    .spells()
+                    .expect("assets/data/spells.ron should load")
+            })
+            .clone()
     }
 }
 
@@ -227,6 +383,22 @@ pub struct StatBlock {
     /// The attack this kind opens with, from `assets/data/attacks.ron`. The
     /// rest of a combo is data: each attack names its own successor.
     pub attack: String,
+    /// Size of the mana pool. Zero means a kind that never casts, and is what
+    /// [`crate::ecs::spawn`] reads to decide whether to give it a
+    /// [`crate::ecs::components::Mana`] at all — no pool, no component, no
+    /// mana bar, and no archetype it would otherwise be dragged into.
+    pub max_mana: i32,
+    /// Mana regenerated per tick, in thousandths of a point.
+    ///
+    /// Fixed point rather than a float because a tape asserts "back to full",
+    /// and a float accumulator makes the tick that happens on depend on how
+    /// rounding fell over the preceding second. Integers make it exact:
+    /// `1000 / mana_regen` ticks per point, forever, on every machine.
+    pub mana_regen: u32,
+    /// The spell this kind casts, from `assets/data/spells.ron`. Absent for
+    /// anything that does not cast.
+    #[serde(default)]
+    pub spell: Option<String>,
     /// Present only for a kind the player drives.
     #[serde(default)]
     pub avatar: Option<AvatarStats>,
@@ -275,6 +447,21 @@ pub struct AvatarStats {
     pub death_ticks: u32,
     /// What a press in mid-air performs instead of the ground combo.
     pub air_attack: String,
+    /// What down+attack in mid-air performs instead of the air attack.
+    pub plunge_attack: String,
+    /// How long the plunge hangs before it drops. The hover is what makes it
+    /// read as a decision rather than as a faster fall — it is the tell the
+    /// thing underneath you gets.
+    pub plunge_hover_ticks: u32,
+    /// How fast the plunge falls, in px/s. Deliberately its own number rather
+    /// than `max_fall`: the drop should outrun an ordinary fall visibly.
+    pub plunge_speed: f32,
+    /// Ticks rooted on landing, matching the `plunge_impact` clip.
+    ///
+    /// The plunge's recovery lives here rather than in `attacks.ron` because
+    /// it starts when the ground arrives, and nothing in an attack's fixed
+    /// timeline knows when that is.
+    pub plunge_impact_ticks: u32,
 }
 
 /// The knobs [`crate::systems::npc`] walks and hunts with. Spelled
@@ -441,6 +628,7 @@ pub struct Assets {
     clip_sets: HashMap<String, Arc<ClipSet>>,
     tilesets: HashMap<String, Rc<TilesetDef>>,
     attacks: Option<Arc<AttackTable>>,
+    spells: Option<Arc<SpellTable>>,
     stats: Option<Arc<StatTable>>,
 }
 
@@ -466,6 +654,7 @@ impl Assets {
             clip_sets: HashMap::new(),
             tilesets: HashMap::new(),
             attacks: None,
+            spells: None,
             stats: None,
         }
     }
@@ -545,6 +734,17 @@ impl Assets {
         let table: AttackTable = load_ron(&self.base.join("data/attacks.ron"))?;
         let table = Arc::new(table);
         self.attacks = Some(table.clone());
+        Ok(table)
+    }
+
+    /// Load `assets/data/spells.ron`. One table for the whole game.
+    pub fn spells(&mut self) -> anyhow::Result<Arc<SpellTable>> {
+        if let Some(table) = &self.spells {
+            return Ok(table.clone());
+        }
+        let table: SpellTable = load_ron(&self.base.join("data/spells.ron"))?;
+        let table = Arc::new(table);
+        self.spells = Some(table.clone());
         Ok(table)
     }
 

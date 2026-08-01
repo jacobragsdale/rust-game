@@ -30,6 +30,8 @@ const EVENT_NAMES: &[&str] = &[
     "attacked",
     "damaged",
     "slid",
+    "spell_cast",
+    "cast_failed",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +40,26 @@ pub enum DeathCause {
     Hazard,
     FellOutOfWorld,
     Slain,
+}
+
+/// Why a cast did not happen.
+///
+/// Not decoration. Without it, "the key did nothing" and "you were out of
+/// mana" are the same absence in a trace, and telling them apart means
+/// reasoning backwards from a mana column — which is exactly the afternoon
+/// this enum is here to save.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CastFailure {
+    /// Already swinging, already casting, or committed to a plunge.
+    Busy,
+    /// The pool is short of the spell's cost.
+    NoMana,
+    /// The cooldown from the last cast has not lapsed.
+    Cooling,
+    /// The caster names a spell `assets/data/spells.ron` does not define.
+    /// A content bug, reported rather than swallowed.
+    Unknown,
 }
 
 /// Serialized into the trace as `{"event": "landed", ...}`, so a JSONL trace
@@ -76,19 +98,31 @@ pub enum GameEvent {
         amount: i32,
         remaining: i32,
     },
+    /// A cast started: the mana is spent and the caster is committed. Fires on
+    /// the press, not on the release, because that is the tick the decision
+    /// was made — the bolt appearing `cast_ticks` later is a consequence.
+    SpellCast {
+        spell: String,
+    },
+    /// A cast was refused, and why.
+    CastFailed {
+        spell: String,
+        reason: CastFailure,
+    },
 }
 
 /// Events carrying a discriminating name that `expect` can filter on:
-/// `knight.damaged`, `player_slash3.attacked`.
-const SUBJECT_EVENTS: &[&str] = &["died", "damaged", "attacked"];
+/// `knight.damaged`, `player_slash3.attacked`, `shock.spell_cast`.
+const SUBJECT_EVENTS: &[&str] = &["died", "damaged", "attacked", "spell_cast", "cast_failed"];
 
 impl GameEvent {
     /// The name this event can be filtered by: the victim for damage and
-    /// death, the attack id for a swing.
+    /// death, the attack id for a swing, the spell id for a cast.
     pub fn subject(&self) -> Option<&str> {
         match self {
             GameEvent::Died { who, .. } | GameEvent::Damaged { who, .. } => Some(who),
             GameEvent::Attacked { attack } => Some(attack),
+            GameEvent::SpellCast { spell } | GameEvent::CastFailed { spell, .. } => Some(spell),
             _ => None,
         }
     }
@@ -115,6 +149,8 @@ impl GameEvent {
             GameEvent::Respawned => "respawned",
             GameEvent::Attacked { .. } => "attacked",
             GameEvent::Damaged { .. } => "damaged",
+            GameEvent::SpellCast { .. } => "spell_cast",
+            GameEvent::CastFailed { .. } => "cast_failed",
         }
     }
 
@@ -201,6 +237,13 @@ mod tests {
                 who: "knight".to_string(),
                 amount: 1,
                 remaining: 2,
+            },
+            GameEvent::SpellCast {
+                spell: "shock".to_string(),
+            },
+            GameEvent::CastFailed {
+                spell: "shock".to_string(),
+                reason: CastFailure::NoMana,
             },
         ]
     }

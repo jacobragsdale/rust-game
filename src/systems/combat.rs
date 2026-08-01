@@ -38,6 +38,8 @@ pub fn tick_timers(world: &mut World) {
 /// against is this tick's.
 pub fn advance_attacks(world: &mut World, attacks: &AttackTable, events: &mut Vec<GameEvent>) {
     for (_, (attacking, health)) in world.query_mut::<(&mut Attacking, Option<&Health>)>() {
+        // (`Casting` is advanced by `crate::systems::spell`, in this same
+        // phase and for the same reasons.)
         // Dying mid-swing drops the sword, and so does being hit during one.
         //
         // Interrupting on hitstun is what makes an exchange readable: whoever
@@ -126,43 +128,79 @@ pub fn resolve(world: &mut World, attacks: &AttackTable, events: &mut Vec<GameEv
             continue;
         };
         let facing = facing_right(world, attacker);
+        let impulse = def.impulse_on(centre_x(world, attacker), centre_x(world, target), facing);
 
         // Record the hit on the attacker so this swing cannot land twice.
         if let Ok(mut attacking) = world.get::<&mut Attacking>(attacker) {
             attacking.hit.push(target);
         }
 
-        let who = kind_of(world, target);
-        let mut died = false;
-        if let Ok(mut health) = world.get::<&mut Health>(target) {
-            // Re-check: an earlier hit this same tick may have granted
-            // i-frames or killed the target outright.
-            if !health.vulnerable() {
-                continue;
-            }
-            health.current -= def.damage;
-            health.iframes = health.iframe_ticks;
-            health.hitstun = def.hitstun;
-            died = health.dead();
-
-            events.push(GameEvent::Damaged {
-                who: who.clone(),
-                amount: def.damage,
-                remaining: health.current.max(0),
-            });
-        }
-
-        if let Ok(mut vel) = world.get::<&mut Velocity>(target) {
-            vel.0 = def.impulse(facing);
-        }
-
-        if died {
-            events.push(GameEvent::Died {
-                who,
-                cause: DeathCause::Slain,
-            });
-        }
+        apply_hit(world, target, def.damage, impulse, def.hitstun, events);
     }
+}
+
+/// Take `damage` off `target`, throw it, stun it, and say so.
+///
+/// The single path from "something connected" to "something is hurt". A sword
+/// and a spell bolt are entirely different systems above this line and must be
+/// exactly the same below it — two damage routines that can drift apart is the
+/// bug [`Health`] was made shared to avoid, and it shows up as an enemy that
+/// dies to one weapon and not the other for reasons nobody can find.
+///
+/// Returns whether the hit actually landed: an earlier hit on the same tick
+/// may have granted i-frames or killed the target outright.
+pub fn apply_hit(
+    world: &mut World,
+    target: hecs::Entity,
+    damage: i32,
+    impulse: Vec2,
+    hitstun: u32,
+    events: &mut Vec<GameEvent>,
+) -> bool {
+    let who = kind_of(world, target);
+    let mut died = false;
+
+    if let Ok(mut health) = world.get::<&mut Health>(target) {
+        if !health.vulnerable() {
+            return false;
+        }
+        health.current -= damage;
+        health.iframes = health.iframe_ticks;
+        health.hitstun = hitstun;
+        died = health.dead();
+
+        events.push(GameEvent::Damaged {
+            who: who.clone(),
+            amount: damage,
+            remaining: health.current.max(0),
+        });
+    }
+
+    if let Ok(mut vel) = world.get::<&mut Velocity>(target) {
+        vel.0 = impulse;
+    }
+
+    if died {
+        events.push(GameEvent::Died {
+            who,
+            cause: DeathCause::Slain,
+        });
+    }
+    true
+}
+
+/// The horizontal centre of an entity's collider, or 0 for something that has
+/// no box. Only [`crate::assets::HitboxAnchor::Down`] reads it, to decide
+/// which way "away from the impact" points.
+fn centre_x(world: &World, entity: hecs::Entity) -> f32 {
+    let Ok(pos) = world.get::<&Position>(entity) else {
+        return 0.0;
+    };
+    let half = world
+        .get::<&Size>(entity)
+        .map(|s| s.0.x / 2.0)
+        .unwrap_or(0.0);
+    pos.0.x + half
 }
 
 /// Stop the dead: a corpse keeps its position but does nothing further.
@@ -235,6 +273,7 @@ mod tests {
                 active: (2, 5),
                 recovery: 0,
                 chain: None,
+                anchor: Default::default(),
                 offset: (14.0, 0.0),
                 size: (24.0, 24.0),
                 damage: 2,
@@ -442,6 +481,74 @@ mod tests {
             world.contains(v),
             "the corpse is not despawned — spawn indices must stay stable"
         );
+    }
+
+    // --- the `Down` hitbox anchor ----------------------------------------
+
+    /// The shipped plunge, so this tests the attack the game actually has.
+    fn plunge() -> AttackDef {
+        let stats = StatTable::shipped().get("player").unwrap();
+        crate::assets::Assets::new()
+            .attacks()
+            .unwrap()
+            .get(&stats.avatar().plunge_attack)
+            .expect("the plunge is in assets/data/attacks.ron")
+            .clone()
+    }
+
+    /// A `Down` box is centred on the attacker and does not mirror. A
+    /// facing-mirrored offset can be *made* symmetric for one collider width,
+    /// which is exactly why the anchor is named rather than arithmetic — this
+    /// is the test that would fail if someone reverted it to a clever number.
+    #[test]
+    fn a_down_anchored_hitbox_is_centred_and_never_mirrors() {
+        let def = plunge();
+        let pos = Vec2::new(100.0, 50.0);
+
+        let right = def.hitbox(pos, SIZE, true);
+        let left = def.hitbox(pos, SIZE, false);
+        assert_eq!(
+            (right.x, right.y),
+            (left.x, left.y),
+            "facing changes nothing"
+        );
+        assert_eq!(
+            right.x + right.w / 2.0,
+            pos.x + SIZE.x / 2.0,
+            "centred on the attacker"
+        );
+        assert!(right.y > pos.y, "and underneath it");
+
+        // ...and it stays centred on a differently-sized attacker, which the
+        // arithmetic version could not manage.
+        let wide = Vec2::new(40.0, 30.0);
+        let box_ = def.hitbox(pos, wide, true);
+        assert_eq!(box_.x + box_.w / 2.0, pos.x + wide.x / 2.0);
+    }
+
+    /// The blow throws whatever it landed on *away from the impact* and up,
+    /// rather than the way the attacker happens to be looking. Landing on
+    /// something and having it fly through you is what this prevents.
+    #[test]
+    fn a_plunge_throws_its_victim_away_from_the_impact_and_up() {
+        let def = plunge();
+        for facing_right in [true, false] {
+            let to_the_right = def.impulse_on(100.0, 140.0, facing_right);
+            let to_the_left = def.impulse_on(100.0, 60.0, facing_right);
+            assert!(to_the_right.x > 0.0, "thrown right, facing {facing_right}");
+            assert!(to_the_left.x < 0.0, "thrown left, facing {facing_right}");
+            assert!(to_the_right.y < 0.0 && to_the_left.y < 0.0, "and upward");
+        }
+    }
+
+    /// A swing is unchanged: it throws the way it was swung, whatever side of
+    /// the attacker the victim ended up on.
+    #[test]
+    fn a_facing_anchored_swing_still_throws_the_way_it_was_swung() {
+        let table = table();
+        let def = table.get("swing").unwrap();
+        assert!(def.impulse_on(100.0, 60.0, true).x > 0.0);
+        assert!(def.impulse_on(100.0, 140.0, false).x < 0.0);
     }
 
     /// A dying attacker drops its swing rather than landing a hit from beyond

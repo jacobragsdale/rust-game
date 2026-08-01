@@ -7,7 +7,7 @@
 use ggez::glam::Vec2;
 use serde::{Deserialize, Serialize};
 
-use crate::ecs::components::{AnimationState, Attacking, Avatar, Body, Health};
+use crate::ecs::components::{AnimationState, Attacking, Avatar, Body, Casting, Health, Mana};
 
 /// `coyote_ticks` uses `u32::MAX`-ish sentinels to mean "no coyote jump
 /// available". Clamping keeps traces readable; any value past the coyote
@@ -27,6 +27,10 @@ const FIELD_NAMES: &[&str] = &[
     "hp",
     "iframes",
     "hitstun",
+    "mana",
+    "mana_max",
+    "cast_cooldown",
+    "projectiles",
 ];
 
 /// Text fields addressable by tape assertions. Only `==` and `!=` apply.
@@ -42,6 +46,8 @@ const FLAG_NAMES: &[&str] = &[
     "dead",
     "on_one_way_only",
     "attacking",
+    "casting",
+    "plunging",
 ];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -66,6 +72,18 @@ pub struct Probe {
     pub iframes: u32,
     pub hitstun: u32,
     pub attacking: bool,
+    /// Mana in the pool, and its size. Zero for anything with no pool at all,
+    /// which is indistinguishable from an empty one — and correctly so: both
+    /// mean "cannot cast".
+    pub mana: i32,
+    pub mana_max: i32,
+    /// Ticks until another cast may start.
+    pub cast_cooldown: u32,
+    pub casting: bool,
+    /// Committed to a plunge, in any of its three phases.
+    pub plunging: bool,
+    /// How many projectiles are in the air, anywhere in the world.
+    pub projectiles: usize,
     pub clip: String,
     pub frame: usize,
 }
@@ -164,6 +182,9 @@ impl Probe {
         pos: Vec2,
         vel: Vec2,
         anim: &AnimationState,
+        mana: Option<&Mana>,
+        casting: Option<&Casting>,
+        projectiles: usize,
     ) -> Self {
         Probe {
             tick,
@@ -186,6 +207,12 @@ impl Probe {
             iframes: health.iframes,
             hitstun: health.hitstun,
             attacking: attacking.busy(),
+            mana: mana.map_or(0, |m| m.current),
+            mana_max: mana.map_or(0, |m| m.max),
+            cast_cooldown: casting.map_or(0, |c| c.cooldown),
+            casting: casting.is_some_and(|c| c.busy()),
+            plunging: avatar.plunging(),
+            projectiles,
             clip: anim.clip.clone(),
             frame: anim.frame,
         }
@@ -204,6 +231,10 @@ impl Probe {
             "hp" => self.hp as f32,
             "iframes" => self.iframes as f32,
             "hitstun" => self.hitstun as f32,
+            "mana" => self.mana as f32,
+            "mana_max" => self.mana_max as f32,
+            "cast_cooldown" => self.cast_cooldown as f32,
+            "projectiles" => self.projectiles as f32,
             _ => return None,
         })
     }
@@ -219,6 +250,8 @@ impl Probe {
             "dead" => self.dead,
             "on_one_way_only" => self.on_one_way_only,
             "attacking" => self.attacking,
+            "casting" => self.casting,
+            "plunging" => self.plunging,
             _ => return None,
         })
     }
@@ -289,6 +322,9 @@ mod tests {
             Vec2::ZERO,
             Vec2::ZERO,
             &AnimationState::new("idle"),
+            Some(&Mana::new(stats.max_mana, stats.mana_regen)),
+            Some(&Casting::default()),
+            0,
         )
     }
 

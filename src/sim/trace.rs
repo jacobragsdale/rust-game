@@ -256,6 +256,9 @@ mod tests {
             Vec2::new(1.5, 2.5),
             Vec2::ZERO,
             &AnimationState::new("idle"),
+            None,
+            None,
+            0,
         )
     }
 

@@ -18,12 +18,15 @@
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::assets::{AttackDef, AttackTable, StatBlock};
-use crate::ecs::components::{Attacking, Avatar, Body, Health, Position, Size, Stats, Velocity};
+use crate::assets::{AttackDef, AttackTable, SpellTable, StatBlock};
+use crate::ecs::components::{
+    Attacking, Avatar, Body, Casting, Health, Mana, Plunge, Position, Size, Stats, Velocity,
+};
 use crate::level::LevelData;
 use crate::physics::{self, Aabb, HazardQuery, SolidQuery};
 use crate::sim::event::{DeathCause, GameEvent};
-use crate::systems::input::PlayerInput;
+use crate::systems::input::{Action, PlayerInput};
+use crate::systems::spell;
 
 /// Phase 1: turn this tick's input into a velocity and body settings.
 #[allow(clippy::too_many_arguments)]
@@ -32,20 +35,27 @@ pub fn control<Q: SolidQuery + ?Sized>(
     level: &LevelData,
     geometry: &Q,
     attacks: &AttackTable,
+    spells: &SpellTable,
     input: PlayerInput,
     dt: f32,
     events: &mut Vec<GameEvent>,
 ) {
-    for (_, (avatar, pos, vel, size, body, health, attacking, stats)) in world.query_mut::<(
-        &mut Avatar,
-        &mut Position,
-        &mut Velocity,
-        &Size,
-        &mut Body,
-        &mut Health,
-        &mut Attacking,
-        &Stats,
-    )>() {
+    #[allow(clippy::type_complexity)]
+    for (_, (avatar, pos, vel, size, body, health, attacking, stats, casting, mana)) in world
+        .query_mut::<(
+            &mut Avatar,
+            &mut Position,
+            &mut Velocity,
+            &Size,
+            &mut Body,
+            &mut Health,
+            &mut Attacking,
+            &Stats,
+            Option<&mut Casting>,
+            Option<&mut Mana>,
+        )>()
+    {
+        let (mut casting, mut mana) = (casting, mana);
         // Everything below reads its numbers from here: `stats` is the block
         // `assets/data/stats.ron` holds for this entity's kind, and `mv` is the
         // group of it that only something the player steers has.
@@ -63,6 +73,8 @@ pub fn control<Q: SolidQuery + ?Sized>(
                     body,
                     health,
                     attacking,
+                    mana.as_deref_mut(),
+                    casting.as_deref_mut(),
                     stats,
                     level.player_spawn,
                 );
@@ -81,6 +93,10 @@ pub fn control<Q: SolidQuery + ?Sized>(
         // in mid-air. Steering is what is taken away, not momentum.
         if stunned {
             avatar.jump_buffer = 0;
+            // A plunge is dropped by a hit exactly as a swing is; otherwise
+            // being knocked out of the air leaves a live hitbox stuck to a
+            // player who is no longer plunging.
+            avatar.cancel_plunge();
             continue;
         }
 
@@ -101,13 +117,68 @@ pub fn control<Q: SolidQuery + ?Sized>(
 
         let dir = input.dir();
 
+        // --- the plunge, which is three phases and outranks everything ---
+        //
+        // Down+attack in the air. Distinct from the air attack, which is
+        // attack alone, and from the ground combo, which is attack on the
+        // floor with or without down. Once started it owns the avatar: no
+        // steering, no jump, no second attack and no cast until it is over.
+        let plunge_start = input.attack_pressed()
+            && input.down()
+            && !body.grounded
+            && !avatar.plunging()
+            && !attacking.busy()
+            && !avatar.sliding();
+        if plunge_start {
+            avatar.plunge = Plunge::Ready;
+            avatar.plunge_ticks = mv.plunge_hover_ticks;
+            vel.0 = Vec2::ZERO;
+        }
+
+        // Sequential rather than a `match`, so a phase change takes effect on
+        // the tick it happens: the drop reaches full speed on the same tick
+        // the spin starts, instead of hanging for one more frame than the
+        // hover says it does.
+        if avatar.plunge == Plunge::Ready {
+            // Hanging: the tell. Gravity is switched off rather than fought,
+            // so the hover is exactly as long as it says it is — counted from
+            // the tick *after* the press, or `plunge_hover_ticks` would be one
+            // tick short of what it reads as.
+            vel.0 = Vec2::ZERO;
+            if !plunge_start {
+                avatar.plunge_ticks = avatar.plunge_ticks.saturating_sub(1);
+            }
+            if avatar.plunge_ticks == 0 {
+                avatar.plunge = Plunge::Falling;
+                // The hitbox is live from here down, and only from here: the
+                // attack starts when the drop does, so the hover is a wind-up
+                // rather than a free hovering hitbox.
+                attacking.start(&mv.plunge_attack);
+                events.push(GameEvent::Attacked {
+                    attack: mv.plunge_attack.clone(),
+                });
+            }
+        }
+        if avatar.plunge == Plunge::Falling {
+            // Straight down at a fixed speed, so the drop is the same however
+            // long the fall — no accelerating past your own hitbox.
+            vel.0 = Vec2::new(0.0, mv.plunge_speed);
+        }
+        if avatar.plunge == Plunge::Impact {
+            vel.0.x = 0.0;
+            avatar.plunge_ticks = avatar.plunge_ticks.saturating_sub(1);
+            if avatar.plunge_ticks == 0 {
+                avatar.plunge = Plunge::None;
+            }
+        }
+
         // --- attack ---
         //
         // On the ground this is the head of a three-link combo; in the air it
         // is a single cheaper swing. Which link comes next is data: pressing
         // during the current attack's chain window buffers its successor, and
         // `combat::advance_attacks` starts it when this animation ends.
-        if input.attack_pressed() && !avatar.sliding() {
+        if input.attack_pressed() && !avatar.sliding() && !avatar.plunging() {
             match current_attack(attacking, attacks) {
                 Some(def) if def.chains() => {
                     attacking.chained = def.chain.clone();
@@ -125,6 +196,61 @@ pub fn control<Q: SolidQuery + ?Sized>(
                     });
                 }
             }
+        }
+
+        // --- cast ---
+        //
+        // Refused rather than queued: a spell you have no mana for should say
+        // so on the tick you asked, not go off eight ticks later when the pool
+        // happens to tick over. Every refusal is announced, because "nothing
+        // happened" and "you were out of mana" are otherwise the same absence.
+        if input.pressed(Action::Cast) {
+            if let (Some(casting), Some(mana), Some(spell)) = (casting, mana, &stats.spell) {
+                let busy = attacking.busy() || avatar.sliding() || avatar.plunging();
+                match spell::refusal(spells, spell, casting, mana, busy) {
+                    Some(reason) => events.push(GameEvent::CastFailed {
+                        spell: spell.clone(),
+                        reason,
+                    }),
+                    None => {
+                        let def = spells.get(spell).expect("refusal checked the table");
+                        mana.spend(def.cost);
+                        casting.start(spell, def.cooldown);
+                        events.push(GameEvent::SpellCast {
+                            spell: spell.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // A plunge owns the avatar. Its velocity is already decided above, and
+        // steering, sliding, wall contact and every kind of jump are suspended
+        // until it is done. Skipping straight to the body knobs enforces that
+        // in one place, rather than as five more conditions spread down the
+        // rest of this function.
+        if avatar.plunging() {
+            avatar.wall_sliding = false;
+            avatar.jump_buffer = 0;
+            // Weightless through the hover and the drop, which both set their
+            // own velocity; ordinary weight again once the impact is playing,
+            // or the body would drift off the floor it just hit.
+            let dropping = avatar.plunge != Plunge::Impact;
+            body.gravity = if dropping { 0.0 } else { stats.gravity };
+            body.max_fall = if dropping {
+                stats.max_fall.max(mv.plunge_speed)
+            } else {
+                stats.max_fall
+            };
+            body.fall_cap = None;
+            body.ignore_one_way = false;
+            if avatar.plunge == Plunge::Impact {
+                // One tick later than the landing, on purpose: the hitbox has
+                // to survive the tick it touches down on, which is the tick
+                // `combat::resolve` tests it against whatever it landed on.
+                attacking.stop();
+            }
+            continue;
         }
 
         // --- slide: down + jump while running along the ground ---
@@ -252,6 +378,10 @@ pub fn control<Q: SolidQuery + ?Sized>(
         } else {
             stats.gravity
         };
+        // Restated every tick, like the two knobs below it, because the plunge
+        // raises it and something has to put it back — a terminal velocity
+        // that only ever got set at spawn would stay raised after one drop.
+        body.max_fall = stats.max_fall;
         // Also read after the jump block: `launch` clears `wall_sliding`, and
         // a wall jump must not have its upward kick capped by the slide.
         body.fall_cap = avatar.wall_sliding.then_some(mv.wall_slide_speed);
@@ -302,6 +432,13 @@ pub fn after_move<H: HazardQuery + ?Sized>(
                 events.push(GameEvent::Landed {
                     on_one_way: body.on_one_way_only(),
                 });
+            }
+            // The ground is what ends a plunge's fall — nothing in the attack
+            // table knows how far up it started, so the transition is here,
+            // where contact is finally known, rather than on a timer.
+            if avatar.plunge == Plunge::Falling {
+                avatar.plunge = Plunge::Impact;
+                avatar.plunge_ticks = mv.plunge_impact_ticks;
             }
         }
         if vel.0.y >= 0.0 {
@@ -371,6 +508,8 @@ fn respawn(
     body: &mut Body,
     health: &mut Health,
     attacking: &mut Attacking,
+    mana: Option<&mut Mana>,
+    casting: Option<&mut Casting>,
     stats: &StatBlock,
     spawn: Vec2,
 ) {
@@ -378,6 +517,14 @@ fn respawn(
     *body = Body::new(spawn, stats.gravity, stats.max_fall);
     *health = Health::new(stats.max_health, stats.iframe_ticks);
     attacking.stop();
+    // A fresh run gets a full pool and no cooldown, for the same reason it
+    // gets full health: respawning is starting over, not continuing.
+    if let Some(mana) = mana {
+        *mana = Mana::new(stats.max_mana, stats.mana_regen);
+    }
+    if let Some(casting) = casting {
+        *casting = Casting::default();
+    }
     pos.0 = spawn;
     vel.0 = Vec2::ZERO;
 }
@@ -434,7 +581,17 @@ mod tests {
         let attacks = crate::assets::Assets::new()
             .attacks()
             .expect("assets/data/attacks.ron should load");
-        super::control(world, level, geometry, &attacks, input, dt, &mut events);
+        let spells = SpellTable::shipped();
+        super::control(
+            world,
+            level,
+            geometry,
+            &attacks,
+            &spells,
+            input,
+            dt,
+            &mut events,
+        );
         crate::systems::body::move_bodies(world, geometry, dt);
         super::after_move(world, level, level.hazards.as_slice(), input, &mut events);
     }

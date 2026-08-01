@@ -178,6 +178,26 @@ impl Body {
     }
 }
 
+/// Which phase of a plunge an avatar is in.
+///
+/// The plunge is the one attack whose length is not in `attacks.ron`: how long
+/// the fall lasts depends on how far up it started, and the recovery starts
+/// when the ground arrives. So the phase is state on the avatar rather than an
+/// elapsed count against a fixed timeline, and it is what
+/// [`crate::systems::animation::select_avatar_clip`] reads to pick between the
+/// three clips.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Plunge {
+    #[default]
+    None,
+    /// Hanging still, blade coming up. The hitbox is not live yet.
+    Ready,
+    /// Dropping fast with a live hitbox underneath.
+    Falling,
+    /// Landed and rooted while the impact plays out.
+    Impact,
+}
+
 /// The player. Tile-scale physics tuned for 32px tiles and the 50x37
 /// Adventurer sprite. The collider is smaller than the sprite;
 /// `Sprite::offset` aligns them.
@@ -209,6 +229,11 @@ pub struct Avatar {
     pub slide_ticks: u32,
     /// Ticks until another slide may start.
     pub slide_cooldown: u32,
+    /// Which phase of a plunge is running, if any.
+    pub plunge: Plunge,
+    /// Ticks left in the current plunge phase (the hover, then the impact).
+    /// The fall in between is not timed — it ends when the ground does.
+    pub plunge_ticks: u32,
     /// Death freeze countdown; respawns when it reaches zero.
     pub dead_ticks: u32,
 }
@@ -248,12 +273,27 @@ impl Avatar {
             crouching: false,
             slide_ticks: 0,
             slide_cooldown: 0,
+            plunge: Plunge::None,
+            plunge_ticks: 0,
             dead_ticks: 0,
         }
     }
 
     pub fn sliding(&self) -> bool {
         self.slide_ticks > 0
+    }
+
+    /// Committed to a plunge, in any of its three phases: no steering, no
+    /// jumping, no other attack, no cast.
+    pub fn plunging(&self) -> bool {
+        self.plunge != Plunge::None
+    }
+
+    /// Give up on the plunge wherever it is. Called on being hit and on
+    /// dying, the same way a swing is dropped.
+    pub fn cancel_plunge(&mut self) {
+        self.plunge = Plunge::None;
+        self.plunge_ticks = 0;
     }
 
     pub fn dead(&self) -> bool {
@@ -356,6 +396,147 @@ impl Attacking {
         self.hit.clear();
         self.chained = None;
     }
+}
+
+/// A pool that spells are paid out of, and refills itself.
+///
+/// Nothing about this is player-specific — an enemy caster wants exactly the
+/// same component — but only the player has one today, because
+/// [`crate::ecs::spawn`] attaches it to a kind whose `max_mana` is non-zero
+/// and the knight's is zero.
+///
+/// Regeneration is integer arithmetic on purpose. `regen` is thousandths of a
+/// point per tick and `partial` is the running remainder, so an empty pool is
+/// full again on an exact, stated tick — `1000 * max / regen` of them — and a
+/// tape can assert `mana == 5` at a tick it worked out rather than one it
+/// discovered. A float accumulator gives the same answer to within a rounding
+/// error, and a rounding error is precisely what an `==` assertion is not
+/// allowed to depend on.
+#[derive(Clone, Copy, Debug)]
+pub struct Mana {
+    pub current: i32,
+    pub max: i32,
+    /// Thousandths of a point regenerated per tick.
+    pub regen: u32,
+    /// Thousandths accumulated toward the next whole point.
+    pub partial: u32,
+}
+
+impl Mana {
+    pub fn new(max: i32, regen: u32) -> Self {
+        Mana {
+            current: max,
+            max,
+            regen,
+            partial: 0,
+        }
+    }
+
+    /// Can `cost` be paid right now?
+    pub fn affords(&self, cost: i32) -> bool {
+        self.current >= cost
+    }
+
+    /// Pay `cost`, which the caller has checked with [`Mana::affords`].
+    pub fn spend(&mut self, cost: i32) {
+        self.current = (self.current - cost).max(0);
+        // Spending resets the fraction, so two casts in a row do not bank a
+        // free point out of whatever happened to be accumulated.
+        self.partial = 0;
+    }
+
+    /// One tick of regeneration. Never exceeds `max`, and a full pool stops
+    /// accumulating rather than banking a head start on the next spend.
+    pub fn regenerate(&mut self) {
+        if self.current >= self.max || self.regen == 0 {
+            self.partial = 0;
+            return;
+        }
+        self.partial += self.regen;
+        while self.partial >= 1000 && self.current < self.max {
+            self.partial -= 1000;
+            self.current += 1;
+        }
+        if self.current >= self.max {
+            self.current = self.max;
+            self.partial = 0;
+        }
+    }
+
+    pub fn fraction(&self) -> f32 {
+        if self.max <= 0 {
+            0.0
+        } else {
+            (self.current.max(0) as f32) / (self.max as f32)
+        }
+    }
+}
+
+/// A spell in progress, and the cooldown left behind by the last one.
+///
+/// One component rather than an added/removed marker, for the reason
+/// [`Attacking`] is: mutating an entity's component set at runtime reshuffles
+/// hecs archetype order, and `Sim::npcs` should not have to defend against
+/// something this file could simply not do. Idle casters carry `None`.
+#[derive(Clone, Debug, Default)]
+pub struct Casting {
+    /// Which spell from `assets/data/spells.ron`, if one is running.
+    pub spell: Option<String>,
+    /// Ticks since the cast started.
+    pub elapsed: u32,
+    /// Ticks until another cast may start.
+    ///
+    /// One timer for the caster rather than one per spell, which is exactly
+    /// right for one spell and exactly wrong for two. The second entry in
+    /// `spells.ron` is what turns this into a map keyed by spell id.
+    pub cooldown: u32,
+}
+
+impl Casting {
+    pub fn busy(&self) -> bool {
+        self.spell.is_some()
+    }
+
+    pub fn start(&mut self, spell: &str, cooldown: u32) {
+        self.spell = Some(spell.to_string());
+        self.elapsed = 0;
+        self.cooldown = cooldown;
+    }
+
+    /// End the cast. The cooldown is deliberately left running: it started
+    /// when the cast did, so interrupting one is not a way to skip it.
+    pub fn stop(&mut self) {
+        self.spell = None;
+        self.elapsed = 0;
+    }
+}
+
+/// A thing in flight that damages what it touches.
+///
+/// Everything about a hit is carried here rather than looked up from the spell
+/// that made it, so a bolt already in the air is unaffected by the table being
+/// reloaded, and so the projectile system needs no access to `spells.ron`.
+#[derive(Clone, Copy, Debug)]
+pub struct Projectile {
+    pub damage: i32,
+    /// Impulse applied to what it hits, in its direction of travel.
+    pub knockback: Vec2,
+    pub hitstun: u32,
+    /// Carry on after connecting rather than expiring.
+    pub pierces: bool,
+    /// Who threw it. Kept so a projectile can never hit its own caster even
+    /// if teams are ever allowed to overlap, and so an event could name them.
+    pub source: hecs::Entity,
+}
+
+/// Ticks an entity has left before it removes itself.
+///
+/// Only projectiles have one today. It is a plain countdown rather than an
+/// expiry tick so that hitstop — which skips whole ticks of the world —
+/// pauses it along with everything else.
+#[derive(Clone, Copy, Debug)]
+pub struct Lifetime {
+    pub ticks: u32,
 }
 
 /// Which side of a fight an entity is on. Hitboxes only damage the other team,

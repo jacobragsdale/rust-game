@@ -24,16 +24,17 @@ use anyhow::Context as _;
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::assets::{Assets, AttackTable, Clip, ClipSet, StatTable};
+use crate::assets::{Assets, AttackTable, Clip, ClipSet, SpellEffect, SpellTable, StatTable};
 use crate::ecs::components::{
-    AnimationState, Attacking, Avatar, Body, Health, Kind, Patrol, Position, Size, Sprite, Velocity,
+    AnimationState, Attacking, Avatar, Body, Casting, Health, Kind, Mana, Patrol, Position, Size,
+    Sprite, Velocity,
 };
 use crate::ecs::spawn;
 use crate::level::LevelData;
 use crate::physics::{Aabb, Geometry};
 use crate::sim::rng::Rng;
 use crate::systems::input::PlayerInput;
-use crate::systems::{animation, avatar, body, combat, npc};
+use crate::systems::{animation, avatar, body, combat, npc, spell};
 
 pub use event::GameEvent;
 pub use probe::{NpcProbe, Probe};
@@ -58,6 +59,8 @@ pub struct Sim {
     pub geometry: Geometry,
     /// Every attack's timing and effect, shared by every attacker.
     pub attacks: Arc<AttackTable>,
+    /// Every spell's cost, timing and effect, shared by every caster.
+    pub spells: Arc<SpellTable>,
     /// Every kind's movement and combat numbers. `spawn` hands each entity the
     /// block for its kind as a `Stats` component; this is kept so that
     /// anything spawned later in the run can be given one too.
@@ -106,6 +109,9 @@ impl Sim {
 
         let attacks = assets.attacks()?;
         let stats = assets.stats()?;
+        // Loaded through the cache here so a broken `spells.ron` fails map
+        // loading with a message, rather than panicking inside `Sim::new`.
+        assets.spells()?;
         Ok(Self::new(
             level,
             &clip_sets,
@@ -157,6 +163,13 @@ impl Sim {
     /// The seed is a parameter rather than a constant because a run has to be
     /// reproducible from what is written down: a tape's `seed` directive, or
     /// [`rng::DEFAULT_SEED`] when nothing says otherwise.
+    ///
+    /// The spell table is deliberately *not* a parameter. Attacks and stats
+    /// are, for historical reasons — they were threaded through every caller
+    /// before there was anywhere else to put them — but there is exactly one
+    /// spell table in the game, with no per-map and no per-run variation, so
+    /// it is read from [`SpellTable::shipped`] here. Give it a parameter the
+    /// day something genuinely needs a different one.
     pub fn new(
         level: LevelData,
         clip_sets: &HashMap<String, Arc<ClipSet>>,
@@ -205,6 +218,7 @@ impl Sim {
             level,
             geometry,
             attacks,
+            spells: SpellTable::shipped(),
             stats,
             rng: Rng::new(seed),
             tick: 0,
@@ -266,6 +280,11 @@ impl Sim {
         // this tick's answer rather than last tick's.
         combat::tick_timers(&mut self.world);
         combat::advance_attacks(&mut self.world, &self.attacks, &mut self.events);
+        // Mana, cooldowns and casts count with the other timers — and a cast
+        // that reaches its release tick puts its projectile into the world
+        // here, before `move_bodies`, so a bolt travels on the tick it appears
+        // rather than hanging in the air for one.
+        spell::advance_casts(&mut self.world, &self.spells);
 
         // Geometry that owns itself decides here, with the controllers: a fire
         // lights or goes out, and the rebuild below picks it up this tick.
@@ -276,6 +295,7 @@ impl Sim {
             &self.level,
             &self.geometry,
             &self.attacks,
+            &self.spells,
             input,
             TICK,
             &mut self.events,
@@ -296,6 +316,11 @@ impl Sim {
         // Hitboxes are tested once everything has finished moving, so a swing
         // connects where the bodies actually ended the tick.
         combat::resolve(&mut self.world, &self.attacks, &mut self.events);
+        // Beside it, and after it: a bolt is a hitbox that happens to have
+        // been travelling, and it is tested where it actually ended the tick.
+        // Both are done before `settle_dead`, so whatever either of them
+        // killed stops moving on the tick it died.
+        spell::resolve_projectiles(&mut self.world, &self.geometry, &mut self.events);
         combat::settle_dead(&mut self.world);
         if self
             .events
@@ -305,7 +330,7 @@ impl Sim {
             self.hitstop = HITSTOP_TICKS;
         }
 
-        animation::select_avatar_clip(&mut self.world, &self.attacks);
+        animation::select_avatar_clip(&mut self.world, &self.attacks, &self.spells);
         animation::select_patrol_clip(&mut self.world);
         animation::advance(&mut self.world, TICK);
         self.tick += 1;
@@ -388,6 +413,7 @@ impl Sim {
 
     /// Snapshot the player's state for tracing and assertions.
     pub fn probe(&self) -> Probe {
+        #[allow(clippy::type_complexity)]
         let mut query = self.world.query::<(
             &Avatar,
             &Body,
@@ -396,11 +422,26 @@ impl Sim {
             &Position,
             &Velocity,
             &AnimationState,
+            Option<&Mana>,
+            Option<&Casting>,
         )>();
-        let (_, (avatar, body, health, attacking, pos, vel, anim)) =
+        let (_, (avatar, body, health, attacking, pos, vel, anim, mana, casting)) =
             query.iter().next().expect("sim has no avatar to probe");
         Probe::new(
-            self.tick, avatar, body, health, attacking, pos.0, vel.0, anim,
+            self.tick,
+            avatar,
+            body,
+            health,
+            attacking,
+            pos.0,
+            vel.0,
+            anim,
+            mana,
+            casting,
+            // A count, not a probe each: what a tape wants to say is "a bolt
+            // existed", and a line per projectile per tick makes a trace
+            // unreadable long before it makes it informative.
+            spell::projectile_count(&self.world),
         )
     }
 
@@ -468,12 +509,29 @@ pub(crate) fn fixture_clip_sets() -> HashMap<String, Arc<ClipSet>> {
 }
 
 pub(crate) fn fixture_clips() -> ClipSet {
+    // Spell clips are read out of the shipped table rather than listed here:
+    // a spell names the clip its caster plays and the clip its projectile is
+    // drawn with, and hard-coding either in Rust is the seam this whole
+    // arrangement exists to avoid. Adding a spell needs no change to this.
+    let spells = SpellTable::shipped();
+    let spell_clips: Vec<String> = spells
+        .ids()
+        .into_iter()
+        .filter_map(|id| spells.get(id))
+        .flat_map(|def| {
+            let SpellEffect::Projectile { clip, .. } = &def.effect;
+            [def.clip.clone(), clip.clone()]
+        })
+        .collect();
+
     let clips = animation::AVATAR_CLIPS
         .iter()
         .chain(animation::PATROL_CLIPS)
-        .map(|&name| {
+        .map(|&name| name.to_string())
+        .chain(spell_clips)
+        .map(|name| {
             (
-                name.to_string(),
+                name,
                 Clip {
                     frames: vec![(0, 0), (1, 0)],
                     fps: 10.0,
@@ -776,6 +834,292 @@ mod tests {
             probes
         };
         assert_eq!(trace(()), trace(()));
+    }
+
+    // --- casting ----------------------------------------------------------
+
+    /// The shipped `shock`, which every number below is read from rather than
+    /// written out: this is a test of the mechanism, not of the balance.
+    fn shock() -> crate::assets::SpellDef {
+        crate::assets::SpellTable::shipped()
+            .get("shock")
+            .expect("assets/data/spells.ron defines `shock`")
+            .clone()
+    }
+
+    const CAST: PlayerInput = PlayerInput::from_actions(&[Action::Cast]);
+
+    fn casting_sim() -> Sim {
+        let mut sim = Sim::fixture(&["..........", "..P.......", "##########"]);
+        step_until(&mut sim, 30, PlayerInput::default(), |s| s.probe().grounded);
+        sim
+    }
+
+    /// The whole of C-1 in one run: a cast spends, a second is refused, the
+    /// cooldown expires on schedule, and the pool refills to exactly full.
+    #[test]
+    fn a_cast_spends_mana_and_the_cooldown_gates_the_next_one() {
+        let spell = shock();
+        let mut sim = casting_sim();
+        let full = sim.probe().mana;
+        assert_eq!(full, sim.probe().mana_max, "starts with a full pool");
+
+        sim.step(CAST);
+        assert_eq!(sim.probe().mana, full - spell.cost, "paid up front");
+        assert!(sim.probe().casting);
+        assert_eq!(sim.probe().cast_cooldown, spell.cooldown);
+        assert_eq!(
+            sim.events(),
+            [GameEvent::SpellCast {
+                spell: "shock".to_string()
+            }]
+        );
+
+        // Immediately again: refused, and it says why rather than doing
+        // nothing observable.
+        let spent = sim.probe().mana;
+        sim.step(PlayerInput::default());
+        sim.step(CAST);
+        assert_eq!(sim.probe().mana, spent, "a refusal costs nothing");
+        assert_eq!(
+            sim.events(),
+            [GameEvent::CastFailed {
+                spell: "shock".to_string(),
+                reason: crate::sim::event::CastFailure::Busy,
+            }]
+        );
+
+        // Wait the cooldown out and it goes off again.
+        step_until(&mut sim, 600, PlayerInput::default(), |s| {
+            s.probe().cast_cooldown == 0 && !s.probe().casting
+        });
+        sim.step(CAST);
+        assert!(
+            sim.events().contains(&GameEvent::SpellCast {
+                spell: "shock".to_string()
+            }),
+            "the cooldown lapsed and the cast went through"
+        );
+    }
+
+    #[test]
+    fn casting_on_an_empty_pool_fails_for_want_of_mana_and_does_not_animate() {
+        let mut sim = casting_sim();
+        let spell = shock();
+
+        // Drain the pool: cast whenever it is legal to, until it is not.
+        let mut drained = false;
+        for _ in 0..2000 {
+            sim.step(CAST);
+            let probe = sim.probe();
+            if probe.mana < spell.cost && !probe.casting && probe.cast_cooldown == 0 {
+                drained = true;
+                break;
+            }
+        }
+        assert!(drained, "never managed to empty the pool");
+
+        let before = sim.probe();
+        sim.step(CAST);
+        let after = sim.probe();
+        assert_eq!(after.mana, before.mana, "spent nothing");
+        assert!(!after.casting, "and did not animate");
+        assert_ne!(after.clip, "cast");
+        assert_eq!(
+            sim.events(),
+            [GameEvent::CastFailed {
+                spell: "shock".to_string(),
+                reason: crate::sim::event::CastFailure::NoMana,
+            }]
+        );
+    }
+
+    /// Regeneration reaches the maximum and stops there — no overflow, and
+    /// nothing banked for the next spend.
+    #[test]
+    fn mana_regenerates_to_full_and_no_further() {
+        let mut sim = casting_sim();
+        let max = sim.probe().mana_max;
+        sim.step(CAST);
+        assert!(sim.probe().mana < max);
+
+        step_until(&mut sim, 3000, PlayerInput::default(), |s| {
+            s.probe().mana == max
+        });
+        for _ in 0..600 {
+            sim.step(PlayerInput::default());
+            assert_eq!(sim.probe().mana, max, "never past the maximum");
+        }
+    }
+
+    /// A cast puts a bolt into the world at its release tick, and the bolt is
+    /// counted in the probe rather than given a probe of its own.
+    #[test]
+    fn a_cast_releases_exactly_one_projectile() {
+        let mut sim = Sim::fixture(&[
+            "....................",
+            "..P.................",
+            "####################",
+        ]);
+        step_until(&mut sim, 30, PlayerInput::default(), |s| s.probe().grounded);
+        assert_eq!(sim.probe().projectiles, 0);
+
+        sim.step(CAST);
+        let released = step_until(&mut sim, 120, PlayerInput::default(), |s| {
+            s.probe().projectiles > 0
+        });
+        assert_eq!(sim.probe().projectiles, 1, "one bolt, not one per tick");
+        assert_eq!(
+            released + 1,
+            shock().cast_ticks,
+            "released on the tick the spell says"
+        );
+    }
+
+    // --- the plunge -------------------------------------------------------
+
+    /// Down+attack in the air is the plunge; attack alone is still the air
+    /// attack; down+attack on the ground is still the ground combo. Three
+    /// meanings for one button, and the new one must not have eaten either of
+    /// the two that were there first.
+    #[test]
+    fn down_attack_means_three_different_things() {
+        let attack = PlayerInput::from_actions(&[Action::Attack]);
+        let down_attack = PlayerInput::from_actions(&[Action::Down, Action::Attack]);
+        let stats = player_stats();
+        let mv = stats.avatar();
+
+        // On the ground, with down held: the combo opener.
+        let mut sim = casting_sim();
+        sim.step(down_attack);
+        assert!(!sim.probe().plunging);
+        assert_eq!(
+            sim.events(),
+            [GameEvent::Attacked {
+                attack: stats.attack.clone()
+            }]
+        );
+
+        // In the air, without down: the air attack.
+        let mut sim = casting_sim();
+        sim.step(JUMP);
+        for _ in 0..6 {
+            sim.step(PlayerInput::default());
+        }
+        sim.step(attack);
+        assert!(!sim.probe().plunging);
+        assert_eq!(
+            sim.events(),
+            [GameEvent::Attacked {
+                attack: mv.air_attack.clone()
+            }]
+        );
+
+        // In the air, with down: the plunge — which hangs first, so the
+        // attack itself does not start on the press.
+        let mut sim = casting_sim();
+        sim.step(JUMP);
+        for _ in 0..6 {
+            sim.step(PlayerInput::default());
+        }
+        sim.step(down_attack);
+        assert!(sim.probe().plunging);
+        assert_eq!(sim.probe().clip, "plunge_ready");
+        assert!(sim.events().is_empty(), "the swing waits for the drop");
+        assert_eq!(sim.probe().vy, 0.0, "hanging");
+    }
+
+    /// The three clips play in order, the loop actually loops on the way down,
+    /// and the impact roots the player when the ground arrives.
+    #[test]
+    fn a_long_plunge_cycles_its_loop_and_ends_on_the_impact() {
+        let mv = player_stats().avatar().clone();
+        // A tall shaft: enough fall for the loop to come round more than once.
+        let mut grid = vec!["#..................#"; 18];
+        grid[1] = "#.P................#";
+        grid.push("####################");
+        let mut sim = Sim::fixture(&grid);
+        let down_attack = PlayerInput::from_actions(&[Action::Down, Action::Attack]);
+        let down = PlayerInput::holding(&[Action::Down]);
+
+        // Plunge from the spawn rather than from a jump: the point of this
+        // test is a *long* drop, and a jump from the floor of a shaft only
+        // ever falls back the height of the jump.
+        sim.step(PlayerInput::default());
+        assert!(
+            !sim.probe().grounded,
+            "still on the way down from the spawn"
+        );
+        sim.step(down_attack);
+        assert_eq!(sim.probe().clip, "plunge_ready");
+
+        // Hover, then drop.
+        let mut clips: Vec<String> = vec![sim.probe().clip.clone()];
+        let mut loop_frames: Vec<usize> = Vec::new();
+        for _ in 0..400 {
+            sim.step(down);
+            let probe = sim.probe();
+            // Stop the moment the plunge lets go, before the ordinary
+            // movement clips start again.
+            if !probe.plunging {
+                break;
+            }
+            if clips.last() != Some(&probe.clip) {
+                clips.push(probe.clip.clone());
+            }
+            if probe.clip == "plunge_loop" {
+                loop_frames.push(probe.frame);
+            }
+        }
+
+        assert_eq!(
+            clips,
+            vec!["plunge_ready", "plunge_loop", "plunge_impact"],
+            "the three clips play once each, in order"
+        );
+        // The fixture's placeholder clips are two frames; a loop that loops
+        // returns to frame 0 after reaching the last one.
+        let wrapped = loop_frames.windows(2).any(|w| w[0] > 0 && w[1] == 0);
+        assert!(
+            wrapped,
+            "the loop never came round in {} ticks of falling: {loop_frames:?}",
+            loop_frames.len()
+        );
+        assert!(sim.probe().grounded);
+        assert!(
+            loop_frames.len() > mv.plunge_hover_ticks as usize,
+            "the drop should be the long part of a plunge from this height, \
+             but it lasted only {} ticks",
+            loop_frames.len()
+        );
+    }
+
+    /// Being hit drops the plunge, exactly as it drops a swing — otherwise a
+    /// player knocked out of the air keeps a live hitbox under their feet.
+    #[test]
+    fn a_hit_cancels_a_plunge() {
+        use crate::ecs::components::Health;
+
+        let mut sim = casting_sim();
+        let down_attack = PlayerInput::from_actions(&[Action::Down, Action::Attack]);
+        sim.step(JUMP);
+        for _ in 0..6 {
+            sim.step(PlayerInput::default());
+        }
+        sim.step(down_attack);
+        assert!(sim.probe().plunging);
+
+        let player = sim
+            .world
+            .query::<&Avatar>()
+            .iter()
+            .map(|(e, _)| e)
+            .next()
+            .expect("the fixture has a player");
+        sim.world.get::<&mut Health>(player).unwrap().hitstun = 20;
+        sim.step(PlayerInput::default());
+        assert!(!sim.probe().plunging, "knocked out of it");
+        assert!(!sim.probe().attacking);
     }
 
     // --- randomness -----------------------------------------------------

@@ -158,12 +158,30 @@ And golden traces cannot see an animation remapping at all: they record clip
 *names* and frame indices, not which cells those point at, so all three
 mapping fixes were verifiable only by eye.
 
-**M3c** — the shock spell: mana, a projectile entity, cooldown, and the mana
-bar whose space is already reserved in the HUD. And the seeded RNG, if nothing
-before it has needed one.
+**M3c ✅ done** — the shock spell, and the plunge, which finish M3. `Mana` with
+an integer regeneration accumulator, `Casting` beside `Attacking`, `SpellDef`
+in `assets/data/spells.ron` with `effect` an enum from the start, and the mana
+bar in the space the HUD had been reserving for it. `SpellCast` and
+`CastFailed` both, because "nothing happened" and "you were out of mana" are
+the same absence in a trace otherwise.
 
-Remaining from the original scope: moving stats to RON, and the plunge attack
-(frames 94-108, a long ready/loop/impact sequence).
+The projectile is the first entity spawned mid-run, and the first thing in the
+game that may be *despawned*: the never-despawn rule protects entities
+addressed by spawn index, and nothing addresses a bolt — a trace records how
+many exist, never which. `systems/spell.rs` holds both the cast and the bolt,
+and says why in its module doc.
+
+Two things worth carrying forward. A spell's art is a clip on the *caster's*
+clip set rather than a sheet named in the balance file — that keeps
+`spells.ron` free of PNGs, and it is also what gets the bolt drawn at all,
+since the scene uploads textures once when the level loads and a projectile
+does not exist yet. And the plunge needed a hitbox anchor (`Down`) rather than
+a cleverly symmetric offset: an offset can be *made* to mirror onto itself for
+one collider width, and stops being centred the moment anything else performs
+the same attack.
+
+Also from the original scope: moving stats to RON (H-3, done) and the plunge
+attack (frames 94-108, a ready/loop/impact sequence, now three clips).
 
 **Harness work:** combat is almost entirely event-shaped, which is why events
 landed in Tier 1. Add `Damaged`, `Died`, `Attacked`, `SpellCast`, `Blocked`
@@ -178,7 +196,10 @@ anyway, and tuning without a recompile is worth losing `Avatar::JUMP_SPEED` as
 a compile-time constant.
 
 **Exit criteria:** fight the knight, take damage, die, respawn — all of it
-asserted by a tape, with the damage numbers coming from data files.
+asserted by a tape, with the damage numbers coming from data files. ✅ Met:
+`knight_kill`, `knight_fights`, `spell_kill`, `spell_cast` and `plunge` cover
+the melee kill, the death and respawn, the ranged kill, the resource, and the
+last of the melee kit — nineteen tapes and nineteen golden traces in all.
 
 ## M4 — Items and inventory
 

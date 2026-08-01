@@ -81,6 +81,39 @@ Attacks({
         hitstun: 10,
     ),
 
+    // --- the plunge -------------------------------------------------------
+    //
+    // Down+attack in the air: hang for a moment, then drop with the blade
+    // underneath you. The only attack in the table with a `Down` anchor — its
+    // hitbox is centred on the player rather than mirrored with the facing,
+    // and its knockback throws the victim away from the point of impact
+    // rather than the way the player happens to be looking. Landing on
+    // something and having it fly the wrong way is the bug that anchor exists
+    // to prevent.
+    //
+    // The timing here is unlike every other entry: the hitbox is live for the
+    // whole descent, because how long that is depends on how far up the plunge
+    // started. `duration` is a ceiling — 90 ticks at 1000 px/s is 1500px of
+    // fall, more than any map is tall — and the real end of the attack is the
+    // ground, at which point the avatar takes over with `plunge_impact_ticks`
+    // of recovery. `recovery` here is therefore 0: it would be recovery for a
+    // fall that never landed.
+    //
+    // `offset` puts the box under the player's feet (the collider is 34 tall)
+    // and slightly wider than they are, so it catches what you aimed at.
+    "player_plunge": AttackDef(
+        clip: "plunge_loop",
+        duration: 90,
+        active: (0, 90),
+        recovery: 0,
+        anchor: Down,
+        offset: (0.0, 24.0),
+        size: (30.0, 18.0),
+        damage: 2,
+        knockback: (200.0, -260.0),
+        hitstun: 20,
+    ),
+
     // --- the knight -------------------------------------------------------
     //
     // Slower and longer than anything the player has, with a visible wind-up

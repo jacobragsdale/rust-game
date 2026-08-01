@@ -3,9 +3,9 @@
 
 use hecs::World;
 
-use crate::assets::AttackTable;
+use crate::assets::{AttackTable, SpellTable};
 use crate::ecs::components::{
-    AnimationState, Attacking, Avatar, Body, Health, Patrol, Sprite, Velocity,
+    AnimationState, Attacking, Avatar, Body, Casting, Health, Patrol, Plunge, Sprite, Velocity,
 };
 
 /// Every clip [`select_avatar_clip`] can ask for. A clip set that is missing
@@ -27,28 +27,48 @@ pub const AVATAR_CLIPS: &[&str] = &[
     "attack2",
     "attack3",
     "air_attack",
+    "plunge_ready",
+    "plunge_loop",
+    "plunge_impact",
 ];
 
 /// Map the avatar's movement state to a clip name.
-pub fn select_avatar_clip(world: &mut World, attacks: &AttackTable) {
-    for (_, (avatar, body, vel, anim, health, attacking)) in world.query_mut::<(
+pub fn select_avatar_clip(world: &mut World, attacks: &AttackTable, spells: &SpellTable) {
+    #[allow(clippy::type_complexity)]
+    for (_, (avatar, body, vel, anim, health, attacking, casting)) in world.query_mut::<(
         &Avatar,
         &Body,
         &Velocity,
         &mut AnimationState,
         &Health,
         &Attacking,
+        Option<&Casting>,
     )>() {
         // A swing outranks everything except dying: committing to an attack
         // and then having the run cycle paint over it looks like the attack
         // never happened. The attack's own clip comes from its definition, so
-        // each link of the combo animates as itself.
+        // each link of the combo animates as itself. A cast is the same shape
+        // of commitment and sits beside it; the two are mutually exclusive, so
+        // which comes first is a formality rather than a priority.
+        //
+        // The plunge is the exception that outranks both, because it is one
+        // attack drawn by three clips and only the avatar knows which phase it
+        // is in — the attack table has a single `clip` and no way to say
+        // "raise, then spin, then slam".
         let clip = if avatar.dead() {
             "die"
+        } else if let Some(clip) = plunge_clip(avatar.plunge) {
+            clip
         } else if let Some(clip) = attacking
             .attack
             .as_deref()
             .and_then(|id| attacks.get(id))
+            .map(|def| def.clip.as_str())
+        {
+            clip
+        } else if let Some(clip) = casting
+            .and_then(|c| c.spell.as_deref())
+            .and_then(|id| spells.get(id))
             .map(|def| def.clip.as_str())
         {
             clip
@@ -74,6 +94,17 @@ pub fn select_avatar_clip(world: &mut World, attacks: &AttackTable) {
             "idle"
         };
         anim.switch_to(clip);
+    }
+}
+
+/// Which of the plunge's three clips a phase draws, or `None` when no plunge
+/// is running.
+fn plunge_clip(plunge: Plunge) -> Option<&'static str> {
+    match plunge {
+        Plunge::None => None,
+        Plunge::Ready => Some("plunge_ready"),
+        Plunge::Falling => Some("plunge_loop"),
+        Plunge::Impact => Some("plunge_impact"),
     }
 }
 

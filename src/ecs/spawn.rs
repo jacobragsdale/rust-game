@@ -15,10 +15,10 @@ use std::sync::Arc;
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::assets::{ClipSet, StatBlock};
+use crate::assets::{ClipSet, SpellDef, SpellEffect, StatBlock};
 use crate::ecs::components::{
-    AnimationState, Attacking, Avatar, Body, Health, Hostile, Kind, Patrol, Position, Size, Sprite,
-    Stats, Team, Velocity,
+    AnimationState, Attacking, Avatar, Body, Casting, Health, Hostile, Kind, Lifetime, Mana,
+    Patrol, Position, Projectile, Size, Sprite, Stats, Team, Velocity,
 };
 use crate::level::EntitySpawn;
 
@@ -38,7 +38,7 @@ pub fn player(
     stats: Arc<StatBlock>,
 ) -> hecs::Entity {
     let offset = art_offset(&clips);
-    world.spawn((
+    let entity = world.spawn((
         Avatar::new(stats.avatar()),
         Body::new(spawn, stats.gravity, stats.max_fall),
         Team::Player,
@@ -49,7 +49,94 @@ pub fn player(
         Size(stats.size()),
         Sprite { clips, offset },
         AnimationState::new("idle"),
-        Stats(stats),
+        Stats(stats.clone()),
+    ));
+    give_mana(world, entity, &stats);
+    entity
+}
+
+/// Give an entity a mana pool and somewhere to keep a cast, if its kind has a
+/// pool at all.
+///
+/// Conditional rather than universal so that a kind which never casts is not
+/// dragged into a different archetype for the sake of two components it will
+/// never read — and so `Sim::npcs` keeps meeting the world it expects.
+fn give_mana(world: &mut World, entity: hecs::Entity, stats: &StatBlock) {
+    if stats.max_mana <= 0 {
+        return;
+    }
+    world
+        .insert(
+            entity,
+            (
+                Mana::new(stats.max_mana, stats.mana_regen),
+                Casting::default(),
+            ),
+        )
+        .expect("the entity was just spawned");
+}
+
+/// Launch a spell's projectile from `origin` (the top-left of its box),
+/// travelling the way its caster faces.
+///
+/// It carries everything about the hit it will deal, so nothing downstream
+/// needs the spell table; and it carries the caster's clip set, so a bolt is
+/// drawn out of the art of whoever threw it.
+pub fn projectile(
+    world: &mut World,
+    caster: hecs::Entity,
+    origin: Vec2,
+    facing_right: bool,
+    spell: &SpellDef,
+    team: Team,
+    clips: Arc<ClipSet>,
+) -> hecs::Entity {
+    let SpellEffect::Projectile {
+        speed,
+        damage,
+        lifetime,
+        size,
+        clip,
+        knockback,
+        hitstun,
+        pierces,
+    } = &spell.effect;
+
+    let size = Vec2::new(size.0, size.1);
+    let dir = if facing_right { 1.0 } else { -1.0 };
+    let velocity = Vec2::new(dir * speed, 0.0);
+    let knockback = Vec2::new(dir * knockback.0, knockback.1);
+
+    // A bolt has no feet: its art is centred on its box rather than stood on
+    // it, which is what `Sprite::draw_origin` assumes for anything that walks.
+    // The nudge is derived from the clip's own cell size, so changing the art
+    // does not silently move the bolt off its hitbox.
+    let frame_h = clips
+        .clip(clip)
+        .map(|c| clips.frame_size_of(c).1)
+        .unwrap_or(size.y);
+    let offset = Vec2::new(0.0, (frame_h - size.y) / 2.0);
+
+    let mut body = Body::new(origin, 0.0, speed.abs());
+    // Straight and flat: a bolt is not a thrown rock.
+    body.gravity = 0.0;
+
+    world.spawn((
+        Projectile {
+            damage: *damage,
+            knockback,
+            hitstun: *hitstun,
+            pierces: *pierces,
+            source: caster,
+        },
+        Lifetime { ticks: *lifetime },
+        team,
+        Position(origin),
+        Velocity(velocity),
+        Size(size),
+        body,
+        Sprite { clips, offset },
+        AnimationState::new(clip),
     ))
 }
 
@@ -69,7 +156,7 @@ pub fn entity(
         "knight" => {
             let pos = stand_in_cell(placement.pos, tile_size, stats.size());
             let offset = art_offset(&clips);
-            Ok(world.spawn((
+            let entity = world.spawn((
                 Kind(placement.kind.clone()),
                 Patrol::new(1.0, stats.run_speed),
                 Hostile::new(pos.x, &stats.attack),
@@ -82,8 +169,12 @@ pub fn entity(
                 Body::new(pos, stats.gravity, stats.max_fall),
                 Sprite { clips, offset },
                 AnimationState::new("idle"),
-                Stats(stats),
-            )))
+                Stats(stats.clone()),
+            ));
+            // A knight has no pool, so this does nothing today. It is here so
+            // that a caster NPC is a stat block and not a code change.
+            give_mana(world, entity, &stats);
+            Ok(entity)
         }
         other => anyhow::bail!(
             "map places unknown entity kind `{other}` (known kinds: {})",

@@ -76,8 +76,15 @@ is defined, and what `tapes_readme_lists_every_action` checks this against.
 <!-- actions:end -->
 
 Combined keys do double duty: `down+jump` while running is a slide, `down`
-alone on a one-way platform is a drop-through, and `attack` during a swing
-chains the next link of the combo.
+alone on a one-way platform is a drop-through, `attack` during a swing chains
+the next link of the combo, and `down+attack` *in the air* is the plunge — on
+the ground the same combination is still the ordinary combo, and `attack`
+alone in the air is still the air attack.
+
+`cast` spends mana and starts the spell named by the player's stat block
+(`spell:` in `assets/data/stats.ron`, resolved against `assets/data/spells.ron`).
+It is refused, loudly, if a swing or another cast is running, if the cooldown
+has not lapsed, or if the pool is short — see `cast_failed` below.
 
 **Edge-triggered actions fire once per press.** `jump 10` is one jump held for
 ten ticks — exactly what holding the key does — not ten jumps. Releasing and
@@ -98,10 +105,17 @@ Assertions read `assert <flag>`, `assert !<flag>`, or `assert <field> <op>
 <value>` with `< <= > >= == !=`. Available names:
 
 - numeric: `x`, `y`, `vx`, `vy`, `tick`, `air_jumps`, `frame`, `hp`,
-  `iframes`, `hitstun`
+  `iframes`, `hitstun`, `mana`, `mana_max`, `cast_cooldown`, `projectiles`
 - boolean: `grounded`, `facing_right`, `wall_sliding`, `double_jumping`,
-  `crouching`, `dead`, `on_one_way_only`, `attacking`
+  `crouching`, `dead`, `on_one_way_only`, `attacking`, `casting`, `plunging`
 - text: `clip` — compared with `==` or `!=` only
+
+`projectiles` is a count of every bolt in the air anywhere in the world, not a
+probe per bolt: a line per projectile per tick makes a trace unreadable long
+before it makes it informative, and what a tape wants to say is "the bolt
+existed" and "it hit". `mana` is `0` for anything with no pool at all, which is
+the same answer an empty pool gives — and correctly so, since both mean "cannot
+cast".
 
 ## Asserting on NPCs
 
@@ -161,16 +175,27 @@ expect wall_jumped == 1  # fired exactly once
 ```
 
 Events: `jumped`, `double_jumped`, `wall_jumped`, `landed`, `dropped_through`,
-`slid`, `died`, `respawned`, `attacked`, `damaged`.
+`slid`, `died`, `respawned`, `attacked`, `damaged`, `spell_cast`, `cast_failed`.
 
 Three things to know:
 
-**Narrow with `<name>.<event>`.** Three events carry a discriminating name.
+**Narrow with `<name>.<event>`.** Five events carry a discriminating name.
 `damaged` and `died` carry the victim, so `expect knight.damaged == 3` counts
 hits on the knight and `expect player.damaged == 4` counts hits on you.
 `attacked` carries the attack id, so `expect player_slash3.attacked >= 3` says
-the finisher actually saw use. A bare `expect damaged` counts every hit on
+the finisher actually saw use, and `expect no player_plunge.attacked` says a
+tape never plunged. `spell_cast` and `cast_failed` carry the spell id, so
+`expect shock.spell_cast == 1`. A bare `expect damaged` counts every hit on
 anything, which is rarely what you mean now that both sides bleed.
+
+**`cast_failed` is not decoration.** A cast that does not happen leaves nothing
+in any state field, so without this event "the key did nothing" and "you were
+out of mana" are the same absence in a trace. The event records which of the
+four it was — `busy`, `cooling`, `no_mana`, `unknown` — and it fires on the
+tick the key was pressed. `spell_cast` likewise fires when a cast *starts*, not
+when the bolt appears: that is the tick the decision was made and the tick the
+mana left the pool. The bolt is `cast_ticks` later, and shows up as
+`projectiles` going to 1.
 
 **Counts are cumulative** from the start of the tape, not per-tick — you rarely
 know which tick a landing happened on, but you always know it should have
@@ -180,6 +205,10 @@ written as "still the same count as before" (`expect jumped == 1`), not
 
 **`landed` fires on tick 1** as the player settles onto the ground under their
 spawn point, so a tape that jumps once and comes back down has landed twice.
+The flip side of the same fact catches people out: on tick 1 the player has
+*not yet collided with anything*, so `grounded` is still false and
+`down+attack` on that tick is a plunge rather than a combo. A tape that means
+to start on the floor opens with `wait 1`.
 
 ## Fixture maps
 

@@ -24,6 +24,14 @@ Stats({
         // death spiral.
         iframe_ticks: 30,
         attack: "player_slash1",
+        // Two casts on a full pool, and the third has to be waited for.
+        max_mana: 5,
+        // Thousandths of a point per tick: 12 is one point every 84 ticks, so
+        // an empty pool is full again in about seven seconds. Slow enough that
+        // spells are a resource rather than a rotation, fast enough that a
+        // fight is never decided by standing still.
+        mana_regen: 20,
+        spell: "shock",
         avatar: AvatarStats(
             accel: 1500.0,
             decel: 1800.0,
@@ -43,6 +51,15 @@ Stats({
             slide_cooldown: 20,
             death_ticks: 36,
             air_attack: "player_air",
+            plunge_attack: "player_plunge",
+            // A sixth of a second hanging: long enough to read as a wind-up,
+            // short enough that it is not a free hover.
+            plunge_hover_ticks: 10,
+            // Terminal velocity is 900; the plunge beats it, so the drop is
+            // visibly faster than falling.
+            plunge_speed: 1000.0,
+            // Matches the five-frame `plunge_impact` clip at 15 fps.
+            plunge_impact_ticks: 20,
         ),
     ),
     // Narrower and shorter than the player, matching a drawn body of about
@@ -57,6 +74,12 @@ Stats({
         // Short enough that every link of the player's combo connects.
         iframe_ticks: 10,
         attack: "knight_slash",
+        // No pool and no spell: the knight is all sword. Written out rather
+        // than defaulted, because nothing in this file is a fallback — a kind
+        // that says nothing about mana would be a kind nobody had decided
+        // about. A zero pool is also what stops `spawn` giving it a `Mana`.
+        max_mana: 0,
+        mana_regen: 0,
         ai: AiStats(
             sight: 130.0,
             sight_height: 36.0,
