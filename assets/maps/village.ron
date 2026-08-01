@@ -1,0 +1,85 @@
+// The village — the hub between the castle and the dungeon, and the first
+// place in the game where nothing is trying to kill you.
+//
+// It is a *hub*, so what it contains is deliberately not content: a safe
+// spawn, somebody to talk to, a shop-shaped building with no shop behind it,
+// and a gate east. There are no hostile NPCs at all — the one NPC here is a
+// `villager`, which is a `Patrol` with no `Hostile`, so it paces and cannot be
+// fought (`Team::Player` also means the player cannot cut it down; see
+// `crate::systems::dialogue`).
+//
+// The elder is Runa, and she is the `villager` kind — the same one
+// `testbed_village.ron` places, opening the same graph
+// (assets/data/dialogue/elder.ron, id `elder_intro`) because that is the graph
+// a villager's `interact:` names in assets/data/stats.ron. This map cannot
+// bring its own conversation with it: a graph nothing points at fails
+// `every_dialogue_graph_is_reachable_from_something` in tests/data.rs, and the
+// only way to point at one is a kind's stat block. So a second conversation is
+// a stat block plus a dialogue file, not a map edit — and until there is a
+// second talking kind, every villager in the game says what Runa says.
+//
+// That is also where N-2's story beat belongs. The premise — a fighter taken
+// out of a medieval war by people who came for pre-electricity warriors after
+// a solar flare took their own machines, in a galaxy where the one thing the
+// abductors cannot do is magic, which is why the spells are the progression —
+// is a thing `elder_intro` has to say, and its file is owned by whoever is
+// writing quest text. This map's job is to put her somewhere you cannot walk
+// past, which is what the doorstep below is for.
+//
+// Legend: '#' solid  'P' spawn.  The villager has no grid character — what
+// distinguishes one talking NPC from another is the conversation it carries,
+// not where it is stood, so it is an `Npc(kind:, cell:)` entry.
+//
+// 40x12 tiles at 32px = 1280x384 world pixels.
+//
+//   ground       rows 10-11, the full width — surface y=320
+//   spawn        col 2, row 9    world (70, 286), feet on the ground, and
+//                nothing lethal anywhere in the map to spawn near
+//   cottage      cols 9-14   roof row 4, jambs rows 5-7 — Runa's
+//   doorstep     cols 11-12, a notch cut out of row 10 — floor y=352,
+//                one step down out of the street, under the cottage
+//   market hall  cols 18-26  roof row 3, posts rows 4-7 at cols 19 and 25
+//   counter      cols 21-23, row 9   surface y=288 — the shop, such as it is
+//   gatehouse    cols 32-36  roof row 3, mass rows 4-7 at cols 33-35
+//   road east    cols 36-39, the exit toward the dungeon
+//
+// **Why nothing solid reaches the ground except the counter.** A building that
+// crossed the street at head height would close the hub: the player is 34px
+// tall and cannot fit under a 32px gap, and the roofs here are far too high to
+// jump onto. So every wall stops at row 7 — underside y=256, which leaves the
+// 64px opening the gatehouse is read through — and the only thing standing on
+// the street is the shop counter, one 32px step that a jump clears.
+// `tapes/village_smoke.tape` walks the whole width and proves it.
+//
+// **Why Runa has a sunken doorstep.** A villager paces until a wall or the
+// edge of what it is standing on turns it round, which makes its route as wide
+// as the floor it is on — the full 1280px of this street, if she were stood on
+// it. The notch is the same trick `testbed_village.ron` uses its bay for, and
+// it is load-bearing for the same reason: it pens her into a thirty-pixel beat
+// (x 358..388) *and* it stops the player somewhere definite, against the far
+// face at x=396. From there her box is inside the 24px interact reach at every
+// tick of her beat rather than at some of them, so the tape can say "walk east
+// until the step stops you, and she is there" and mean it. Walking past her is
+// impossible for the same reason: the street drops out from under you.
+Level(
+    tileset: "castle",
+    grid: [
+        "........................................",
+        "........................................",
+        "........................................",
+        "..................#########.....#####...",
+        ".........######....#.....#.......###....",
+        ".........#....#....#.....#.......###....",
+        ".........#....#....#.....#.......###....",
+        ".........#....#....#.....#.......###....",
+        "........................................",
+        "..P..................###................",
+        "###########..###########################",
+        "########################################",
+    ],
+    entities: [
+        // Runa, on her doorstep. The cell is the one whose *floor* she stands
+        // on, which for a notch cut out of row 10 is row 10 itself.
+        Npc(kind: "villager", cell: (11, 10)),
+    ],
+)

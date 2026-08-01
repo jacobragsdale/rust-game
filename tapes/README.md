@@ -399,3 +399,40 @@ stops you, and she is there.
 `castle_spawn.tape` is the exception: it runs on the real map but asserts only
 that the player spawns on solid ground and is not standing in a hazard, so
 redesigning the castle cannot break it.
+
+## Tapes that run on real levels
+
+Three do, and each has a reason to.
+
+| Tape | Map | What it is for |
+| --- | --- | --- |
+| `castle_spawn.tape` | `castle.ron` | the spawn point is solid ground and not a hazard, and nothing else |
+| `village_smoke.tape` | `village.ron` | the hub is walkable end to end, the elder is in reach, and nothing in it can hurt you |
+| `dungeon_run.tape` | `dungeon.ron` | a full traversal: both fires, both knights, the pit, the ride, the gallery, the loot, the way out |
+
+The rule the fixtures exist for still holds — a *mechanic* gets a testbed,
+because a real level will be redesigned — so these three assert what a level is
+for rather than what the physics does. `village_smoke` says the street has no
+gap in it and Runa is where the map says she is; `dungeon_run` says the level
+is completable and that its hazards are survivable *with correct play*, which
+is a claim only a tape can make. Both will need editing if their map is
+redesigned, and that is the intended cost of shipping a level with a test.
+
+`dungeon_run.tape` is timed in three places and outcome-asserted everywhere
+else. The fire crossing waits for a gap, the ride is boarded as the platform
+docks, and the drop off the gallery is taken while the knight below is walking
+away — none of which can be written as anything but a tick count, because they
+are all "go now". Everything about the fights is an outcome: which knight is
+dead, whose health moved, what ended up in the bag.
+
+It also spells `expect no died` as **`expect no player.died`**, which the N-3
+ticket's own wording would have got wrong: a bare `died` counts a knight's
+death too, and the tape kills two of them.
+
+`village.ron`'s doorstep and `dungeon.ron`'s rubble steps are the same trick
+`testbed_village.ron`'s bay is, generalized. A 32px step is a wall to anything
+that walks and nothing at all to anything that jumps, so it pens an NPC into a
+readable beat while costing the player one keypress. Runa is penned in a
+two-tile notch so that "walk east until the street drops out from under you"
+puts the player somewhere definite with her in reach; both dungeon knights are
+penned so that a fight stays in the room it was designed for.
