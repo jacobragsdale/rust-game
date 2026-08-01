@@ -17,7 +17,7 @@ pub mod run;
 pub mod tape;
 pub mod trace;
 
-use std::collections::{hash_map, HashMap};
+use std::collections::{hash_map, BTreeMap, HashMap};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -161,13 +161,18 @@ pub struct Sim {
     /// Integers rather than booleans because a quest *stage* is the common
     /// case, and a boolean forces `quest.x.started` plus `quest.x.done` plus
     /// their interaction. Written by dialogue's `SetFlag` and read by its
-    /// `FlagEq` / `FlagAtLeast`, which is the whole of what M5 needs.
+    /// `FlagEq` / `FlagAtLeast`.
     ///
-    /// Deliberately **not** in the trace or the probe yet: ticket Q-1 owns
-    /// surfacing these as globals, and adding a key here now would churn every
-    /// baseline for a column M5 has nothing to assert with. What M5 needs is
-    /// that `SetFlag` is not a no-op, and that is what this is.
-    flags: HashMap<String, i64>,
+    /// A `BTreeMap` rather than a `HashMap`, for the reason
+    /// [`crate::ecs::components::Equipment`] is one: this is serialized — into
+    /// every trace frame and into every save — and a hash map's iteration order
+    /// varies with the hash seed, which would make a golden trace disagree with
+    /// itself between runs. Sorted by name is also the order a person reading a
+    /// save file wants.
+    ///
+    /// Surfaced to tapes and traces by [`Sim::flags`]; see
+    /// [`crate::sim::trace::ProbePath`] for the path syntax.
+    flags: BTreeMap<String, i64>,
     /// What was held last tick.
     ///
     /// Directions are level-triggered, because movement needs them held down;
@@ -339,7 +344,7 @@ impl Sim {
             screen: inventory::Screen::default(),
             conversation: None,
             prompt: None,
-            flags: HashMap::new(),
+            flags: BTreeMap::new(),
             prev_held: ActionSet::EMPTY,
             hitstop: 0,
             events: Vec::new(),
@@ -410,6 +415,25 @@ impl Sim {
     /// to be able to ask about a stage it has not reached.
     pub fn flag(&self, name: &str) -> i64 {
         dialogue::flag(&self.flags, name)
+    }
+
+    /// Every flag that has been set, by name, in name order.
+    ///
+    /// Only the ones actually written: an unset flag is 0 everywhere that
+    /// reads one, and writing every name a quest could ever use into every
+    /// trace frame would be a column per quest in the game forever. The
+    /// consequence a baseline depends on is that a run which sets no flag has
+    /// *no* flags key at all — see [`crate::sim::trace::Frame::flags`].
+    pub fn flags(&self) -> &BTreeMap<String, i64> {
+        &self.flags
+    }
+
+    /// Set a quest flag, exactly as a dialogue `SetFlag` effect does.
+    ///
+    /// For tests and for content that has no conversation behind it yet. The
+    /// game itself sets flags through dialogue.
+    pub fn set_flag(&mut self, name: &str, value: i64) {
+        self.flags.insert(name.to_string(), value);
     }
 
     /// Advance one fixed tick, dispatching on the mode.
@@ -1640,6 +1664,7 @@ mod tests {
                 probe: sim.probe(),
                 npcs: sim.npc_probes(),
                 items: sim.item_probes(),
+                flags: sim.flags().clone(),
                 events: Vec::new(),
                 seed: None,
             };

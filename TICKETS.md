@@ -1090,7 +1090,7 @@ Fixture with a knight and a villager: the knight chases, the villager does not.
 
 ## Q-1 — Quest flags as sim globals
 
-**Size:** S. **Depends on:** D-2.
+**Size:** S. **Depends on:** D-2. **Status:** done.
 
 ### Implementation
 
@@ -1119,7 +1119,7 @@ Unit tests on the flag store; a tape asserting a flag set by a dialogue effect.
 
 ## Q-2 — A fetch quest, end to end
 
-**Size:** M. **Depends on:** Q-1, I-2, D-2.
+**Size:** M. **Depends on:** Q-1, I-2, D-2. **Status:** done.
 
 ### Implementation
 
@@ -1185,7 +1185,7 @@ the user rather than burying it.**
 
 ## Q-3b — wire saving to the pause menu
 
-**Size:** S. **Depends on:** Q-3. **Status:** todo.
+**Size:** S. **Depends on:** Q-3. **Status:** done.
 
 ### Context
 

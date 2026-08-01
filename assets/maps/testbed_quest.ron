@@ -1,0 +1,60 @@
+// Quest testbed — the map tapes/quest_fetch.tape runs against, and the only
+// map on which a whole quest can be played out.
+//
+// A fetch quest needs three things in one room: someone to take the errand
+// from, something to go and get, and the walk between them. The only source of
+// items in the game is a corpse, so "something to go and get" is a knight —
+// which is why this map is the combat arena and the dialogue testbed spliced
+// together rather than an addition to either. Neither of those is extensible
+// here anyway: `testbed_arena.ron` and `testbed_village.ron` are frozen, and
+// dropping a knight into the village would renumber its NPCs and put a chasing
+// enemy into two tapes that are about a conversation.
+//
+// Treat this one as a fixture too: add to it, but do not move what is here.
+//
+// Legend: '#' solid  'P' spawn  'K' knight.
+//
+// 24x10 tiles at 32px = 768x320 world pixels.
+//
+//   upper floor  row 7, cols 3-23   surface y=224, x 96..768
+//   bay          cols 1-2, row 7    floor surface y=256, x 32..96
+//   left wall    col 0              interior edge x=32
+//   spawn        col 9, row 6       world (294, 190), feet on the ledge
+//   knight       col 14, row 6      world (453, 194)
+//   villager     col 2, row 7       world (69, 226), feet on the bay floor
+//
+// **The 159px between the player and the knight is the number to keep.** It is
+// `testbed_arena.ron`'s spacing to the pixel, and it is what makes the fight
+// here the fight `spell_kill.tape` already proved: five bolts from a standstill
+// kill the knight without it ever landing a blow. Move either and the tape has
+// to be reprobed.
+//
+// **The bay is `testbed_village.ron`'s, mirrored.** A villager paces the whole
+// room it is standing in, so Runa in the open would make every assertion depend
+// on when she turned round; the step down at the left end pens her into a 30px
+// beat (x 38..68) she cannot stroll out of. The player walks left off the ledge
+// at x=96, drops the one tile, and is stopped by the wall at x=32 — inside the
+// 24px interact reach of her whole beat, whichever end of it she is at. The
+// tape times nothing: run left until the wall stops you, and she is there.
+//
+// The knight never goes near her. It only ever chases the player, it dies where
+// it stood, and a corpse is frozen rather than despawned — so the walk back is
+// past a body, which is the point of the errand.
+Level(
+    tileset: "castle",
+    grid: [
+        "########################",
+        "#......................#",
+        "#......................#",
+        "#......................#",
+        "#......................#",
+        "#......................#",
+        "#........P....K........#",
+        "#..#####################",
+        "########################",
+        "########################",
+    ],
+    entities: [
+        Npc(kind: "villager", cell: (2, 7)),
+    ],
+)

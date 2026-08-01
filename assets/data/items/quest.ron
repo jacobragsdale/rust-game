@@ -20,4 +20,19 @@
             modifiers: [MaxMana(1)],
         ),
     ),
+    ItemDef(
+        id: "iron_band",
+        name: "Runa's Iron Band",
+        sprite: "items/band",
+        kind: Equipment(
+            // The other Trinket, and deliberately so: the two quest rewards in
+            // the game compete for one slot, so finishing both is a choice
+            // between a cast and a hit rather than a pair of numbers that both
+            // go up. It is also what makes `equipped` worth asserting on — a
+            // reward you can simply wear alongside everything else is a reward
+            // nothing about the bag ever has to decide.
+            slot: Trinket,
+            modifiers: [MaxHealth(1)],
+        ),
+    ),
 ]

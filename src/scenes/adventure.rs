@@ -55,9 +55,32 @@ pub struct AdventureScene {
 }
 
 impl AdventureScene {
+    /// Start a map from the beginning.
     pub fn new(ctx: &mut Context, res: &mut Resources, map: &str) -> anyhow::Result<Self> {
         let sim = Sim::load(&mut res.assets, map)?;
+        AdventureScene::from_sim(ctx, res, sim)
+    }
 
+    /// Pick a saved run back up.
+    ///
+    /// A second constructor rather than a `map` parameter that sometimes means
+    /// "and then move everything": a save names its own map, and
+    /// [`Sim::load_save`] is what turns one back into a world. Everything below
+    /// this line is graphics, which is why the two constructors meet at
+    /// [`AdventureScene::from_sim`] — the scene cannot tell a loaded run from a
+    /// fresh one, and nothing about a save is decided here.
+    pub fn from_save(
+        ctx: &mut Context,
+        res: &mut Resources,
+        save: &crate::save::SaveState,
+    ) -> anyhow::Result<Self> {
+        let sim = Sim::load_save(&mut res.assets, save)?;
+        AdventureScene::from_sim(ctx, res, sim)
+    }
+
+    /// Build the scene around a sim that already exists: upload the tiles and
+    /// the sheets its world references, and point a camera at it.
+    fn from_sim(ctx: &mut Context, res: &mut Resources, sim: Sim) -> anyhow::Result<Self> {
         let tileset = res.assets.tileset(&sim.level.tileset)?;
         let tile_image = res
             .assets
@@ -105,6 +128,20 @@ impl AdventureScene {
             sheets,
             debug: DebugOverlay::from_env(),
         })
+    }
+
+    /// The pause overlay for this run, holding a snapshot of it.
+    ///
+    /// Public because the boot shortcut in [`crate::app`] opens it too — a
+    /// menu is the one thing in the game a tape cannot press a key in, so
+    /// being able to boot straight into it is how it gets looked at.
+    ///
+    /// The snapshot is taken *here*, when the world stops, rather than when
+    /// `Save` is chosen: a paused scene does not update the one below it, so
+    /// the two are the same state, and the menu never holds a `&mut Sim` it
+    /// could decide something with.
+    pub fn pause(&self) -> PauseScene {
+        PauseScene::new(self.sim.save())
     }
 
     fn queue_tiles(&mut self) {
@@ -551,7 +588,7 @@ impl Scene for AdventureScene {
         key: VirtualKeyCode,
     ) -> Transition {
         match key {
-            VirtualKeyCode::P => Transition::Push(Box::new(PauseScene)),
+            VirtualKeyCode::P => Transition::Push(Box::new(self.pause())),
             VirtualKeyCode::M => Transition::Reset, // back to the main menu
             VirtualKeyCode::F1 => {
                 self.debug.toggle();

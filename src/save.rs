@@ -13,10 +13,15 @@
 //!
 //! # What is saved
 //!
-//! A save is **the player entity in full**, plus the three things that say
-//! which run it belongs to: the map, the tick, and the generator.
+//! A save is **the player entity in full**, plus the four things that say
+//! which run it belongs to: the map, the tick, the generator, and the quest
+//! flags.
 //!
 //! - **the map**, so a load knows what to rebuild;
+//! - **the quest flags**, because a quest that does not survive a save is not
+//!   a quest. They are also the sanctioned way to make the *world* remember
+//!   something across a load — see "what is deliberately not saved" below: a
+//!   boss that stays dead is `quest.boss.stage`, not a saved NPC;
 //! - **the tick**, which is more load-bearing than it looks — fires, moving
 //!   platforms and swinging hazards are pure functions of it, so restoring the
 //!   tick restores every one of them exactly, with no fields of their own;
@@ -70,10 +75,12 @@
 //!
 //! # Adding to the schema later
 //!
-//! Quest flags (M5/M6) belong in [`SaveState`] as one more field. Add it with
-//! `#[serde(default)]` and every save written before it still loads, with no
-//! version bump: [`SAVE_VERSION`] is for changes that alter what an existing
-//! field *means*, which no additive field does.
+//! Quest flags were the worked example of this and are now [`SaveState::flags`]:
+//! one field, `#[serde(default)]`, and **no version bump**. Every save written
+//! before Q-1 still loads, with no flags set — which is exactly what a run from
+//! before quests existed had. [`SAVE_VERSION`] is for changes that alter what
+//! an existing field *means*, which no additive field does. The next field goes
+//! in the same way.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -186,6 +193,18 @@ pub struct SaveState {
     pub tick: u64,
     pub rng: RngSave,
     pub player: PlayerSave,
+    /// Quest flags, by name.
+    ///
+    /// `#[serde(default)]` and no version bump — the recipe this module's docs
+    /// set out for an additive field, applied to the first one to arrive. A
+    /// save written before quests existed loads with an empty map, which is
+    /// what that run had.
+    ///
+    /// A `BTreeMap` for the reason [`PlayerSave::equipment`] is one: sorted by
+    /// name, so the file a save writes is stable rather than hash-ordered, and
+    /// two saves of the same run are the same text.
+    #[serde(default)]
+    pub flags: BTreeMap<String, i64>,
 }
 
 /// Where the run's randomness stood.
@@ -367,6 +386,7 @@ impl SaveState {
                 seed: sim.rng.seed(),
                 position: sim.rng.position(),
             },
+            flags: sim.flags().clone(),
             player: PlayerSave {
                 x: pos.0.x,
                 y: pos.0.y,
@@ -495,6 +515,9 @@ pub fn restore(assets: &mut Assets, save: &SaveState) -> anyhow::Result<Sim> {
     let mut sim = Sim::load(assets, &save.map)?;
     sim.tick = save.tick;
     sim.rng = Rng::resume(save.rng.seed, save.rng.position);
+    for (name, value) in &save.flags {
+        sim.set_flag(name, *value);
+    }
 
     let entity = player_entity(&sim.world)
         .ok_or_else(|| anyhow::anyhow!("`{}` spawned no player to load into", save.map))?;
@@ -683,6 +706,22 @@ pub struct FileStore {
 impl FileStore {
     pub fn new(dir: impl Into<PathBuf>) -> FileStore {
         FileStore { dir: dir.into() }
+    }
+
+    /// Where the game keeps its saves when nothing says otherwise.
+    ///
+    /// `./saves` when the game is run from the repo root, and the crate's own
+    /// `saves/` when it is run from somewhere else during development — the
+    /// rule [`Assets::new`] follows for content, decided the same way and for
+    /// the same reason. Keyed off `assets/` rather than off `saves/`, because
+    /// the save directory does not exist until the first save is written and
+    /// "does it exist yet" would answer the wrong question on a fresh install.
+    pub fn default_dir() -> PathBuf {
+        if Path::new("assets").is_dir() {
+            PathBuf::from("saves")
+        } else {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("saves")
+        }
     }
 
     /// The directory saves are kept in.
@@ -881,6 +920,47 @@ mod tests {
             vec![Slot::Head, Slot::Weapon],
             "equipment comes back in slot order, whatever order it went in",
         );
+    }
+
+    /// The additive-field recipe, checked rather than described: a save file
+    /// written before flags existed has no `flags` key, and must still load —
+    /// with no quest started, which is the state that run was in.
+    #[test]
+    fn a_save_written_before_flags_existed_still_loads() {
+        let text = state().to_ron().unwrap();
+        assert!(
+            text.contains("flags"),
+            "the field is written when it is set"
+        );
+
+        // The same file with the key removed, which is what an older build
+        // wrote. Line-oriented because `to_ron` pretty-prints.
+        let older: String = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("flags:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let loaded = SaveState::from_ron("test", &older).expect("an older save still loads");
+        assert!(loaded.flags.is_empty());
+        assert_eq!(loaded.version, SAVE_VERSION, "and needed no version bump");
+    }
+
+    #[test]
+    fn flags_survive_the_file_and_come_back_on_the_sim() {
+        let mut sim = sim();
+        sim.set_flag("quest.helm.stage", 2);
+        sim.set_flag("quest.draught.stage", 1);
+
+        let store = MemoryStore::new();
+        store.write("slot1", &sim.save().unwrap()).unwrap();
+        let state = store.read("slot1").unwrap();
+        assert_eq!(state.flags.get("quest.helm.stage"), Some(&2));
+
+        let loaded = Sim::load_save(&mut Assets::new(), &state).unwrap();
+        assert_eq!(loaded.flag("quest.helm.stage"), 2);
+        assert_eq!(loaded.flag("quest.draught.stage"), 1);
+        assert_eq!(loaded.flag("quest.never.set"), 0, "and no others appeared");
+        assert_eq!(loaded.flags(), sim.flags());
     }
 
     #[test]

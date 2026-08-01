@@ -1,5 +1,9 @@
 /target
 scores.db
+
+# Saved games written by the pause menu (Q-3b). A save is a text file, and a
+# readable one, but it is somebody's run rather than content.
+/saves
 .idea/
 
 # Personal Claude Code permissions; the shared skill lives in .claude/skills/

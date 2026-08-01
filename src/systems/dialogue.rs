@@ -63,7 +63,7 @@
 //! `Interactable` — so without that check you could hold a conversation with a
 //! body.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use ggez::glam::Vec2;
@@ -274,7 +274,7 @@ impl Conversation {
     /// open and on every branch taken, so a condition is always evaluated
     /// against the state the player is in *now* — which is what makes walking
     /// back to a node after picking something up show a new option.
-    fn enter(&mut self, node: &str, world: &World, flags: &HashMap<String, i64>) {
+    fn enter(&mut self, node: &str, world: &World, flags: &BTreeMap<String, i64>) {
         self.node = node.to_string();
         self.line = 0;
         self.selection = 0;
@@ -287,7 +287,7 @@ impl Conversation {
 /// may not.
 pub fn open(
     world: &World,
-    flags: &HashMap<String, i64>,
+    flags: &BTreeMap<String, i64>,
     graph: Arc<DialogueGraph>,
 ) -> Option<Conversation> {
     let start = graph.start.clone();
@@ -329,7 +329,7 @@ pub fn open(
 pub fn step_conversation(
     world: &mut World,
     items: &ItemTable,
-    flags: &mut HashMap<String, i64>,
+    flags: &mut BTreeMap<String, i64>,
     talk: &mut Conversation,
     input: PlayerInput,
     newly_held: ActionSet,
@@ -383,7 +383,7 @@ pub fn step_conversation(
 }
 
 /// Which of a node's choices may be offered, as authored indices.
-fn available(node: &DialogueNode, world: &World, flags: &HashMap<String, i64>) -> Vec<usize> {
+fn available(node: &DialogueNode, world: &World, flags: &BTreeMap<String, i64>) -> Vec<usize> {
     node.choices
         .iter()
         .enumerate()
@@ -400,16 +400,20 @@ fn available(node: &DialogueNode, world: &World, flags: &HashMap<String, i64>) -
 /// An unset flag reads as 0 rather than failing: quests check their stage
 /// before they have one, and `FlagEq("quest.x.stage", 0)` is the natural way to
 /// write "not started".
-fn holds(condition: &DialogueCondition, world: &World, flags: &HashMap<String, i64>) -> bool {
+fn holds(condition: &DialogueCondition, world: &World, flags: &BTreeMap<String, i64>) -> bool {
     match condition {
         DialogueCondition::HasItem(item) => carried(world, item) > 0,
         DialogueCondition::FlagEq(name, value) => flag(flags, name) == *value,
         DialogueCondition::FlagAtLeast(name, value) => flag(flags, name) >= *value,
+        // The fetch quest's return leg: "you took the errand" *and* "you have
+        // the thing". An empty list holds — the identity of an `all`, and the
+        // same answer as no condition at all.
+        DialogueCondition::All(inner) => inner.iter().all(|c| holds(c, world, flags)),
     }
 }
 
 /// Read a quest flag, defaulting to 0.
-pub fn flag(flags: &HashMap<String, i64>, name: &str) -> i64 {
+pub fn flag(flags: &BTreeMap<String, i64>, name: &str) -> i64 {
     flags.get(name).copied().unwrap_or(0)
 }
 
@@ -434,7 +438,7 @@ fn carried(world: &World, item: &str) -> u32 {
 fn apply(
     world: &mut World,
     items: &ItemTable,
-    flags: &mut HashMap<String, i64>,
+    flags: &mut BTreeMap<String, i64>,
     effect: &DialogueEffect,
     events: &mut Vec<GameEvent>,
 ) {
@@ -937,7 +941,7 @@ mod tests {
 
     #[test]
     fn an_unset_flag_reads_as_zero() {
-        let flags = HashMap::new();
+        let flags = BTreeMap::new();
         assert_eq!(flag(&flags, "quest.nothing"), 0);
         assert!(holds(
             &DialogueCondition::FlagEq("quest.nothing".to_string(), 0),
@@ -959,7 +963,7 @@ mod tests {
         give(&mut sim, "minor_potion", 2);
 
         let items = sim.items.clone();
-        let mut flags = HashMap::new();
+        let mut flags = BTreeMap::new();
         let mut events = Vec::new();
         apply(
             &mut sim.world,
@@ -1015,7 +1019,7 @@ mod tests {
         apply(
             &mut sim.world,
             &items,
-            &mut HashMap::new(),
+            &mut BTreeMap::new(),
             &DialogueEffect::GiveItem("minor_potion".to_string(), 1),
             &mut events,
         );
@@ -1038,7 +1042,7 @@ mod tests {
         apply(
             &mut sim.world,
             &items,
-            &mut HashMap::new(),
+            &mut BTreeMap::new(),
             &DialogueEffect::GiveItem("no_such_item".to_string(), 1),
             &mut events,
         );
@@ -1059,7 +1063,7 @@ mod tests {
         for id in table.ids() {
             let graph = table.get(id).expect("just listed").clone();
             assert!(
-                open(&world, &HashMap::new(), graph).is_some(),
+                open(&world, &BTreeMap::new(), graph).is_some(),
                 "`{id}` does not open"
             );
         }

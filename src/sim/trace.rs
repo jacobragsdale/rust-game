@@ -11,6 +11,7 @@
 //! `tests/traces.rs` turns that from a workflow you have to remember into a
 //! test that runs on every `cargo test`.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -41,6 +42,17 @@ pub struct Frame {
     /// existed — so adding this churned no baseline by itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<ItemProbe>,
+    /// Every quest flag that has been set, by name. Nested and omitted when
+    /// empty, for the third time and the same two reasons `npcs` and `items`
+    /// are: flags are a set of named globals rather than a fixed column, and a
+    /// run in which no quest has started serializes exactly as it did before
+    /// quests existed — which is why Q-1 churned no baseline.
+    ///
+    /// Only what has been *written*. An unset flag reads as 0 through
+    /// [`Frame::field`], so a quest that has not started costs a trace nothing
+    /// and `assert quest.helm.stage == 0` still resolves.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub flags: BTreeMap<String, i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<GameEvent>,
     /// The random seed this run used, recorded on the first frame so a trace
@@ -65,6 +77,10 @@ impl Frame {
             ProbePath::Player(name) => self.probe.field(name),
             ProbePath::Npc { kind, index, name } => self.npc(kind, index)?.field(name),
             ProbePath::Item { id, name } => self.item(id).field(name),
+            // An unset flag is 0 rather than a failure to resolve: a quest has
+            // to be able to ask about a stage before it has one, and
+            // `assert quest.helm.stage == 0` is how a tape says "not started".
+            ProbePath::Flag(name) => Some(self.flag_value(name) as f32),
         }
     }
 
@@ -74,6 +90,11 @@ impl Frame {
             ProbePath::Player(name) => self.probe.flag(name),
             ProbePath::Npc { kind, index, name } => self.npc(kind, index)?.flag(name),
             ProbePath::Item { id, name } => self.item(id).flag(name),
+            // A quest flag is a stage counter, not a boolean. `assert
+            // quest.helm.stage` would read as "stage is non-zero", which is
+            // exactly the ambiguity integers were chosen to avoid — write the
+            // comparison out.
+            ProbePath::Flag(_) => None,
         }
     }
 
@@ -84,7 +105,41 @@ impl Frame {
             ProbePath::Npc { kind, index, name } => self.npc(kind, index)?.text(name),
             // Nothing about an item is text: the id is in the path already.
             ProbePath::Item { .. } => None,
+            // Nor about a flag: it is an integer.
+            ProbePath::Flag(_) => None,
         }
+    }
+
+    /// What a quest flag stands at, which for one nobody has set is 0.
+    pub fn flag_value(&self, name: &str) -> i64 {
+        self.flags.get(name).copied().unwrap_or(0)
+    }
+
+    /// Whether `path` names a quest flag that nothing has set — the case a
+    /// failing assertion has to explain, because it is indistinguishable from
+    /// a typo. Any other kind of path is `false`.
+    pub fn flag_value_is_absent(&self, path: &str) -> bool {
+        match ProbePath::parse(path) {
+            Some(ProbePath::Flag(name)) => !self.flags.contains_key(name),
+            _ => false,
+        }
+    }
+
+    /// Every flag that is set, as `name = value`, for an error message.
+    ///
+    /// The counterpart of the "unset reads as 0" rule: a mistyped flag name
+    /// cannot fail to resolve, so the only way a tape author finds out is a
+    /// failure that says what *is* set. `Assertion::evaluate` appends this
+    /// when a comparison against an unset flag fails.
+    pub fn flag_list(&self) -> String {
+        if self.flags.is_empty() {
+            return "no flags are set".to_string();
+        }
+        self.flags
+            .iter()
+            .map(|(name, value)| format!("{name} = {value}"))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     /// The `index`-th NPC of `kind`, in spawn order.
@@ -109,6 +164,21 @@ impl Frame {
     }
 }
 
+/// The root segment that makes a dotted path a quest flag.
+///
+/// Q-1 offered two spellings — `flag.<name>` or the flag's own dotted name —
+/// and this is the second, narrowed to one reserved root. `assert
+/// quest.helm.stage == 2` therefore reads as the flag it is, with no prefix in
+/// front of a name that is already dotted.
+///
+/// **Why a reserved root rather than "anything that is not a probe field".**
+/// Flags are created by writing one, so there is no list of them to check a
+/// path against: a bare dotted fallback would make every mistyped path in
+/// every tape a flag that quietly reads 0, and `assert knigt.0.hp == 3` would
+/// pass. One reserved word keeps typo rejection exactly where it was and costs
+/// only a naming convention that every flag in the game already follows.
+pub const FLAG_ROOT: &str = "quest";
+
 /// A parsed assertion path.
 pub enum ProbePath<'a> {
     Player(&'a str),
@@ -124,6 +194,9 @@ pub enum ProbePath<'a> {
         id: &'a str,
         name: &'a str,
     },
+    /// `quest.helm.stage`: a quest flag, addressed by its whole name. Numeric
+    /// always, and 0 when nothing has set it — see [`FLAG_ROOT`].
+    Flag(&'a str),
 }
 
 impl<'a> ProbePath<'a> {
@@ -137,6 +210,12 @@ impl<'a> ProbePath<'a> {
             // id — but written first so that is a fact about this file rather
             // than about `usize::from_str`.
             ["item", id, name] => Some(ProbePath::Item { id, name }),
+            // Before the NPC arm too, and for a stronger reason: a flag path
+            // has no fixed number of segments, so it has to be recognized by
+            // its root before anything tries to read a segment as an index.
+            [root, rest @ ..] if *root == FLAG_ROOT && !rest.is_empty() => {
+                Some(ProbePath::Flag(path))
+            }
             [kind, index, name] => Some(ProbePath::Npc {
                 kind,
                 index: index.parse().ok()?,
@@ -154,6 +233,9 @@ impl<'a> ProbePath<'a> {
             ProbePath::Player(name) => Probe::field_names().contains(name),
             ProbePath::Npc { name, .. } => NpcProbe::field_names().contains(name),
             ProbePath::Item { name, .. } => ItemProbe::field_names().contains(name),
+            // Always. There is no list of flags to check against — a flag
+            // exists because something set it — and an unset one is 0.
+            ProbePath::Flag(_) => true,
         }
     }
 
@@ -162,6 +244,8 @@ impl<'a> ProbePath<'a> {
             ProbePath::Player(name) => Probe::flag_names().contains(name),
             ProbePath::Npc { name, .. } => NpcProbe::flag_names().contains(name),
             ProbePath::Item { name, .. } => ItemProbe::flag_names().contains(name),
+            // A quest flag is not a boolean, whatever it is called.
+            ProbePath::Flag(_) => false,
         }
     }
 
@@ -171,7 +255,13 @@ impl<'a> ProbePath<'a> {
             ProbePath::Player(name) => Probe::text_names().contains(name),
             ProbePath::Npc { name, .. } => NpcProbe::text_names().contains(name),
             ProbePath::Item { .. } => false,
+            ProbePath::Flag(_) => false,
         }
+    }
+
+    /// Whether this path names a quest flag.
+    pub fn is_quest_flag(&self) -> bool {
+        matches!(self, ProbePath::Flag(_))
     }
 
     /// What this path could have meant, for an error message.
@@ -180,6 +270,10 @@ impl<'a> ProbePath<'a> {
             ProbePath::Player(_) => Probe::known_names(),
             ProbePath::Npc { .. } => NpcProbe::known_names(),
             ProbePath::Item { .. } => ItemProbe::known_names(),
+            ProbePath::Flag(_) => format!(
+                "a `{FLAG_ROOT}.` path is a quest flag: a whole number, unset is 0, \
+                 compared with == < > and so on"
+            ),
         }
     }
 }
@@ -199,12 +293,14 @@ impl Trace {
         probe: Probe,
         npcs: Vec<NpcProbe>,
         items: Vec<ItemProbe>,
+        flags: BTreeMap<String, i64>,
         events: &[GameEvent],
     ) {
         self.push_frame(Frame {
             probe,
             npcs,
             items,
+            flags,
             events: events.to_vec(),
             seed: None,
         });
@@ -320,8 +416,8 @@ mod tests {
     #[test]
     fn writes_one_json_object_per_tick() {
         let mut trace = Trace::new();
-        trace.push(probe(0), Vec::new(), Vec::new(), &[]);
-        trace.push(probe(1), Vec::new(), Vec::new(), &[]);
+        trace.push(probe(0), Vec::new(), Vec::new(), BTreeMap::new(), &[]);
+        trace.push(probe(1), Vec::new(), Vec::new(), BTreeMap::new(), &[]);
 
         let text = trace.to_jsonl();
         let lines: Vec<&str> = text.lines().collect();
@@ -341,6 +437,7 @@ mod tests {
             probe(3),
             Vec::new(),
             Vec::new(),
+            BTreeMap::new(),
             &[GameEvent::Died {
                 who: "player".to_string(),
                 cause: DeathCause::Hazard,
@@ -359,7 +456,7 @@ mod tests {
     #[test]
     fn eventless_frames_carry_no_events_key() {
         let mut trace = Trace::new();
-        trace.push(probe(0), Vec::new(), Vec::new(), &[]);
+        trace.push(probe(0), Vec::new(), Vec::new(), BTreeMap::new(), &[]);
         assert!(!trace.to_jsonl().contains("events"));
     }
 
@@ -367,8 +464,14 @@ mod tests {
     #[test]
     fn jsonl_round_trips() {
         let mut trace = Trace::new();
-        trace.push(probe(7), Vec::new(), Vec::new(), &[GameEvent::Jumped]);
-        trace.push(probe(8), Vec::new(), Vec::new(), &[]);
+        trace.push(
+            probe(7),
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+            &[GameEvent::Jumped],
+        );
+        trace.push(probe(8), Vec::new(), Vec::new(), BTreeMap::new(), &[]);
 
         let parsed = Trace::parse(&trace.to_jsonl()).unwrap();
         assert_eq!(parsed.frames(), trace.frames());
@@ -408,6 +511,7 @@ mod tests {
                     equipped: true,
                 },
             ],
+            flags: BTreeMap::from([("quest.helm.stage".to_string(), 1)]),
             events: Vec::new(),
             seed: None,
         }
@@ -418,7 +522,7 @@ mod tests {
     #[test]
     fn a_default_seeded_run_carries_no_seed_key() {
         let mut trace = Trace::new();
-        trace.push(probe(0), Vec::new(), Vec::new(), &[]);
+        trace.push(probe(0), Vec::new(), Vec::new(), BTreeMap::new(), &[]);
         assert!(!trace.to_jsonl().contains("seed"));
     }
 
@@ -429,6 +533,7 @@ mod tests {
             probe: probe(0),
             npcs: Vec::new(),
             items: Vec::new(),
+            flags: BTreeMap::new(),
             events: Vec::new(),
             seed: Some(4242),
         });
@@ -498,6 +603,82 @@ mod tests {
         assert!(!ProbePath::parse("item.minor_potion.hp").unwrap().is_field());
     }
 
+    /// Q-1's path syntax: a flag is addressed by its own dotted name under the
+    /// reserved `quest.` root, it is numeric, and one nobody has set is 0
+    /// rather than a path that fails to resolve.
+    #[test]
+    fn quest_flags_resolve_by_name_and_an_unset_one_reads_as_zero() {
+        let frame = frame_with_npcs();
+        assert_eq!(frame.field("quest.helm.stage"), Some(1.0));
+        assert_eq!(
+            frame.field("quest.nothing.stage"),
+            Some(0.0),
+            "a quest can ask about a stage before it has one"
+        );
+        assert_eq!(frame.field("quest.helm"), Some(0.0), "any depth parses");
+
+        // Numeric only: a stage counter is not a boolean and not a word.
+        assert_eq!(frame.flag("quest.helm.stage"), None);
+        assert_eq!(frame.text("quest.helm.stage"), None);
+        assert!(ProbePath::parse("quest.helm.stage").unwrap().is_field());
+        assert!(!ProbePath::parse("quest.helm.stage").unwrap().is_flag());
+    }
+
+    /// The reserved root is what keeps a typo a typo. Without it, every
+    /// unresolvable dotted path would silently become a flag reading 0, and
+    /// `assert knigt.0.hp == 3` would pass.
+    #[test]
+    fn only_the_quest_root_is_a_flag_and_typos_stay_typos() {
+        assert!(matches!(
+            ProbePath::parse("quest.helm.stage"),
+            Some(ProbePath::Flag("quest.helm.stage"))
+        ));
+        assert!(
+            matches!(ProbePath::parse("quest"), Some(ProbePath::Player("quest"))),
+            "the bare root is not a flag: a flag has a name",
+        );
+        assert!(ProbePath::parse("knight.left.x").is_none());
+        assert!(ProbePath::parse("a.b.c.d").is_none());
+    }
+
+    /// The other half of "unset reads as 0": a mistyped flag name cannot fail
+    /// to resolve, so a failure has to say what *is* set.
+    #[test]
+    fn a_failure_can_list_the_flags_that_are_set() {
+        let frame = frame_with_npcs();
+        assert_eq!(frame.flag_list(), "quest.helm.stage = 1");
+
+        let mut empty = frame.clone();
+        empty.flags.clear();
+        assert_eq!(empty.flag_list(), "no flags are set");
+    }
+
+    /// An unset flag costs a trace nothing, which is the whole reason adding
+    /// this key churned no baseline.
+    #[test]
+    fn a_run_with_no_quest_carries_no_flags_key() {
+        let mut trace = Trace::new();
+        trace.push(probe(0), Vec::new(), Vec::new(), BTreeMap::new(), &[]);
+        assert!(!trace.to_jsonl().contains("flags"));
+
+        let mut trace = Trace::new();
+        trace.push(
+            probe(0),
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::from([("quest.helm.stage".to_string(), 2)]),
+            &[],
+        );
+        let line = trace.to_jsonl();
+        let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(value["flags"]["quest.helm.stage"], 2);
+        assert_eq!(
+            Trace::parse(&line).unwrap().frames(),
+            trace.frames(),
+            "and it round trips",
+        );
+    }
+
     #[test]
     fn paths_that_cannot_resolve_return_none_rather_than_a_wrong_answer() {
         let frame = frame_with_npcs();
@@ -525,7 +706,7 @@ mod tests {
     #[test]
     fn a_corrupt_line_is_reported_with_its_number() {
         let mut good = Trace::new();
-        good.push(probe(0), Vec::new(), Vec::new(), &[]);
+        good.push(probe(0), Vec::new(), Vec::new(), BTreeMap::new(), &[]);
 
         let text = format!("{}not json\n", good.to_jsonl());
         let err = Trace::parse(&text).unwrap_err();

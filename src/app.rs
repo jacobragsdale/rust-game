@@ -10,6 +10,7 @@ use ggez::{Context, GameResult};
 
 use crate::assets::Assets;
 use crate::config::Config;
+use crate::save::FileStore;
 use crate::scenes::{main_menu::MainMenuScene, Resources, Scene, Transition};
 use crate::sim::TICKS_PER_SECOND;
 use crate::systems::input::InputLatch;
@@ -25,17 +26,31 @@ impl App {
             config,
             assets: Assets::new(),
             input: InputLatch::default(),
+            saves: FileStore::new(FileStore::default_dir()),
         };
         let mut scenes = Self::initial_stack();
 
         // Dev shortcut: SUPERGAME_SCENE=adventure boots straight into a map,
         // skipping the menu. SUPERGAME_MAP picks which one — a testbed map is
         // often the only way to get a specific thing on screen to look at.
+        //
+        // SUPERGAME_PAUSE=1 opens the pause menu on top of it. A menu is the
+        // one part of the game no tape can reach — a tape presses actions, and
+        // these are window keys — so booting into it is how it gets looked at
+        // at all.
         if std::env::var("SUPERGAME_SCENE").as_deref() == Ok("adventure") {
             let map =
                 std::env::var("SUPERGAME_MAP").unwrap_or_else(|_| "maps/castle.ron".to_string());
             match crate::scenes::adventure::AdventureScene::new(ctx, &mut resources, &map) {
-                Ok(scene) => scenes.push(Box::new(scene)),
+                Ok(scene) => {
+                    // Built before the scene is moved, and pushed after it, so
+                    // the overlay ends up on top of the world it describes.
+                    let overlay = std::env::var("SUPERGAME_PAUSE")
+                        .is_ok_and(|v| v != "0")
+                        .then(|| Box::new(scene.pause()) as Box<dyn Scene>);
+                    scenes.push(Box::new(scene));
+                    scenes.extend(overlay);
+                }
                 Err(err) => eprintln!("failed to boot into adventure: {err:#}"),
             }
         }
@@ -57,6 +72,10 @@ impl App {
             }
             Transition::Reset => {
                 self.scenes = Self::initial_stack();
+            }
+            Transition::Replace(scene) => {
+                self.scenes = Self::initial_stack();
+                self.scenes.push(scene);
             }
         }
         // The key that changed scenes must not also be a jump: unpausing with

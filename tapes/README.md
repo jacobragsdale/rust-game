@@ -123,6 +123,7 @@ Assertions read `assert <flag>`, `assert !<flag>`, or `assert <field> <op>
   `crouching`, `dead`, `on_one_way_only`, `attacking`, `casting`, `plunging`
 - text: `clip`, `mode`, `pane`, `prompt`, `dialogue_node` — compared with `==`
   or `!=` only
+- quest flags: any `quest.<...>` path — see [Quest flags](#quest-flags)
 
 `projectiles` and `pickups` are counts of every bolt in the air and every item
 on the floor anywhere in the world, not a probe each: a line per entity per
@@ -227,6 +228,40 @@ resolve, so a tape can assert both sides of a pickup. The price is that a
 mistyped id also reads as zero: `tests/data.rs` is what catches a typo in
 *content*, and a tape should assert a count going **up** rather than merely
 being what it already was.
+
+## Quest flags
+
+A quest flag is a named integer on `Sim`, written by a dialogue `SetFlag`
+effect and read by its `FlagEq` and `FlagAtLeast` conditions. A tape addresses
+one by its **own dotted name**, with no prefix in front of it:
+
+```
+assert quest.helm.stage == 0     # not started
+assert quest.helm.stage == 1     # the errand has been taken
+assert quest.helm.stage == 2     # ...and finished
+```
+
+- **Integers, not booleans.** A quest stage is the common case, and `started`
+  plus `done` as two flags needs a third rule somewhere to stop both being true
+  at once. `assert quest.x.stage` on its own is rejected for that reason: write
+  the comparison out.
+- **An unset flag reads as `0`.** A quest has to be able to ask about a stage
+  before it has one, so the assertion above resolves on the first tick of a run
+  in which nothing has happened yet.
+- **`quest.` is a reserved root**, and the only path shape that means a flag.
+  Anything else dotted is still a probe path, so `assert knigt.0.hp == 3` is
+  still the parse error it always was rather than a flag quietly reading zero.
+  Flags in the game are all named `quest.<what>.<field>` already.
+- Only what has been *set* reaches the trace, under a `flags` key that is
+  absent when nothing has been set — so a run with no quest in it records
+  exactly what it recorded before quests existed.
+
+The price of "unset reads as 0" is the one items pay too: a mistyped flag name
+reads as zero rather than failing. A failing comparison against a flag nothing
+has set therefore says so and lists the flags that *are* set.
+
+`tapes/quest_fetch.tape` is the whole shape end to end, and
+`tapes/dialogue_branch.tape` asserts the stages of the errand it walks.
 
 ## Asserting on NPCs
 
@@ -358,6 +393,7 @@ do not move what is already there.
 | `testbed_mover.ron` | moving platforms: two ledges with a spiked pit between them and one platform ferrying across |
 | `testbed_swing.ron` | swinging hazards: one room with a spiked ball on a chain across the middle of it |
 | `testbed_village.ron` | interaction and dialogue: a long empty room with a step down into a bay, and Runa the Herbalist in it |
+| `testbed_quest.ron` | quests: the arena and the village spliced together — a knight to kill 159px away, and Runa in a bay at the other end to take the errand from and bring the helm back to |
 
 Items have no fixture map of their own, and deliberately so: the only source of
 items in the game is a corpse, so `loot.tape` and `inventory_use.tape` both run
@@ -395,6 +431,17 @@ when exactly she turned round. The step down at the far end pens her into a
 thirty-pixel beat, the player runs off the ledge into the bay and is stopped by
 the far wall, and neither tape has to time anything: run right until the wall
 stops you, and she is there.
+
+`testbed_quest.ron` is that bay mirrored onto the left end of a room with the
+arena's fight in it, and it is a new map rather than an addition to either
+because both of those are frozen: a knight in the village would renumber its
+NPCs and put a chasing enemy into two tapes that are about a conversation. The
+two numbers that carry over carry over exactly — 159px between the player and
+the knight, and a two-tile bay Runa cannot leave — so `quest_fetch.tape`
+inherits `spell_kill.tape`'s fight and `interact_prompt.tape`'s approach without
+re-deriving either. The knight is the only source of the thing the errand asks
+for, which is the honest reason a quest testbed has a fight in it: the only way
+to get an item in this game is to kill something for it.
 
 `castle_spawn.tape` is the exception: it runs on the real map but asserts only
 that the player spawns on solid ground and is not standing in a hazard, so

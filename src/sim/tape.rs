@@ -152,10 +152,21 @@ impl Assertion {
                 if op.apply(actual, *value) {
                     Ok(())
                 } else {
-                    Err(format!(
+                    let mut message = format!(
                         "expected {field} {} {value}, but {field} was {actual}",
                         op_str(*op)
-                    ))
+                    );
+                    // A quest flag nobody has set reads as 0 rather than
+                    // failing, so a mistyped flag name looks exactly like a
+                    // quest that has not started. Say which flags exist, which
+                    // tells the two apart at a glance.
+                    if frame.flag_value_is_absent(field) {
+                        message.push_str(&format!(
+                            " (nothing has set `{field}`; {})",
+                            frame.flag_list()
+                        ));
+                    }
+                    Err(message)
                 }
             }
             Check::CompareText { field, op, value } => {
@@ -484,6 +495,18 @@ fn parse_expect(tokens: &[&str]) -> anyhow::Result<Check> {
         ),
     };
 
+    // A quest flag is state, so it belongs to `assert` — and it is the mistake
+    // this line exists to answer, because a quest is almost entirely events
+    // and a stage is the one part of it that is not. Caught before the split
+    // below, which would otherwise report `rescue.stage` as an unknown event.
+    if matches!(ProbePath::parse(name), Some(ProbePath::Flag(_))) {
+        bail!(
+            "`{name}` is a quest flag, which is state rather than something that \
+             happened — write `assert {name} {} {count}`",
+            op_str(op)
+        );
+    }
+
     // `knight.damaged` narrows to one victim; a bare `damaged` counts every
     // one. Only events that record a subject can be narrowed.
     let (subject, name) = match name.split_once('.') {
@@ -697,6 +720,72 @@ mod tests {
             Check::CompareText { value, .. } => assert_eq!(value, "attack2"),
             other => panic!("expected a text comparison, got {other:?}"),
         }
+    }
+
+    /// Q-1's path syntax, from the tape parser's side: a flag is a numeric
+    /// field, its literal is read as a number, and it is not a boolean.
+    #[test]
+    fn quest_flags_parse_as_numeric_comparisons() {
+        let tape =
+            Tape::parse("assert quest.helm.stage == 2\nassert quest.helm.stage < 3").unwrap();
+        assert_eq!(tape.asserts.len(), 2);
+        match &tape.asserts[0].check {
+            Check::Compare { field, value, .. } => {
+                assert_eq!(field, "quest.helm.stage");
+                assert_eq!(*value, 2.0);
+            }
+            other => panic!("expected a numeric comparison, got {other:?}"),
+        }
+
+        let err = format!("{:#}", Tape::parse("assert quest.helm.stage").unwrap_err());
+        assert!(err.contains("not a boolean"), "{err}");
+    }
+
+    /// A stage is state, and state is `assert`. The mistake is worth catching
+    /// by name because a quest is otherwise almost entirely events.
+    #[test]
+    fn a_flag_written_as_an_expect_is_redirected_to_assert() {
+        let err = format!(
+            "{:#}",
+            Tape::parse("expect quest.rescue.stage == 2").unwrap_err()
+        );
+        assert!(err.contains("quest flag"), "{err}");
+        assert!(
+            err.contains("assert quest.rescue.stage == 2"),
+            "the message should contain the line that would have worked: {err}"
+        );
+    }
+
+    /// The other half of "an unset flag reads as 0": nothing can fail to
+    /// resolve, so a failure has to say what is actually set — otherwise a
+    /// mistyped flag name and a quest that has not started are the same
+    /// message.
+    #[test]
+    fn a_failure_against_an_unset_flag_lists_the_flags_that_are_set() {
+        use crate::sim::trace::Frame;
+        use std::collections::BTreeMap;
+
+        let tape = Tape::parse("assert quest.helm.stage == 2").unwrap();
+        let frame = Frame {
+            probe: crate::sim::Sim::fixture(&["..P...", "######"]).probe(),
+            npcs: Vec::new(),
+            items: Vec::new(),
+            flags: BTreeMap::from([("quest.draught.stage".to_string(), 1)]),
+            events: Vec::new(),
+            seed: None,
+        };
+        let err = tape.asserts[0]
+            .evaluate(&frame, &EventCounts::new())
+            .unwrap_err();
+        assert!(err.contains("nothing has set `quest.helm.stage`"), "{err}");
+        assert!(err.contains("quest.draught.stage = 1"), "{err}");
+
+        // A flag that *is* set gets the ordinary message, with no lecture.
+        let tape = Tape::parse("assert quest.draught.stage == 2").unwrap();
+        let err = tape.asserts[0]
+            .evaluate(&frame, &EventCounts::new())
+            .unwrap_err();
+        assert!(!err.contains("nothing has set"), "{err}");
     }
 
     #[test]

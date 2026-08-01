@@ -560,7 +560,15 @@ pub struct DialogueChoice {
 ///
 /// An enum from the start, with the flag variants present before there is much
 /// to point them at, because the shape is what later tickets extend rather than
-/// replace — Q-2's quest branches are `FlagAtLeast` and nothing else new.
+/// replace.
+///
+/// **What Q-2 actually turned out to need**, having predicted `FlagAtLeast`:
+/// that was already here, and so was `TakeItem` on the effect side. The one
+/// thing missing was [`DialogueCondition::All`] — because the *return* leg of a
+/// fetch quest is two questions at once ("have you taken the errand" and "are
+/// you carrying the thing"), and one condition per choice can only ask one of
+/// them. Without it a graph has to choose between offering "I have your helm."
+/// to someone who was never asked for it, and duplicating the whole node.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub enum DialogueCondition {
     /// The player is carrying at least one of this item.
@@ -569,6 +577,14 @@ pub enum DialogueCondition {
     FlagEq(String, i64),
     /// A quest flag has reached at least this stage.
     FlagAtLeast(String, i64),
+    /// Every one of these holds. Nested rather than a `Vec<DialogueCondition>`
+    /// on the choice itself, because that would have changed the meaning of
+    /// `condition:` in every graph already written — and because a combinator
+    /// is where `Any` goes the day something needs one.
+    ///
+    /// An empty list holds, which is the identity a fold gives it and the same
+    /// answer as no condition at all.
+    All(Vec<DialogueCondition>),
 }
 
 /// What taking a choice does.

@@ -275,9 +275,10 @@ Tape support needed no parser work: `interact`, `up`, `down`, `confirm` and
 `cancel` were already in the action table, so a tape selects a reply by pressing
 the keys a player presses rather than through a bespoke `choose 2` directive.
 
-M6 inherits a `flags` map on `Sim` that `SetFlag` already writes and the
-conditions already read; Q-1's remaining work is surfacing it in the probe and
-the trace, which is why nothing about flags is in a baseline yet.
+M6 inherited a `flags` map on `Sim` that `SetFlag` already wrote and the
+conditions already read, with nothing about flags in a baseline; Q-1's whole job
+was surfacing it, and holding it back to here is why exactly one baseline moved
+when it did.
 
 **Exit criteria:** a tape walks an NPC conversation, takes a branch gated on an
 inventory item, and asserts the resulting state change. ✅ Met:
@@ -288,7 +289,7 @@ arriving in it. `tapes/interact_prompt.tape` covers the prompt appearing,
 clearing, being announced once per approach, and doing nothing at all when there
 is nobody in reach — twenty-six tapes and twenty-six golden traces in all.
 
-## M6 — Quests
+## M6 — Quests ✅ done
 
 **Size:** small once M5 lands. **Depends on:** M5.
 
@@ -298,10 +299,35 @@ save/load.
 
 Quests are mostly flags plus dialogue, which is why they are cheap here and
 would have been expensive earlier. They surface in the world snapshot as
-globals, so `expect quest.rescue.stage == 2` works without new machinery.
+globals, so `assert quest.rescue.stage == 2` works without new machinery.
+
+Shipped as: the `flags` map M5 left on `Sim` surfaced as `quest.<name>.<field>`
+assertion paths and a `flags` key in the trace that is **absent when nothing has
+been set** — so adding it churned exactly one baseline,
+`traces/dialogue_branch.jsonl`, on the one tape that already set a flag; a
+`SaveState::flags` field added by the additive recipe `src/save.rs` documents
+(`#[serde(default)]`, no version bump); `DialogueCondition::All`, which is the
+one thing the condition enum turned out to be missing, because the return leg of
+a fetch quest asks two questions at once; `assets/maps/testbed_quest.ron` and
+`tapes/quest_fetch.tape`; and save and load reachable from the pause menu, which
+Q-3 had left as a library nobody could call.
+
+Two things worth knowing before M8 builds on them. **`quest.` is a reserved
+root** rather than "any dotted path that is not a probe field": flags are
+created by writing one, so there is no list to check a path against, and a bare
+fallback would turn every mistyped path in every tape into a flag quietly
+reading 0. And **a flag is the sanctioned way to make the world remember
+anything across a load** — a save deliberately carries no NPCs, so a boss that
+stays dead is `quest.boss.stage` and not a saved entity.
 
 **Exit criteria:** accept a quest, complete it, get a reward, and have it
-survive save and load.
+survive save and load. ✅ Met: `tapes/quest_fetch.tape` kills the knight that
+carries the helm Runa asks for, takes the errand (`quest.helm.stage` 0 → 1),
+fetches the helm off the floor, hands it over for her band (→ 2), and asks again
+to find the reply gone; `tests/save.rs` saves at a dozen points mid-run and
+replays both sims into identical traces with the flags in the frame, so a stage
+that failed to survive a save shows up as the tick the two runs diverged —
+twenty-seven tapes and twenty-seven golden traces in all.
 
 ## M7 — Live map features
 
@@ -418,7 +444,7 @@ serves, not after.
 | M3 Combat | combat events, action-set inputs (attack/cast) in tapes |
 | ~~M4 Items~~ | ~~inventory in the snapshot, pickup/equip events~~ (`item.<id>.count`, `mode`, six item events) |
 | ~~M5 Dialogue~~ | ~~choice selection in tapes, dialogue events~~ (no parser work needed — `interact`/`up`/`down`/`confirm` were already actions; `prompt`, `dialogue_node`, `dialogue_choices`, `dialogue_selection` and five events) |
-| M6 Quests | quest flags as snapshot globals |
+| ~~M6 Quests~~ | ~~quest flags as snapshot globals~~ (`quest.<name>.<field>` paths, a `flags` key omitted when empty, and the same map in `SaveState`) |
 | ~~M7 Map features~~ | ~~property tests for dynamic geometry and rider carry~~ (six sweeps in `tests/physics_diagnostics.rs`) |
 | M8 Content | `tests/data.rs` cross-reference validation, per-map smoke tapes |
 

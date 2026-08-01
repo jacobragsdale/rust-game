@@ -101,6 +101,10 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 /// Step `inputs` into `sim`, recording the frame the tape runner records.
+///
+/// The frame includes the flags, which is what makes the trace comparison
+/// below cover them: a save that dropped a quest flag would show up as two
+/// traces that differ on the `flags` key of every frame after the load.
 fn play(sim: &mut Sim, inputs: &[PlayerInput]) -> Trace {
     let mut trace = Trace::new();
     for input in inputs {
@@ -109,6 +113,7 @@ fn play(sim: &mut Sim, inputs: &[PlayerInput]) -> Trace {
             sim.probe(),
             sim.npc_probes(),
             sim.item_probes(),
+            sim.flags().clone(),
             sim.events(),
         );
     }
@@ -127,7 +132,8 @@ fn player(sim: &Sim) -> hecs::Entity {
 
 /// Give the player something worth saving: a bag with two kinds in it, a helm
 /// (which moves the derived maximum health) and a sword (which replaces the
-/// combo opener and adds damage) — and neither pool full.
+/// combo opener and adds damage), two quest flags mid-run — and neither pool
+/// full.
 ///
 /// Done by hand rather than by killing something for the drops, because this
 /// test is about the save and not about the loot table — and because the map it
@@ -156,6 +162,14 @@ fn outfit_the_player(sim: &mut Sim) {
     let mut mana = sim.world.get::<&mut Mana>(player).unwrap();
     mana.current = 0;
     mana.partial = 0;
+    drop(mana);
+
+    // Two quests part-way through, one of them at a stage that is neither the
+    // start nor the end. `maps/testbed.ron` has nobody to talk to, so these are
+    // set by hand — what is under test is the save, not the conversation that
+    // would have set them; `tapes/quest_fetch.tape` is the other end of that.
+    sim.set_flag("quest.helm.stage", 1);
+    sim.set_flag("quest.draught.stage", 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +211,11 @@ fn a_reloaded_run_steps_identically_to_one_that_was_never_saved() {
             "the sim loaded from a save at tick {split} did not start where it was saved",
         );
         assert_eq!(reloaded.item_probes(), original.item_probes());
+        assert_eq!(
+            reloaded.flags(),
+            original.flags(),
+            "the quest flags did not come back from the save at tick {split}",
+        );
 
         // ...and stays there for the whole rest of the run.
         let expected = play(&mut original, &inputs[split..]);
@@ -243,8 +262,8 @@ fn the_tape_this_is_checked_with_exercises_something() {
 }
 
 /// The acceptance criterion in the ticket's own words: save, quit, load, and
-/// the bag, the gear, the health and the mana are all still there — through a
-/// file on disk, not through a struct held in memory.
+/// the bag, the gear, the health, the mana and the quest flags are all still
+/// there — through a file on disk, not through a struct held in memory.
 #[test]
 fn a_bag_gear_health_and_mana_survive_a_trip_through_a_file() {
     let store = FileStore::new(scratch("save-round-trip"));
@@ -303,6 +322,18 @@ fn a_bag_gear_health_and_mana_survive_a_trip_through_a_file() {
     assert_eq!(
         reloaded.rng, original.rng,
         "and the generator is where the run left it, seed and position both",
+    );
+
+    // M6's half of the criterion: quest progress is progress. A stage that
+    // came back as 0 would mean a player who did the errand and reloaded is
+    // asked to do it again.
+    assert_eq!(reloaded.flag("quest.helm.stage"), 1);
+    assert_eq!(reloaded.flag("quest.draught.stage"), 2);
+    assert_eq!(reloaded.flags(), original.flags());
+    assert_eq!(
+        reloaded.flag("quest.nobody.set.this"),
+        0,
+        "and a flag nothing ever set still reads as zero rather than erroring",
     );
 }
 

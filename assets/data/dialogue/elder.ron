@@ -24,6 +24,16 @@
 // that "come back when you have it" is the same node offering a different set
 // of replies, rather than a second copy of the greeting.
 //
+// Two errands run through that loop, and they are shaped differently on purpose:
+//
+//   quest.draught  M5's. Gated on the item alone, and repeatable — Runa never
+//                  runs out of draughts, and asking twice works.
+//   quest.helm     M6's, and the fetch quest proper. It has a *stage*, it is
+//                  offered in one place and returned in another, and the reply
+//                  that returns it needs the stage and the item at once. That
+//                  conjunction is `All([...])`, and it is the only thing Q-2
+//                  needed the condition enum to grow.
+//
 // Runa does not run out of draughts: the `gift` branch has no condition, so
 // asking twice works. That is generosity in the fiction and an observable in
 // the harness — the number of replies on offer goes from three to four the
@@ -55,6 +65,29 @@ Dialogue(
                         SetFlag("quest.draught.stage", 2),
                     ],
                 ),
+                // The errand's return leg. Two conditions rather than one, and
+                // that is the whole of what Q-2 needed the engine to grow:
+                // "she asked you for it" *and* "you are carrying one". Gated on
+                // `HasItem` alone it would be offered to someone who has never
+                // spoken to her about it, which is a reply that answers a
+                // question nobody asked; gated on the flag alone it would be
+                // offered empty-handed. `FlagEq(1)` rather than `FlagAtLeast(1)`
+                // because stage 1 is "asked for and not yet delivered": handing
+                // the helm over sets the stage to 2, and that alone is what
+                // stops Runa buying a second helm off you forever.
+                Choice(
+                    text: "I have the helm you asked for.",
+                    next: "helm",
+                    condition: All([
+                        FlagEq("quest.helm.stage", 1),
+                        HasItem("knight_helm"),
+                    ]),
+                    effects: [
+                        TakeItem("knight_helm", 1),
+                        GiveItem("iron_band", 1),
+                        SetFlag("quest.helm.stage", 2),
+                    ],
+                ),
                 Choice(text: "Not now.", next: None),
             ],
         ),
@@ -66,6 +99,22 @@ Dialogue(
             ],
             choices: [
                 Choice(text: "I am sorry.", next: "greet"),
+                // Where the errand is offered, and deliberately not at `greet`.
+                // Runa mentions the knights here and nowhere else, so the quest
+                // comes out of the one line that sets it up rather than being a
+                // fourth reply to a greeting; and — the practical half — `greet`
+                // is the node `tapes/dialogue_branch.tape` counts the replies
+                // of, so an unconditional choice added there would move a number
+                // that tape and its golden trace already pin.
+                //
+                // `FlagEq(0)` rather than `FlagAtLeast`: once you have taken the
+                // errand there is nothing left to ask, and once you have done it
+                // there is nothing left to take.
+                Choice(
+                    text: "Which of them came down here?",
+                    next: "errand",
+                    condition: FlagEq("quest.helm.stage", 0),
+                ),
             ],
         ),
         "gift": Node(
@@ -92,6 +141,36 @@ Dialogue(
             ],
             choices: [
                 Choice(text: "Thank you.", next: None),
+            ],
+        ),
+        // The errand itself: taking it is the only thing in this file that sets
+        // `quest.helm.stage` to 1, and `greet` is where handing the helm over
+        // sets it to 2. Two stages and one flag, which is the whole reason a
+        // flag is an integer — `started` and `done` as two booleans would need a
+        // third condition somewhere to rule out both being true at once.
+        "errand": Node(
+            speaker: "Runa the Herbalist",
+            lines: [
+                "One of them wore my husband's helm out of this village.",
+                "I do not want the man. I want the helm off him.",
+            ],
+            choices: [
+                Choice(
+                    text: "I will bring it to you.",
+                    next: "greet",
+                    effects: [SetFlag("quest.helm.stage", 1)],
+                ),
+                Choice(text: "That is not my errand.", next: "greet"),
+            ],
+        ),
+        "helm": Node(
+            speaker: "Runa the Herbalist",
+            lines: [
+                "That is his. I would know the dent anywhere.",
+                "Take the band off my hand for it. It was his too.",
+            ],
+            choices: [
+                Choice(text: "I am sorry for your loss.", next: None),
             ],
         ),
     },

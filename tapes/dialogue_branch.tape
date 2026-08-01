@@ -33,6 +33,7 @@ assert dialogue_choices == 0
 assert inventory_count == 0
 assert item.minor_potion.count == 0
 assert item.elder_charm.count == 0
+assert quest.draught.stage == 0
 expect no dialogue_opened
 
 right 160
@@ -80,6 +81,10 @@ confirm 1
 assert mode == playing
 assert item.minor_potion.count == 1
 assert inventory_count == 1
+# The errand's first stage, set by the same reply that handed the draught over.
+# Unset until now, and 0 is what an unset flag reads as — which is why the
+# assertion at the top of this tape resolves at all.
+assert quest.draught.stage == 1
 expect minor_potion.picked_up == 1
 expect gift.choice_taken == 1
 expect elder_intro.dialogue_closed == 1
@@ -115,6 +120,7 @@ assert dialogue_node == thanks
 assert item.minor_potion.count == 0
 assert item.elder_charm.count == 1
 assert inventory_count == 1
+assert quest.draught.stage == 2
 expect elder_charm.picked_up == 1
 expect greet.choice_taken == 2
 
@@ -136,6 +142,7 @@ left 40
 assert mode == playing
 assert item.elder_charm.count == 1
 assert item.minor_potion.count == 0
+assert quest.draught.stage == 2
 assert !item.elder_charm.equipped
 assert hp == 5
 expect no died
