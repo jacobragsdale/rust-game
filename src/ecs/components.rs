@@ -361,7 +361,10 @@ impl Body {
 /// elapsed count against a fixed timeline, and it is what
 /// [`crate::systems::animation::select_avatar_clip`] reads to pick between the
 /// three clips.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+///
+/// Serde because a save carries it: which phase of a plunge you were in is
+/// state like any other. See [`crate::save`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Plunge {
     #[default]
     None,
