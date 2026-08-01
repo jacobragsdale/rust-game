@@ -18,7 +18,9 @@ use ggez::{Context, GameResult};
 
 use crate::assets::TilesetDef;
 use crate::debug::DebugOverlay;
-use crate::ecs::components::{AnimationState, Avatar, Health, Patrol, Position, Size, Sprite};
+use crate::ecs::components::{
+    AnimationState, Avatar, Fire, Health, Patrol, Position, Size, Sprite,
+};
 use crate::scenes::{pause::PauseScene, Resources, Scene, Transition};
 use crate::sim::Sim;
 use crate::systems::{camera::Camera, input};
@@ -135,13 +137,15 @@ impl AdventureScene {
     }
 
     fn draw_hazards(&self, ctx: &mut Context, canvas: &mut Canvas) -> GameResult {
-        // Placeholder spikes (the original spike art was never committed):
-        // white triangles across each hazard strip. Replaced in Phase 3.
-        if self.sim.level.hazards.is_empty() {
+        let fires = self.sim.world.query::<(&Position, &Fire)>().iter().count();
+        if self.sim.level.hazards.is_empty() && fires == 0 {
             return Ok(());
         }
         let offset = self.camera.offset();
         let mut mb = MeshBuilder::new();
+
+        // Placeholder spikes (the original spike art was never committed):
+        // white triangles across each hazard strip. Replaced in Phase 3.
         let spike_w = 8.0;
         for hazard in &self.sim.level.hazards {
             let mut x = hazard.x;
@@ -158,6 +162,53 @@ impl AdventureScene {
                 x += spike_w;
             }
         }
+
+        // Fires. Placeholder art like the spikes, but the on/off states have
+        // to be unmistakable at a glance: an invisible hazard is the bug this
+        // whole feature is most likely to ship.
+        for (entity, (pos, fire)) in self.sim.world.query::<(&Position, &Fire)>().iter() {
+            let box_ = fire.collider.aabb(pos.0);
+            let (left, right) = (box_.x - offset.x, box_.right() - offset.x);
+            let (top, bottom) = (box_.y - offset.y, box_.bottom() - offset.y);
+            let mid = (left + right) / 2.0;
+
+            if crate::systems::hazard::is_lit(&self.sim.world, entity) {
+                // A full-height flame in two layers, so it reads as fire and
+                // not as an orange triangle.
+                mb.polygon(
+                    graphics::DrawMode::fill(),
+                    &[
+                        Vec2::new(left, bottom),
+                        Vec2::new(right, bottom),
+                        Vec2::new(mid, top),
+                    ],
+                    Color::from_rgb(240, 120, 30),
+                )?;
+                mb.polygon(
+                    graphics::DrawMode::fill(),
+                    &[
+                        Vec2::new(left + box_.w * 0.25, bottom),
+                        Vec2::new(right - box_.w * 0.25, bottom),
+                        Vec2::new(mid, top + box_.h * 0.35),
+                    ],
+                    Color::from_rgb(255, 226, 120),
+                )?;
+            } else {
+                // Out: a low bed of coals, dark and only a few pixels tall.
+                // Same footprint, nothing like the same silhouette.
+                mb.rectangle(
+                    graphics::DrawMode::fill(),
+                    graphics::Rect::new(left, bottom - 4.0, box_.w, 4.0),
+                    Color::from_rgb(90, 40, 35),
+                )?;
+                mb.rectangle(
+                    graphics::DrawMode::fill(),
+                    graphics::Rect::new(left + 2.0, bottom - 2.0, box_.w - 4.0, 2.0),
+                    Color::from_rgb(150, 60, 35),
+                )?;
+            }
+        }
+
         let mesh = Mesh::from_data(ctx, mb.build());
         canvas.draw(&mesh, DrawParam::default());
         Ok(())

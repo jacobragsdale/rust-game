@@ -23,6 +23,8 @@ use crate::sim::Sim;
 const SOLID: Color = Color::new(0.25, 0.5, 1.0, 0.9);
 const ONE_WAY: Color = Color::new(0.3, 0.9, 0.5, 0.9);
 const HAZARD: Color = Color::new(1.0, 0.28, 0.28, 0.9);
+/// Inset outline on geometry an entity owns, rather than the map.
+const ENTITY_OWNED: Color = Color::new(1.0, 0.6, 0.15, 1.0);
 const COLLIDER: Color = Color::new(1.0, 0.87, 0.24, 1.0);
 const SPRITE_BOUNDS: Color = Color::new(1.0, 0.35, 1.0, 0.75);
 const VELOCITY: Color = Color::new(0.35, 0.95, 1.0, 1.0);
@@ -86,18 +88,41 @@ impl DebugOverlay {
         // The spawn cross below is unconditional, so the mesh is never empty.
         let mut mb = MeshBuilder::new();
 
-        // Level collision geometry, in the colors the legend names.
-        let layers = [
-            (&sim.level.solids, SOLID),
-            (&sim.level.one_way, ONE_WAY),
-            (&sim.level.hazards, HAZARD),
-        ];
-        for (rects, color) in layers {
-            for rect in rects.iter() {
-                if !rect.overlaps(&visible) {
-                    continue;
-                }
-                mb.rectangle(DrawMode::stroke(STROKE), screen_rect(rect, offset), color)?;
+        // Collision geometry, read from `Sim::geometry` rather than from the
+        // level. The level is only half the world now — a fire's collider, a
+        // moving platform's, anything an entity owns — and drawing the half
+        // that never changes would make exactly the geometry most likely to be
+        // wrong the geometry you cannot see.
+        let solids = sim.geometry.rects();
+        let owned_from = solids.len() - sim.geometry.entity_rect_count();
+        for (index, solid) in solids.iter().enumerate() {
+            if !solid.rect.overlaps(&visible) {
+                continue;
+            }
+            let color = if solid.one_way { ONE_WAY } else { SOLID };
+            mb.rectangle(
+                DrawMode::stroke(STROKE),
+                screen_rect(&solid.rect, offset),
+                color,
+            )?;
+            if index >= owned_from {
+                mark_entity_owned(&mut mb, &solid.rect, offset)?;
+            }
+        }
+
+        let hazards = sim.geometry.hazards();
+        let owned_from = hazards.len() - sim.geometry.entity_hazard_count();
+        for (index, hazard) in hazards.iter().enumerate() {
+            if !hazard.overlaps(&visible) {
+                continue;
+            }
+            mb.rectangle(
+                DrawMode::stroke(STROKE),
+                screen_rect(hazard, offset),
+                HAZARD,
+            )?;
+            if index >= owned_from {
+                mark_entity_owned(&mut mb, hazard, offset)?;
             }
         }
 
@@ -235,10 +260,11 @@ impl DebugOverlay {
     /// overlay is a pile of colored boxes whose meaning has to be recalled
     /// from the source.
     fn draw_legend(&self, canvas: &mut Canvas, view: Vec2) {
-        const ITEMS: [(&str, Color); 6] = [
+        const ITEMS: [(&str, Color); 7] = [
             ("solid", SOLID),
             ("oneway", ONE_WAY),
             ("hazard", HAZARD),
+            ("entity-geo", ENTITY_OWNED),
             ("collider", COLLIDER),
             ("sprite", SPRITE_BOUNDS),
             ("vel", VELOCITY),
@@ -263,6 +289,30 @@ impl DebugOverlay {
             x += label.len() as f32 * LEGEND_CHAR_WIDTH + LEGEND_GAP;
         }
     }
+}
+
+/// A second, inset outline marking a rect as belonging to an entity rather
+/// than to the map.
+///
+/// Which half a rect came from is the question the overlay exists to answer
+/// for M7: a fire that never lights and a platform frozen at one end of its
+/// path both look exactly like level geometry until you can see that the game
+/// thinks they are entities.
+fn mark_entity_owned(mb: &mut MeshBuilder, rect: &Aabb, offset: Vec2) -> GameResult {
+    const INSET: f32 = 2.0;
+    // Degenerate insets produce a zero-or-negative rect, which is a
+    // triangulation failure rather than a small box.
+    if rect.w <= INSET * 2.0 || rect.h <= INSET * 2.0 {
+        return Ok(());
+    }
+    let inner = Rect::new(
+        rect.x - offset.x + INSET,
+        rect.y - offset.y + INSET,
+        rect.w - INSET * 2.0,
+        rect.h - INSET * 2.0,
+    );
+    mb.rectangle(DrawMode::stroke(STROKE), inner, ENTITY_OWNED)?;
+    Ok(())
 }
 
 /// Coyote uses `u32::MAX`-ish sentinels for "no jump available".

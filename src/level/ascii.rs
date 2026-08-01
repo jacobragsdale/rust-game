@@ -6,6 +6,8 @@
 //! Legend:
 //!   `#` solid          `=` one-way platform    `^` hazard (spikes)
 //!   `.` / ` ` empty    `P` player spawn        `K` knight (entity)
+//!   `F` fire (a hazard on the default cycle; author the timing with a
+//!       `Fire(cell: (x, y), period: …, duty: …, phase: …)` entry instead)
 
 use std::fs;
 use std::path::Path;
@@ -16,7 +18,7 @@ use serde::Deserialize;
 
 use crate::assets::{Assets, AutotileRules};
 use crate::ecs::components::Avatar;
-use crate::level::{merge_runs, EntitySpawn, LevelData};
+use crate::level::{merge_runs, EntitySpawn, FireSpawn, LevelData};
 
 /// Spelled `Level(...)` in the map files.
 #[derive(Debug, Deserialize)]
@@ -30,8 +32,34 @@ struct LevelDef {
 
 #[derive(Debug, Deserialize)]
 enum EntityDef {
-    Npc { kind: String, cell: (u32, u32) },
-    Door { cell: (u32, u32), to: String },
+    Npc {
+        kind: String,
+        cell: (u32, u32),
+    },
+    Door {
+        cell: (u32, u32),
+        to: String,
+    },
+    /// A fire with authored timing. Every field but the cell defaults to what
+    /// the grid's `F` uses, so `Fire(cell: (3, 5), phase: 60)` is enough to
+    /// make one take turns with a plain `F`.
+    Fire {
+        cell: (u32, u32),
+        #[serde(default = "default_fire_period")]
+        period: u32,
+        #[serde(default = "default_fire_duty")]
+        duty: u32,
+        #[serde(default)]
+        phase: u32,
+    },
+}
+
+fn default_fire_period() -> u32 {
+    crate::systems::hazard::FIRE_PERIOD
+}
+
+fn default_fire_duty() -> u32 {
+    crate::systems::hazard::FIRE_DUTY
 }
 
 pub fn load(path: &Path, assets: &mut Assets) -> anyhow::Result<LevelData> {
@@ -88,6 +116,7 @@ fn build(def: LevelDef, tile_size: f32, rules: &AutotileRules) -> anyhow::Result
     let mut cells = vec![Cell::Empty; (width * height) as usize];
     let mut player_spawn = None;
     let mut entities = Vec::new();
+    let mut fires = Vec::new();
 
     for (y, row) in def.grid.iter().enumerate() {
         for (x, ch) in row.chars().enumerate() {
@@ -112,6 +141,12 @@ fn build(def: LevelDef, tile_size: f32, rules: &AutotileRules) -> anyhow::Result
                     kind: "knight".to_string(),
                     pos: Vec2::new(x as f32 * tile_size, y as f32 * tile_size),
                 }),
+                'F' => fires.push(FireSpawn {
+                    cell: Vec2::new(x as f32 * tile_size, y as f32 * tile_size),
+                    period: crate::systems::hazard::FIRE_PERIOD,
+                    duty: crate::systems::hazard::FIRE_DUTY,
+                    phase: 0,
+                }),
                 other => anyhow::bail!("unknown map character {other:?} at ({x}, {y})"),
             }
         }
@@ -128,6 +163,17 @@ fn build(def: LevelDef, tile_size: f32, rules: &AutotileRules) -> anyhow::Result
             EntityDef::Door { cell, to } => entities.push(EntitySpawn {
                 kind: format!("door:{to}"),
                 pos: Vec2::new(cell.0 as f32 * tile_size, cell.1 as f32 * tile_size),
+            }),
+            EntityDef::Fire {
+                cell,
+                period,
+                duty,
+                phase,
+            } => fires.push(FireSpawn {
+                cell: Vec2::new(cell.0 as f32 * tile_size, cell.1 as f32 * tile_size),
+                period: *period,
+                duty: *duty,
+                phase: *phase,
             }),
         }
     }
@@ -205,6 +251,7 @@ fn build(def: LevelDef, tile_size: f32, rules: &AutotileRules) -> anyhow::Result
             tile_size / 2.0,
             tile_size / 2.0,
         ),
+        fires,
         player_spawn,
         entities,
     })
@@ -317,6 +364,73 @@ mod tests {
             level.player_spawn,
             Vec2::new(32.0 + (32.0 - Avatar::WIDTH) / 2.0, 32.0 - Avatar::HEIGHT)
         );
+    }
+
+    /// A grid `F` is a fire on the house cycle; the entity form is the same
+    /// thing with the timing written down. Both have to land in the same list,
+    /// or a map that mixes them places two different kinds of fire.
+    #[test]
+    fn fires_come_from_the_grid_and_from_the_entity_list() {
+        let def = LevelDef {
+            tileset: "test".to_string(),
+            grid: vec!["P.F..".to_string(), "#####".to_string()],
+            entities: vec![EntityDef::Fire {
+                cell: (4, 0),
+                period: 90,
+                duty: 30,
+                phase: 45,
+            }],
+        };
+        let level = build(def, 32.0, &rules()).unwrap();
+
+        assert_eq!(level.fires.len(), 2);
+        assert_eq!(level.fires[0].cell, Vec2::new(64.0, 0.0));
+        assert_eq!(
+            (
+                level.fires[0].period,
+                level.fires[0].duty,
+                level.fires[0].phase
+            ),
+            (
+                crate::systems::hazard::FIRE_PERIOD,
+                crate::systems::hazard::FIRE_DUTY,
+                0
+            ),
+            "the grid character takes the defaults"
+        );
+        assert_eq!(level.fires[1].cell, Vec2::new(128.0, 0.0));
+        assert_eq!(
+            (
+                level.fires[1].period,
+                level.fires[1].duty,
+                level.fires[1].phase
+            ),
+            (90, 30, 45)
+        );
+
+        // A fire is not an NPC: it must not appear in the list that spawn
+        // indices — `knight.0` and friends — are counted from.
+        assert!(level.entities.is_empty());
+    }
+
+    /// Timing is optional in the authored form, so `Fire(cell: (x, y),
+    /// phase: 60)` is enough to make one alternate with a plain `F`.
+    #[test]
+    fn an_authored_fire_defaults_its_timing() {
+        let level: LevelDef = ron::from_str(
+            r#"Level(
+                tileset: "test",
+                grid: ["P....", "....."],
+                entities: [Fire(cell: (3, 0), phase: 60)],
+            )"#,
+        )
+        .expect("the short form parses");
+        let level = build(level, 32.0, &rules()).unwrap();
+
+        let fire = level.fires[0];
+        assert_eq!(fire.period, crate::systems::hazard::FIRE_PERIOD);
+        assert_eq!(fire.duty, crate::systems::hazard::FIRE_DUTY);
+        assert_eq!(fire.phase, 60);
     }
 
     #[test]

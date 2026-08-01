@@ -13,10 +13,11 @@
 //! there are thirty of them, and what moving platforms will need in order to
 //! carry their riders.
 
+use ggez::glam::Vec2;
 use hecs::World;
 
 use crate::ecs::components::{Body, Collider, Position, Size, Velocity};
-use crate::physics::{self, Geometry, SolidQuery, SolidRect, SolidsOnly};
+use crate::physics::{self, Geometry, SolidQuery, SolidsOnly};
 
 /// Refresh the entity-owned half of the world's geometry.
 ///
@@ -30,15 +31,23 @@ use crate::physics::{self, Geometry, SolidQuery, SolidRect, SolidsOnly};
 /// Sorted by entity id, not taken in query order. hecs iterates archetypes in
 /// creation order, so adding a component to one entity mid-run would otherwise
 /// reshuffle the list that `resolve_move` walks — the same trap
-/// [`crate::sim::Sim::npcs`] guards against, with the same fix.
+/// [`crate::sim::Sim::npcs`] guards against, with the same fix. A fire lights
+/// by *gaining* a collider, so that reshuffle is not hypothetical.
+///
+/// Both halves of the geometry are rebuilt here: the solids a body can be
+/// stopped by, and the hazards that kill it. One pass over the colliders, so
+/// there is still exactly one moment per tick when the world's geometry
+/// changes.
 pub fn rebuild_geometry(geometry: &mut Geometry, world: &World) {
-    let mut owned: Vec<(u32, SolidRect)> = world
+    let mut owned: Vec<(u32, Vec2, Collider)> = world
         .query::<(&Position, &Collider)>()
         .iter()
-        .filter_map(|(entity, (pos, collider))| Some((entity.id(), collider.solid_rect(pos.0)?)))
+        .map(|(entity, (pos, collider))| (entity.id(), pos.0, *collider))
         .collect();
-    owned.sort_by_key(|(id, _)| *id);
-    geometry.set_entity_rects(owned.into_iter().map(|(_, rect)| rect));
+    owned.sort_by_key(|(id, _, _)| *id);
+
+    geometry.set_entity_rects(owned.iter().filter_map(|(_, pos, c)| c.solid_rect(*pos)));
+    geometry.set_entity_hazards(owned.iter().filter_map(|(_, pos, c)| c.hazard_rect(*pos)));
 }
 
 /// Advance every body one tick: gravity, integrate, resolve, record contact.
@@ -84,7 +93,7 @@ pub fn move_bodies<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, dt: 
 mod tests {
     use super::*;
     use crate::assets::{StatBlock, StatTable};
-    use crate::physics::Aabb;
+    use crate::physics::{Aabb, SolidRect};
     use crate::sim::TICK;
     use ggez::glam::Vec2;
     use std::sync::Arc;
@@ -309,7 +318,7 @@ mod tests {
             Position(Vec2::new(80.0, 300.0)),
             Collider::solid(Vec2::new(96.0, 16.0)),
         ));
-        let mut geometry = Geometry::from_level(&[Aabb::new(0.0, 400.0, 400.0, 32.0)], &[]);
+        let mut geometry = Geometry::from_level(&[Aabb::new(0.0, 400.0, 400.0, 32.0)], &[], &[]);
 
         for _ in 0..120 {
             rebuild_geometry(&mut geometry, &world);

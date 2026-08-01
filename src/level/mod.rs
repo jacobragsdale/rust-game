@@ -32,6 +32,25 @@ pub struct EntitySpawn {
     pub pos: Vec2,
 }
 
+/// A fire the map places: where it burns, and when.
+///
+/// Apart from [`EntitySpawn`] on purpose. That list is addressed by spawn
+/// index — `knight.0` in a tape means the first entry — so a fire dropped into
+/// it would renumber every NPC after it in every tape that runs on the map.
+/// Fires are also not a `kind` anything looks art up for: they are geometry
+/// with a timer, and [`crate::systems::hazard::spawn_fires`] is all they need.
+#[derive(Clone, Copy, Debug)]
+pub struct FireSpawn {
+    /// Top-left of the cell it was placed in, in world pixels.
+    pub cell: Vec2,
+    /// Ticks in one full on/off cycle.
+    pub period: u32,
+    /// How many of those it burns for.
+    pub duty: u32,
+    /// Offset into the cycle, so two fires can alternate.
+    pub phase: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct LevelData {
     /// Name of the tileset definition (`assets/data/tilesets/{name}.ron`).
@@ -47,8 +66,12 @@ pub struct LevelData {
     pub solids: Vec<Aabb>,
     /// One-way platforms: land from above, jump through from below.
     pub one_way: Vec<Aabb>,
-    /// Hazard zones (inert until combat lands in Phase 3).
+    /// Static hazard zones: spikes carved into the grid.
     pub hazards: Vec<Aabb>,
+    /// Fires, which are hazards that come and go. Not in `hazards` because
+    /// they are not static: each becomes an entity that owns its collider and
+    /// hands it to the geometry only while lit.
+    pub fires: Vec<FireSpawn>,
     pub player_spawn: Vec2,
     #[allow(dead_code)]
     pub entities: Vec<EntitySpawn>,
@@ -78,6 +101,7 @@ impl LevelData {
             solids: vec![],
             one_way: vec![],
             hazards: vec![],
+            fires: vec![],
             player_spawn: Vec2::ZERO,
             entities: vec![],
         }

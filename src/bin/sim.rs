@@ -160,6 +160,37 @@ fn run() -> anyhow::Result<bool> {
                 );
             }
         }
+        // Fires are geometry an entity owns rather than level rects, and their
+        // timing is half of what a tape has to be written against. Sorted by
+        // entity id, which is map order: a lit fire and an unlit one sit in
+        // different hecs archetypes, so query order is whatever the schedule
+        // happened to say at tick 0.
+        let mut fires: Vec<_> = sim
+            .world
+            .query::<(
+                &supergame::ecs::components::Position,
+                &supergame::ecs::components::Fire,
+                &supergame::ecs::components::Schedule,
+            )>()
+            .iter()
+            .map(|(entity, (pos, fire, schedule))| {
+                (entity.id(), fire.collider.aabb(pos.0), *schedule)
+            })
+            .collect();
+        fires.sort_by_key(|(id, _, _)| *id);
+        for (_, rect, schedule) in fires {
+            println!(
+                "fire     x {:>7.1} .. {:>7.1}   y {:>7.1} .. {:>7.1}   \
+                 lit {} of every {} ticks, phase {}",
+                rect.x,
+                rect.right(),
+                rect.y,
+                rect.bottom(),
+                schedule.duty,
+                schedule.period,
+                schedule.phase,
+            );
+        }
         return Ok(true);
     }
 

@@ -145,6 +145,41 @@ impl SolidQuery for Vec<SolidRect> {
     }
 }
 
+/// What the death check asks the world for: is anything lethal overlapping
+/// this box?
+///
+/// Deliberately not part of [`SolidQuery`]. A hazard is geometry but not
+/// obstruction — it never enters resolution, and a body walks into fire rather
+/// than bumping off it — so the two are different questions asked by different
+/// phases of the tick. What they share is where the answer comes from: a spike
+/// carved into the map and a fire an entity lit this tick both arrive through
+/// this trait, so there is one way to die on contact rather than one per
+/// source.
+pub trait HazardQuery {
+    /// Does any hazard overlap `area`?
+    fn hazard_overlapping(&self, area: Aabb) -> bool;
+}
+
+/// A slice of boxes is its own hazard set. Tests and fixtures use it, and it
+/// is what `LevelData::hazards` was before hazards could move.
+impl HazardQuery for [Aabb] {
+    fn hazard_overlapping(&self, area: Aabb) -> bool {
+        self.iter().any(|hazard| area.overlaps(hazard))
+    }
+}
+
+impl HazardQuery for Vec<Aabb> {
+    fn hazard_overlapping(&self, area: Aabb) -> bool {
+        self[..].hazard_overlapping(area)
+    }
+}
+
+impl<const N: usize> HazardQuery for [Aabb; N] {
+    fn hazard_overlapping(&self, area: Aabb) -> bool {
+        self[..].hazard_overlapping(area)
+    }
+}
+
 /// A view of a solid set with one-way platforms filtered out: what a body
 /// dropping through a platform sees.
 pub struct SolidsOnly<'a, Q: ?Sized>(pub &'a Q);
@@ -270,6 +305,12 @@ pub struct Geometry {
     static_len: usize,
     statics: Grid,
     dynamics: Grid,
+    /// Lethal boxes, the level's own first and then entity-owned ones — the
+    /// same two halves as `rects`, kept apart from it because a hazard is not
+    /// a solid and must never reach resolution.
+    hazards: Vec<Aabb>,
+    /// Where the entity-owned hazards start.
+    static_hazard_len: usize,
 }
 
 impl Geometry {
@@ -279,10 +320,17 @@ impl Geometry {
     /// `Vec<SolidRect>` had before `Geometry` existed, and resolution walks
     /// the list, so keeping it is what makes this refactor invisible in the
     /// golden traces.
-    pub fn from_level(solids: &[Aabb], one_way: &[Aabb]) -> Self {
+    ///
+    /// Hazards come along because they are the level's geometry too, even
+    /// though nothing collides with them: the death check reads them from here
+    /// so that a map's spikes and an entity's fire are one set of boxes.
+    pub fn from_level(solids: &[Aabb], one_way: &[Aabb], hazards: &[Aabb]) -> Self {
         let mut rects: Vec<SolidRect> = solids.iter().map(|&r| SolidRect::solid(r)).collect();
         rects.extend(one_way.iter().map(|&r| SolidRect::one_way(r)));
-        Geometry::from_rects(rects)
+        let mut geometry = Geometry::from_rects(rects);
+        geometry.hazards = hazards.to_vec();
+        geometry.static_hazard_len = geometry.hazards.len();
+        geometry
     }
 
     /// Bucket an already-flattened list, keeping its order.
@@ -292,6 +340,8 @@ impl Geometry {
             rects,
             statics: Grid::default(),
             dynamics: Grid::default(),
+            hazards: Vec::new(),
+            static_hazard_len: 0,
         };
         for (index, solid) in geometry.rects.iter().enumerate() {
             geometry.statics.insert(index as u32, &solid.rect);
@@ -314,6 +364,18 @@ impl Geometry {
         }
     }
 
+    /// Replace the entity-owned hazards, keeping the caller's order.
+    ///
+    /// No grid behind these. A hazard set is a handful of boxes where the
+    /// solid set is thousands, and only bodies that can die ask about it, once
+    /// each per tick — a bucket walk would cost more than the scan it saves.
+    /// The interface is the same either way, so putting a grid here later
+    /// changes nothing above it.
+    pub fn set_entity_hazards(&mut self, hazards: impl IntoIterator<Item = Aabb>) {
+        self.hazards.truncate(self.static_hazard_len);
+        self.hazards.extend(hazards);
+    }
+
     /// Every solid, static and entity-owned, in query order.
     pub fn rects(&self) -> &[SolidRect] {
         &self.rects
@@ -322,6 +384,22 @@ impl Geometry {
     /// How many of them are entity-owned.
     pub fn entity_rect_count(&self) -> usize {
         self.rects.len() - self.static_len
+    }
+
+    /// Every hazard box, the level's own then the entity-owned ones.
+    pub fn hazards(&self) -> &[Aabb] {
+        &self.hazards
+    }
+
+    /// How many of them are entity-owned.
+    pub fn entity_hazard_count(&self) -> usize {
+        self.hazards.len() - self.static_hazard_len
+    }
+}
+
+impl HazardQuery for Geometry {
+    fn hazard_overlapping(&self, area: Aabb) -> bool {
+        self.hazards[..].hazard_overlapping(area)
     }
 }
 
@@ -674,9 +752,66 @@ mod geometry_tests {
                 Aabb::new(32.0, 0.0, 32.0, 32.0),
             ],
             &[Aabb::new(0.0, 64.0, 64.0, 8.0)],
+            &[],
         );
         let kinds: Vec<bool> = geometry.rects().iter().map(|s| s.one_way).collect();
         assert_eq!(kinds, vec![false, false, true]);
+    }
+
+    // --- hazards ---------------------------------------------------------
+
+    /// A hazard is lethal and nothing else: it must not appear in anything
+    /// resolution walks, or fire would be a wall.
+    #[test]
+    fn hazards_are_queryable_but_never_solid() {
+        let mut geometry = Geometry::from_level(
+            &[Aabb::new(0.0, 64.0, 128.0, 32.0)],
+            &[],
+            &[Aabb::new(32.0, 48.0, 32.0, 16.0)],
+        );
+        geometry.set_entity_hazards([Aabb::new(96.0, 32.0, 20.0, 26.0)]);
+
+        assert_eq!(geometry.rects().len(), 1, "only the floor is solid");
+        assert_eq!(geometry.hazards().len(), 2);
+        assert_eq!(geometry.entity_hazard_count(), 1);
+
+        // the level's spike
+        assert!(geometry.hazard_overlapping(Aabb::new(40.0, 40.0, 10.0, 20.0)));
+        // the entity's box
+        assert!(geometry.hazard_overlapping(Aabb::new(100.0, 40.0, 10.0, 20.0)));
+        // the gap between them
+        assert!(!geometry.hazard_overlapping(Aabb::new(70.0, 40.0, 10.0, 20.0)));
+
+        // and a query over the whole world finds one solid, not three
+        let mut out = Vec::new();
+        geometry.overlapping(Aabb::new(0.0, 0.0, 512.0, 512.0), &mut out);
+        assert_eq!(out.len(), 1);
+    }
+
+    /// The same replace-don't-accumulate contract the solid half has: an
+    /// entity's hazard is gone the tick it stops presenting one, which is how
+    /// a fire goes out.
+    #[test]
+    fn entity_hazards_replace_rather_than_accumulate() {
+        let mut geometry = Geometry::from_level(&[], &[], &[Aabb::new(0.0, 0.0, 16.0, 16.0)]);
+        let probe = Aabb::new(200.0, 0.0, 8.0, 8.0);
+
+        geometry.set_entity_hazards([Aabb::new(196.0, 0.0, 16.0, 16.0)]);
+        assert!(geometry.hazard_overlapping(probe), "lit");
+
+        geometry.set_entity_hazards([]);
+        assert!(!geometry.hazard_overlapping(probe), "out");
+        assert_eq!(geometry.hazards().len(), 1, "the level's own survived");
+        assert!(geometry.hazard_overlapping(Aabb::new(4.0, 4.0, 4.0, 4.0)));
+    }
+
+    /// Sharing an edge is not a hit, for the same reason it is not for solids:
+    /// standing flush beside a fire is standing beside it.
+    #[test]
+    fn touching_a_hazards_edge_is_not_overlapping_it() {
+        let geometry = Geometry::from_level(&[], &[], &[Aabb::new(100.0, 0.0, 20.0, 20.0)]);
+        assert!(!geometry.hazard_overlapping(Aabb::new(80.0, 0.0, 20.0, 20.0)));
+        assert!(geometry.hazard_overlapping(Aabb::new(80.1, 0.0, 20.0, 20.0)));
     }
 }
 
