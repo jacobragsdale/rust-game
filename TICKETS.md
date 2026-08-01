@@ -291,6 +291,48 @@ that is data. Tuning without a recompile is the other half of the win.
 
 ---
 
+## H-3b — retire the last five `Avatar` consts
+
+**Size:** S. **Depends on:** H-3, L-1. **Status:** todo.
+
+### Context
+
+H-3 moved 17 `Avatar` consts, both `Health::*_IFRAMES`, all 7 `Hostile::*`, both
+`Patrol::*` and all 6 `KNIGHT_*` into `stats.ron`. Five survive — `WIDTH`,
+`HEIGHT`, `GRAVITY`, `MAX_FALL`, `JUMP_SPEED` — for two structural reasons, not
+because anyone ran out of steam:
+
+- `src/level/ascii.rs` and `src/level/tiled.rs` resolve a map's player spawn from
+  the player's box **at load time, before any entity exists**, so there is no
+  `Stats` component to ask.
+- `tests/physics_diagnostics.rs` has `const SIZE: Vec2 = Vec2::new(Avatar::WIDTH,
+  Avatar::HEIGHT)` — a `const` item, which no function or static can substitute.
+
+They are not a second source of truth today:
+`avatar_consts_match_the_shipped_stat_table` fails the build if they ever
+disagree with the RON. But a mirror that must be manually kept true is a trap
+with a delay on it.
+
+### Implementation
+
+- Thread the stat table (or just the player's block) into `LevelData::load` and
+  `LevelData::from_grid`, so the spawn resolver asks the same table everything
+  else does.
+- In the physics sweeps, replace the `const SIZE` item with a function or a
+  `LazyLock`, reading the shipped table.
+- Delete the five consts and the mirror test with them.
+
+### Acceptance criteria
+
+- No gameplay constant remains anywhere in `src/ecs/`.
+- **Zero trace diffs**: still a transcription, still must not move the game.
+
+### Testing
+
+The existing suite. If a baseline moves, a value was threaded wrong.
+
+---
+
 # Workstream C — M3c, the shock spell (finishes M3)
 
 ## C-1 — Mana, `SpellDef`, and casting
