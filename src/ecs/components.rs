@@ -5,6 +5,7 @@ use std::sync::Arc;
 use ggez::glam::Vec2;
 
 use crate::assets::ClipSet;
+use crate::physics::{Aabb, SolidRect};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Position(pub Vec2);
@@ -15,6 +16,81 @@ pub struct Velocity(pub Vec2);
 /// AABB extent of an entity, anchored at its `Position` (top-left corner).
 #[derive(Clone, Copy, Debug)]
 pub struct Size(pub Vec2);
+
+/// What an entity's collision box is *to everything else*.
+///
+/// [`Size`] is what the world does to an entity — the box gravity and
+/// resolution push around. This is the other direction: an entity with a
+/// [`Position`] and one of these becomes part of the level's geometry, and
+/// bodies collide with it exactly as they collide with a tile.
+///
+/// The distinction matters because the two are rarely the same box. A moving
+/// platform is all collider and no body; a knight is all body and no collider,
+/// since NPCs walk through each other rather than shoving.
+#[derive(Clone, Copy, Debug)]
+pub struct Collider {
+    /// Top-left of the box relative to the owner's `Position`.
+    pub rect_offset: Vec2,
+    pub size: Vec2,
+    pub kind: ColliderKind,
+}
+
+/// What kind of geometry a [`Collider`] contributes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColliderKind {
+    /// Blocks from every side, like a wall.
+    Solid,
+    /// Blocks only from above, like a platform.
+    OneWay,
+    /// Blocks nothing and kills on contact, like spikes.
+    Hazard,
+}
+
+impl Collider {
+    pub fn solid(size: Vec2) -> Self {
+        Collider {
+            rect_offset: Vec2::ZERO,
+            size,
+            kind: ColliderKind::Solid,
+        }
+    }
+
+    pub fn one_way(size: Vec2) -> Self {
+        Collider {
+            rect_offset: Vec2::ZERO,
+            size,
+            kind: ColliderKind::OneWay,
+        }
+    }
+
+    pub fn hazard(size: Vec2) -> Self {
+        Collider {
+            rect_offset: Vec2::ZERO,
+            size,
+            kind: ColliderKind::Hazard,
+        }
+    }
+
+    /// Where the box is, for an owner at `pos`.
+    pub fn aabb(&self, pos: Vec2) -> Aabb {
+        let origin = pos + self.rect_offset;
+        Aabb::new(origin.x, origin.y, self.size.x, self.size.y)
+    }
+
+    /// The box as something a body can be stopped by, or `None` for a kind
+    /// that does not stop anything.
+    ///
+    /// Hazards are geometry but not obstruction: you walk into fire, you do
+    /// not bump into it. Wiring them into a hazard query is L-2's job; until
+    /// then they simply contribute nothing to collision.
+    pub fn solid_rect(&self, pos: Vec2) -> Option<SolidRect> {
+        match self.kind {
+            ColliderKind::Solid => Some(SolidRect::solid(self.aabb(pos))),
+            ColliderKind::OneWay => Some(SolidRect::one_way(self.aabb(pos))),
+            ColliderKind::Hazard => None,
+        }
+    }
+}
 
 /// Anything that falls, moves, and collides with the level.
 ///

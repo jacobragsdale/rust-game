@@ -28,6 +28,7 @@ phase it belongs to, not onto the end.
 | `combat::tick_timers`, `advance_attacks` | count down i-frames, hitstun, swing progress |
 | `avatar::control` | read input, decide the player's velocity and body knobs |
 | `npc::think` | AI decides an NPC's velocity |
+| `body::rebuild_geometry` | **the one point per tick where collision geometry changes** — entity-owned colliders are read at the positions the controllers just decided |
 | `body::move_bodies` | gravity, integration, collision — **every** body, one pass |
 | `avatar::after_move` | react to where the body ended up: landing, bounds, death |
 | `combat::resolve`, `settle_dead` | test hitboxes at final positions, apply damage |
@@ -35,6 +36,13 @@ phase it belongs to, not onto the end.
 
 Controllers only ever set a velocity and a few `Body` knobs (`gravity`,
 `fall_cap`, `ignore_one_way`, `frozen`). They never integrate or collide.
+
+Anything that *is* geometry — a moving platform, a fire on a cycle — owns a
+`Collider` and moves it in the decide phase; `rebuild_geometry` picks it up the
+same tick, and collision never learns it exists. The physics asks a
+`SolidQuery` ("every solid overlapping this box"), never a `Vec<SolidRect>`, so
+a query must stay a *subsequence* of the full list: resolution walks what it is
+handed, and reordering it moves the game.
 
 ## Verify without playing
 

@@ -9,7 +9,7 @@ use hecs::World;
 use crate::ecs::components::{
     Attacking, Body, Health, Hostile, Patrol, Position, Size, Stance, Team, Velocity,
 };
-use crate::physics::{Aabb, SolidRect};
+use crate::physics::{Aabb, SolidQuery, SolidRect};
 use crate::sim::event::GameEvent;
 
 /// Decide what every NPC does this tick.
@@ -22,7 +22,7 @@ use crate::sim::event::GameEvent;
 /// Runs in phase 1 alongside `avatar::control`, and like it only sets a
 /// velocity — an NPC moves through exactly the same `move_bodies` the player
 /// does, which is the point of the M1 split.
-pub fn think(world: &mut World, geometry: &[SolidRect], events: &mut Vec<GameEvent>) {
+pub fn think<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, events: &mut Vec<GameEvent>) {
     let target = player_position(world);
 
     let mut swings: Vec<(hecs::Entity, String)> = Vec::new();
@@ -128,13 +128,13 @@ pub fn think(world: &mut World, geometry: &[SolidRect], events: &mut Vec<GameEve
 /// keeps a walker on its ledge instead of marching off it — and it has to be a
 /// look-ahead probe rather than a reaction to falling, because by the time the
 /// body is airborne it is already too late to not have walked off.
-fn walk(
+fn walk<Q: SolidQuery + ?Sized>(
     patrol: &mut Patrol,
     pos: Vec2,
     size: Vec2,
     vel: &mut Velocity,
     body: &Body,
-    geometry: &[SolidRect],
+    geometry: &Q,
     speed: f32,
 ) {
     // Airborne walkers keep their horizontal speed and do not steer: turning
@@ -198,7 +198,7 @@ fn within(pos: Vec2, size: Vec2, target: (Vec2, Vec2), range: f32) -> Option<f32
 }
 
 /// Is there a solid directly in front of the body, at body height?
-fn wall_ahead(pos: Vec2, size: Vec2, dir: f32, geometry: &[SolidRect]) -> bool {
+fn wall_ahead<Q: SolidQuery + ?Sized>(pos: Vec2, size: Vec2, dir: f32, geometry: &Q) -> bool {
     let x = if dir > 0.0 {
         pos.x + size.x
     } else {
@@ -206,13 +206,11 @@ fn wall_ahead(pos: Vec2, size: Vec2, dir: f32, geometry: &[SolidRect]) -> bool {
     };
     // Inset vertically so the floor being stood on is not read as a wall.
     let probe = Aabb::new(x, pos.y + 2.0, Patrol::LOOKAHEAD, size.y - 4.0);
-    geometry
-        .iter()
-        .any(|s| !s.one_way && probe.overlaps(&s.rect))
+    probed(geometry, probe).any(|s| !s.one_way && probe.overlaps(&s.rect))
 }
 
 /// Is there anything to stand on just beyond the leading edge?
-fn floor_ahead(pos: Vec2, size: Vec2, dir: f32, geometry: &[SolidRect]) -> bool {
+fn floor_ahead<Q: SolidQuery + ?Sized>(pos: Vec2, size: Vec2, dir: f32, geometry: &Q) -> bool {
     let x = if dir > 0.0 {
         pos.x + size.x
     } else {
@@ -221,7 +219,14 @@ fn floor_ahead(pos: Vec2, size: Vec2, dir: f32, geometry: &[SolidRect]) -> bool 
     // One-way platforms count: they hold a body up from above, which is all
     // that matters for deciding whether the next step lands on something.
     let probe = Aabb::new(x, pos.y + size.y, Patrol::LOOKAHEAD, Patrol::FLOOR_PROBE);
-    geometry.iter().any(|s| probe.overlaps(&s.rect))
+    probed(geometry, probe).any(|s| probe.overlaps(&s.rect))
+}
+
+/// The solids a lookahead probe has to consider.
+fn probed<Q: SolidQuery + ?Sized>(geometry: &Q, probe: Aabb) -> impl Iterator<Item = SolidRect> {
+    let mut candidates = Vec::new();
+    geometry.overlapping(probe, &mut candidates);
+    candidates.into_iter()
 }
 
 #[cfg(test)]
