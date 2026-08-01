@@ -15,24 +15,29 @@ assert x == 70
 assert y == 222
 
 # Walk to the edge of the left ledge and wait there. The platform is out over
-# the pit and coming back; it docks against the ledge on tick 60.
+# the pit and coming back; it docks against the left gangway on tick 60.
 right 20
 wait 30
 assert grounded
 assert y == 222
 assert x < 160
 
-# Aboard, while it is docked.
+# Aboard: over the plank gangway (x 160..192) and onto the platform, which
+# docks flush with the plank's far end. `x > 192` is past the gangway
+# entirely — on the ferry itself, not on the map.
 right 26
 assert grounded
 assert y == 222
-assert x > 160
+assert x > 192
 
 # Ride, with no input at all: everything moving the player is under their feet.
+# The pit runs x 160..608 and is spiked, so being grounded at y == 222 out here
+# at all is the ride working. The platform's far dock is x 480 and this ends
+# fifteen ticks short of it, hence 460.
 wait 204
 assert grounded
 assert y == 222
-assert x > 480
+assert x > 460
 # Carried by position, not by velocity — a velocity-based carry would show up
 # right here as the platform's speed sitting in the player's own vx, and would
 # have thrown them off the far end when it reversed.
