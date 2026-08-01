@@ -11,7 +11,10 @@
 //!
 //! Geometry that moves has no grid character, because a character can say where
 //! something is but not where it goes. A moving platform is a
-//! `Platform(from: (x, y), to: (x, y), …)` entry in the entity list.
+//! `Platform(from: (x, y), to: (x, y), …)` entry in the entity list, and a
+//! swinging hazard is a `Swing(anchor: (x, y), …)` entry — a character could
+//! name the cell the chain hangs from, but not how long the chain is or how
+//! far it swings, which is all of what makes the arc.
 
 use std::fs;
 use std::path::Path;
@@ -21,7 +24,7 @@ use ggez::glam::Vec2;
 use serde::Deserialize;
 
 use crate::assets::{Assets, AutotileRules, StatTable};
-use crate::level::{merge_runs, EntitySpawn, FireSpawn, LevelData, MoverSpawn};
+use crate::level::{merge_runs, EntitySpawn, FireSpawn, LevelData, MoverSpawn, PendulumSpawn};
 
 /// Spelled `Level(...)` in the map files.
 #[derive(Debug, Deserialize)]
@@ -72,6 +75,28 @@ enum EntityDef {
         #[serde(default)]
         phase: u32,
     },
+    /// A spiked ball on a chain, swinging under a fixed anchor. `anchor` is
+    /// the cell the chain hangs from and the pivot is that cell's *centre* —
+    /// a pivot is a point, not a box, so the corner every other cell reference
+    /// means here would put the swing half a tile off what the map looks like.
+    ///
+    /// `amplitude` is the half-swing in **degrees** either side of straight
+    /// down, and `period` is one full there-and-back in ticks. Everything but
+    /// the anchor has a default, so `Swing(anchor: (12, 5))` is a complete
+    /// hazard.
+    Swing {
+        anchor: (u32, u32),
+        #[serde(default = "default_swing_length")]
+        length: f32,
+        #[serde(default = "default_swing_amplitude")]
+        amplitude: f32,
+        #[serde(default = "default_swing_period")]
+        period: u32,
+        #[serde(default)]
+        phase: u32,
+        #[serde(default = "default_swing_radius")]
+        radius: f32,
+    },
 }
 
 fn default_fire_period() -> u32 {
@@ -92,6 +117,31 @@ fn default_platform_tiles() -> u32 {
 /// one is legible: you can watch it, decide, and step on.
 fn default_platform_speed() -> f32 {
     60.0
+}
+
+/// Three tiles of chain: long enough for the arc to read as a swing rather
+/// than a wobble, short enough that the ball stays in one screen.
+fn default_swing_length() -> f32 {
+    96.0
+}
+
+/// Sixty degrees either side of straight down. Wide enough that the ball is
+/// clearly high at the extremes and low in the middle — which is the whole
+/// mechanic, since the only place it is at head height is the bottom.
+fn default_swing_amplitude() -> f32 {
+    60.0
+}
+
+/// Four seconds for one there-and-back. A wrecking ball is heavy; a fast one
+/// reads as a coin flip rather than as a pattern, exactly like a fire that
+/// blinks too quickly.
+fn default_swing_period() -> u32 {
+    240
+}
+
+/// A ball a little under a tile across.
+fn default_swing_radius() -> f32 {
+    crate::systems::pendulum::BALL_RADIUS
 }
 
 /// Load an ASCII map. `player` is the player's collider box, which the spawn
@@ -165,6 +215,7 @@ fn build(
     let mut entities = Vec::new();
     let mut fires = Vec::new();
     let mut movers = Vec::new();
+    let mut pendulums = Vec::new();
 
     for (y, row) in def.grid.iter().enumerate() {
         for (x, ch) in row.chars().enumerate() {
@@ -248,6 +299,38 @@ fn build(
                     phase: *phase,
                 });
             }
+            EntityDef::Swing {
+                anchor,
+                length,
+                amplitude,
+                period,
+                phase,
+                radius,
+            } => {
+                anyhow::ensure!(*length > 0.0, "a swing's chain must have a length");
+                anyhow::ensure!(
+                    *amplitude > 0.0 && *amplitude <= 90.0,
+                    "a swing's amplitude must be between 0 and 90 degrees, not {amplitude}"
+                );
+                // A zero period is a ball hanging still. `Pendulum::at` copes
+                // with it, but nothing in a map means it, and an invisible
+                // parked hazard is worse than a load error.
+                anyhow::ensure!(*period > 0, "a swing's period must be at least one tick");
+                anyhow::ensure!(*radius > 0.0, "a swing's ball must have a radius");
+                pendulums.push(PendulumSpawn {
+                    // The centre of the cell, not its corner: the pivot is a
+                    // point, and a point in a cell means the middle of it.
+                    anchor: Vec2::new(
+                        (anchor.0 as f32 + 0.5) * tile_size,
+                        (anchor.1 as f32 + 0.5) * tile_size,
+                    ),
+                    length: *length,
+                    amplitude: amplitude.to_radians(),
+                    period: *period,
+                    phase: *phase,
+                    radius: *radius,
+                });
+            }
         }
     }
 
@@ -326,6 +409,7 @@ fn build(
         ),
         fires,
         movers,
+        pendulums,
         player_spawn,
         entities,
     })
@@ -566,6 +650,65 @@ mod tests {
         // A platform is geometry, not an NPC: it must stay out of the list
         // that `knight.0` and friends are counted from.
         assert!(level.entities.is_empty());
+    }
+
+    /// Cells and degrees in, pixels and radians out — and the anchor lands in
+    /// the *middle* of the cell it names, because a pivot is a point.
+    #[test]
+    fn a_swing_is_authored_in_cells_and_degrees() {
+        let level: LevelDef = ron::from_str(
+            r#"Level(
+                tileset: "test",
+                grid: ["P.........", ".........."],
+                entities: [
+                    Swing(anchor: (4, 1), length: 160.0, amplitude: 30.0, period: 90, phase: 15),
+                    Swing(anchor: (8, 0)),
+                ],
+            )"#,
+        )
+        .expect("the swing form parses");
+        let level = build(level, 32.0, &rules(), player()).unwrap();
+
+        assert_eq!(level.pendulums.len(), 2);
+        let authored = level.pendulums[0];
+        assert_eq!(authored.anchor, Vec2::new(4.5 * 32.0, 1.5 * 32.0));
+        assert_eq!(authored.length, 160.0);
+        assert!((authored.amplitude - std::f32::consts::FRAC_PI_6).abs() < 1e-6);
+        assert_eq!(authored.period, 90);
+        assert_eq!(authored.phase, 15);
+
+        // Everything but the anchor is optional, so the short form is a
+        // complete hazard on the house numbers.
+        let plain = level.pendulums[1];
+        assert_eq!(plain.anchor, Vec2::new(8.5 * 32.0, 0.5 * 32.0));
+        assert_eq!(plain.length, default_swing_length());
+        assert!((plain.amplitude - default_swing_amplitude().to_radians()).abs() < 1e-6);
+        assert_eq!(plain.period, default_swing_period());
+        assert_eq!(plain.radius, crate::systems::pendulum::BALL_RADIUS);
+
+        // A swing is geometry, not an NPC: it must stay out of the list that
+        // `knight.0` and friends are counted from.
+        assert!(level.entities.is_empty());
+    }
+
+    #[test]
+    fn a_degenerate_swing_is_rejected_rather_than_shipped() {
+        for entity in [
+            "Swing(anchor: (4, 1), length: 0.0)",
+            "Swing(anchor: (4, 1), amplitude: 0.0)",
+            "Swing(anchor: (4, 1), amplitude: 120.0)",
+            "Swing(anchor: (4, 1), period: 0)",
+            "Swing(anchor: (4, 1), radius: 0.0)",
+        ] {
+            let def: LevelDef = ron::from_str(&format!(
+                r#"Level(tileset: "test", grid: ["P....", "....."], entities: [{entity}])"#
+            ))
+            .expect("parses");
+            assert!(
+                build(def, 32.0, &rules(), player()).is_err(),
+                "{entity} should not have been accepted"
+            );
+        }
     }
 
     #[test]

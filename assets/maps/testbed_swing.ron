@@ -1,0 +1,60 @@
+// Swinging-hazard testbed — the map tapes/swing_dodge.tape runs against.
+//
+// One tall room with a spiked ball on a chain swinging across the middle of it.
+// The whole mechanic is that a pendulum is *high at the ends and low in the
+// middle*: the ball is only at body height for a fraction of each pass, so the
+// room is crossable if you time it and lethal if you do not.
+//
+// A new file rather than an addition to testbed_fire.ron or testbed_mover.ron,
+// which are frozen — their tapes encode their exact pixels. Treat this one as a
+// fixture too.
+//
+// Legend: '#' solid  'P' spawn.  Swinging hazards have no grid character: a
+// character could name the cell the chain hangs from, but not how long the
+// chain is or how far it swings, which is all of what makes the arc. They are
+// authored as `Swing(...)` entries below.
+//
+// 22x12 tiles at 32px = 704x384 world pixels.
+//
+//   spawn      col 2, row 10     world (70, 318), feet on the floor at y=352
+//   floor      row 11            surface y=352, the full width
+//   anchor     col 12, row 5     a solid block, so the chain visibly hangs off
+//                                something; the pivot is the block's centre,
+//                                world (400, 176)
+//   ball       length 160 -> the bottom of the arc is at y=336, sixteen pixels
+//              off the floor and squarely across the player's box (318..352)
+//              amplitude 75 deg -> the extremes are at x 245 and 555, y 217,
+//              which is a hundred pixels over the player's head: at the ends
+//              of its arc the ball is something you run *under*
+//              period 300 -> one there-and-back every five seconds
+//              phase 0 -> starts at the right-hand extreme, momentarily still
+//
+// The numbers that matter to the tape, all of which fall out of the above:
+//
+//   The ball's lethal box overlaps a standing player only while the chain is
+//   within 33.4 degrees of straight down, which is x 303..497 — call it the
+//   strip. The strip is lethal during ticks 53..97 and 203..247 of every 300,
+//   and harmless the rest of the time. So the tape has a 106-tick window to
+//   get from x<283 (clear on the left) to x>497 (clear on the right), which is
+//   213px, about 68 ticks of running. Comfortable if you start on time and
+//   fatal if you stroll.
+Level(
+    tileset: "castle",
+    grid: [
+        "######################",
+        "#....................#",
+        "#....................#",
+        "#....................#",
+        "#....................#",
+        "#...........#........#",
+        "#....................#",
+        "#....................#",
+        "#....................#",
+        "#....................#",
+        "#.P..................#",
+        "######################",
+    ],
+    entities: [
+        Swing(anchor: (12, 5), length: 160.0, amplitude: 75.0, period: 300),
+    ],
+)

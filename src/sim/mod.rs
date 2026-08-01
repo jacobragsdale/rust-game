@@ -213,6 +213,7 @@ impl Sim {
         // NPCs that tapes and traces address by spawn index.
         crate::systems::hazard::spawn_fires(&mut world, &level);
         crate::systems::mover::spawn_movers(&mut world, &level);
+        crate::systems::pendulum::spawn_pendulums(&mut world, &level);
 
         let mut sim = Sim {
             world,
@@ -299,8 +300,12 @@ impl Sim {
         spell::advance_casts(&mut self.world, &self.spells);
 
         // Geometry that owns itself decides here, with the controllers: a fire
-        // lights or goes out, and the rebuild below picks it up this tick.
+        // lights or goes out, a swinging hazard moves to where this tick's
+        // angle puts it, and the rebuild below picks both up this tick. Only
+        // `mover::advance` needs a more particular slot, because only it has
+        // riders to carry.
         crate::systems::hazard::tick_schedules(&mut self.world, self.tick);
+        crate::systems::pendulum::advance(&mut self.world, self.tick);
 
         avatar::control(
             &mut self.world,

@@ -7,4 +7,5 @@ pub mod hazard;
 pub mod input;
 pub mod mover;
 pub mod npc;
+pub mod pendulum;
 pub mod spell;

@@ -16,7 +16,9 @@ use ggez::glam::Vec2;
 use ggez::graphics::{Canvas, Color, DrawMode, DrawParam, Mesh, MeshBuilder, Quad, Rect, Text};
 use ggez::{Context, GameResult};
 
-use crate::ecs::components::{AnimationState, Avatar, Body, Position, Size, Sprite, Velocity};
+use crate::ecs::components::{
+    AnimationState, Avatar, Body, Pendulum, Position, Size, Sprite, Velocity,
+};
 use crate::physics::Aabb;
 use crate::sim::Sim;
 
@@ -124,6 +126,26 @@ impl DebugOverlay {
             if index >= owned_from {
                 mark_entity_owned(&mut mb, hazard, offset)?;
             }
+        }
+
+        // A swinging hazard's whole arc, not just where the ball is now.
+        //
+        // Every other collider in this overlay is a box you can see all of at
+        // once. A pendulum's danger is a *path* — the ball is somewhere
+        // harmless for most of its cycle and lethal for a fraction of it — so
+        // the box alone tells you nothing about the thing the map actually
+        // placed. Drawing the arc is what makes "this swing is buried in a
+        // wall" visible on screen; `every_swinging_hazard_has_an_arc_clear_of
+        // _the_level` in `tests/levels.rs` is the same check without a window.
+        for (_, pendulum) in sim.world.query::<&Pendulum>().iter() {
+            const STEPS: usize = 32;
+            let points: Vec<Vec2> = (0..=STEPS)
+                .map(|step| {
+                    let t = step as f32 / STEPS as f32;
+                    pendulum.at_angle(pendulum.amplitude * (2.0 * t - 1.0)) - offset
+                })
+                .collect();
+            mb.line(&points, STROKE, ENTITY_OWNED)?;
         }
 
         // The player's spawn point, as a small cross.

@@ -778,6 +778,98 @@ impl Mover {
     }
 }
 
+/// A hazard on a chain: the spiked ball, swinging under a fixed anchor.
+///
+/// The third and last of the closed-form movers, after [`Schedule`] and
+/// [`Mover`], and closed form for the same reasons plus one of its own. A
+/// numerically integrated pendulum does not merely accumulate float error — it
+/// accumulates *energy*, because a symplectic-free Euler step adds a little to
+/// the swing every cycle. The amplitude authored in the map would then not be
+/// the amplitude the ball actually reaches, and it would not be the same
+/// amplitude on tick 100 and tick 100_000. [`Pendulum::at`] answers "where is
+/// the ball at tick *t*?" from the tick alone, gives the same answer forever,
+/// and is exactly periodic: `at(t) == at(t + period)` bit for bit, because the
+/// tick reaches the trigonometry only through an integer remainder.
+///
+/// The motion is simple harmonic in the *angle* — `theta(t) = amplitude *
+/// cos(2*pi * (t + phase) / period)` — which is the linearised pendulum, and
+/// which is also what a swinging hazard should look like whatever the physics
+/// says: it dwells at the extremes and is fastest at the bottom. It starts at
+/// one extreme, momentarily still, so a map with `phase: 0` begins in a state
+/// an author can picture.
+///
+/// The ball's box is a [`Collider`] of kind [`ColliderKind::Hazard`]: it kills
+/// through the same path spikes and fire do, and it obstructs nothing. A
+/// wrecking ball you could stand on is a moving platform, and there is already
+/// one of those.
+#[derive(Clone, Copy, Debug)]
+pub struct Pendulum {
+    /// Where the chain is fixed, in world pixels. Nothing moves it.
+    pub anchor: Vec2,
+    /// Chain length: anchor to the centre of the ball, in pixels.
+    pub length: f32,
+    /// Half-swing in **radians**, measured from straight down. The ball
+    /// travels between `-amplitude` and `+amplitude`; maps author it in
+    /// degrees and [`crate::level::ascii`] converts.
+    pub amplitude: f32,
+    /// Ticks for one full there-and-back. Whole ticks for the reason
+    /// [`crate::systems::mover::leg_ticks`] rounds to them: an integer period
+    /// is what makes exact periodicity a fact rather than an approximation.
+    pub period: u32,
+    /// Ticks to shift the cycle by, so two balls can swing out of step.
+    pub phase: u32,
+}
+
+impl Pendulum {
+    pub fn new(anchor: Vec2, length: f32, amplitude: f32, period: u32, phase: u32) -> Self {
+        Pendulum {
+            anchor,
+            length,
+            amplitude,
+            period,
+            phase,
+        }
+    }
+
+    /// The angle from straight down, in radians, at `tick`.
+    ///
+    /// The tick reaches the cosine only as `step`, an integer in
+    /// `0..period` — which is the whole of why this is exactly periodic.
+    /// Dividing `(tick + phase)` by the period in floating point instead would
+    /// give an argument that drifts by an ulp or two over a long run, and
+    /// `at(t) == at(t + period)` would stop being true somewhere out past a
+    /// few million ticks with nothing to say it had.
+    ///
+    /// A zero `period` is a ball hanging still at its tick-0 position — a
+    /// degenerate map rather than a crash, the same call [`Schedule::on_at`]
+    /// and [`Mover::at`] make.
+    pub fn angle_at(&self, tick: u64) -> f32 {
+        if self.period == 0 {
+            return self.amplitude;
+        }
+        let step = (tick + self.phase as u64) % (self.period as u64);
+        let turn = std::f32::consts::TAU * step as f32 / self.period as f32;
+        self.amplitude * turn.cos()
+    }
+
+    /// Where the ball's centre is for a chain at `angle` radians from straight
+    /// down. Positive angles swing right; `+y` is down, so the resting ball
+    /// hangs at `anchor + (0, length)`.
+    ///
+    /// Split out from [`Pendulum::at`] so the arc can be walked by angle
+    /// rather than by tick — which is what `tests/levels.rs` does to check
+    /// that a map's swing is not buried in a wall, independently of how long
+    /// the map said the swing takes.
+    pub fn at_angle(&self, angle: f32) -> Vec2 {
+        self.anchor + self.length * Vec2::new(angle.sin(), angle.cos())
+    }
+
+    /// Where the ball's centre is at `tick`.
+    pub fn at(&self, tick: u64) -> Vec2 {
+        self.at_angle(self.angle_at(tick))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
