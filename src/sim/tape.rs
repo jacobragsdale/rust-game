@@ -37,10 +37,12 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use anyhow::{bail, Context as _};
 
-use crate::sim::event::{EventCounts, GameEvent};
+use crate::assets::{Assets, DialogueTable, ItemTable, SpellTable, StatTable};
+use crate::sim::event::{EventCounts, GameEvent, Subject, MODES};
 use crate::sim::rng;
 use crate::sim::trace::{Frame, ProbePath};
 use crate::systems::input::{Action, PlayerInput};
@@ -478,6 +480,11 @@ fn parse_check(tokens: &[&str]) -> anyhow::Result<Check> {
 /// reads: after writing `right+jump 25` you want to say the player landed
 /// *somewhere* in there, not work out which tick it was. `expect landed` is
 /// therefore `>= 1`, and `expect no died` is `== 0`.
+///
+/// The event **and its subject** are both resolved here, against
+/// [`GameEvent::names`] and against the shipped content tables respectively.
+/// The subject half is the one that is not obvious: see the comment on it
+/// below for why a typo there is otherwise permanent and silent.
 fn parse_expect(tokens: &[&str]) -> anyhow::Result<Check> {
     let (name, op, count) = match tokens {
         ["no", name] => (*name, Op::Eq, 0),
@@ -520,12 +527,32 @@ fn parse_expect(tokens: &[&str]) -> anyhow::Result<Check> {
             GameEvent::known_names()
         );
     }
-    if subject.is_some() && !GameEvent::has_subject(name) {
-        bail!(
+    // The subject is checked here rather than at run time because *here* is
+    // where a mistake is still cheap. `EventCounts::count_for` answers "how
+    // many times did this happen to nobody?" with 0, which is indistinguishable
+    // from the truth: `expect no shcok.spell_cast` passes while shock is cast
+    // four times, and `expect no <attack>.attacked` — the line
+    // `tapes/spell_kill.tape` uses to prove the kill came from the spell and
+    // not the sword — evaporates on one transposed letter, silently and
+    // permanently. Every subject is an id out of a content table, so the set
+    // of things it could have been is loaded and finite.
+    match (&subject, GameEvent::subject_kind(name)) {
+        (None, _) => {}
+        (Some(_), None) => bail!(
             "`{name}` does not record who it happened to, so it cannot be \
              narrowed to one (events that can: {})",
             GameEvent::subject_names()
-        );
+        ),
+        (Some(who), Some(kind)) => {
+            let known = known_subjects(kind);
+            if !known.iter().any(|k| k == who) {
+                bail!(
+                    "`{who}` is not {} — which is what `{name}` records (known: {})",
+                    kind.label(),
+                    known.join(", ")
+                );
+            }
+        }
     }
     Ok(Check::Event {
         subject,
@@ -533,6 +560,69 @@ fn parse_expect(tokens: &[&str]) -> anyhow::Result<Check> {
         op,
         count,
     })
+}
+
+/// Every name the shipped content offers for a subject of this kind, sorted.
+///
+/// Read once per process, the way [`StatTable::shipped`] and its counterparts
+/// are, and for the same reason: a headless test run parses every tape in the
+/// repo, and content that does not load is a broken build rather than a
+/// condition to degrade around. Parsing a tape therefore depends on
+/// `assets/data/`, which is the price of the error naming the line — and the
+/// alternative, checking as the tape runs, reports a typo at tick 400 of a run
+/// that had to be set up first.
+fn known_subjects(kind: Subject) -> &'static [String] {
+    struct Tables {
+        kinds: Vec<String>,
+        attacks: Vec<String>,
+        spells: Vec<String>,
+        items: Vec<String>,
+        modes: Vec<String>,
+        graphs: Vec<String>,
+        nodes: Vec<String>,
+    }
+
+    static TABLES: OnceLock<Tables> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        let owned = |ids: Vec<&str>| ids.into_iter().map(str::to_string).collect();
+        let attacks = Assets::new()
+            .attacks()
+            .expect("assets/data/attacks.ron should load");
+        let mut attack_ids: Vec<String> = attacks.0.keys().cloned().collect();
+        attack_ids.sort();
+        // Node ids are per graph, so the set a tape can name is their union —
+        // `expect greet.choice_taken` does not say which conversation, and
+        // does not need to: the count is keyed on the node name alone.
+        let dialogue = DialogueTable::shipped();
+        let mut nodes: Vec<String> = dialogue
+            .ids()
+            .iter()
+            .filter_map(|id| dialogue.get(id))
+            .flat_map(|graph| graph.node_ids().into_iter().map(str::to_string))
+            .collect();
+        nodes.sort();
+        nodes.dedup();
+
+        Tables {
+            kinds: owned(StatTable::shipped().kinds()),
+            attacks: attack_ids,
+            spells: owned(SpellTable::shipped().ids()),
+            items: owned(ItemTable::shipped().ids()),
+            modes: MODES.iter().map(|m| m.name().to_string()).collect(),
+            graphs: owned(dialogue.ids()),
+            nodes,
+        }
+    });
+
+    match kind {
+        Subject::Kind => &tables.kinds,
+        Subject::Attack => &tables.attacks,
+        Subject::Spell => &tables.spells,
+        Subject::Item => &tables.items,
+        Subject::Mode => &tables.modes,
+        Subject::Graph => &tables.graphs,
+        Subject::Node => &tables.nodes,
+    }
 }
 
 #[cfg(test)]
@@ -756,6 +846,85 @@ mod tests {
         );
     }
 
+    /// One subject of every shape the events use, all of them out of shipped
+    /// content. If a content id is renamed and no tape is updated, this is
+    /// where it shows up.
+    #[test]
+    fn every_shape_of_subject_resolves() {
+        for line in [
+            "expect knight.damaged == 1",
+            "expect no player.died",
+            "expect player_slash1.attacked >= 1",
+            "expect shock.spell_cast == 1",
+            "expect shock.cast_failed == 1",
+            "expect minor_potion.picked_up == 1",
+            "expect knight_helm.equipped == 1",
+            "expect inventory.mode_changed == 1",
+            "expect elder_intro.dialogue_opened == 1",
+            "expect elder_intro.interact_prompted == 1",
+            "expect greet.choice_taken == 1",
+        ] {
+            Tape::parse(line).unwrap_or_else(|e| panic!("`{line}`: {e:#}"));
+        }
+    }
+
+    /// **The bug this check exists for.** `EventCounts::count_for` answers
+    /// "how many times did this happen to nobody?" with 0, so a transposed
+    /// letter turns `expect no <attack>.attacked` — the line `spell_kill.tape`
+    /// proves the kill came from the spell with — into a line that can never
+    /// fail. Every one of these used to pass.
+    #[test]
+    fn a_mistyped_subject_is_rejected_and_the_message_lists_the_real_ones() {
+        for (line, expected) in [
+            ("expect no shcok.spell_cast", "shock"),
+            ("expect no knigt.damaged", "knight"),
+            ("expect no player_plunj.attacked", "player_plunge"),
+            ("expect no minor_potio.picked_up", "minor_potion"),
+            ("expect bag.mode_changed", "inventory"),
+        ] {
+            let err = format!("{:#}", Tape::parse(line).unwrap_err());
+            assert!(err.contains("is not"), "`{line}` should be rejected: {err}");
+            assert!(
+                err.contains(expected),
+                "`{line}` should name `{expected}` as something that resolves: {err}"
+            );
+        }
+    }
+
+    /// A subject out of the *wrong* table is the same mistake wearing a real
+    /// id: `greet` is a node, `elder_intro` is a graph, and swapping them
+    /// counts nothing forever.
+    #[test]
+    fn a_subject_from_the_wrong_table_is_rejected() {
+        let err = format!(
+            "{:#}",
+            Tape::parse("expect greet.dialogue_opened").unwrap_err()
+        );
+        assert!(err.contains("dialogue graph id"), "{err}");
+        let err = format!(
+            "{:#}",
+            Tape::parse("expect no elder_intro.choice_taken").unwrap_err()
+        );
+        assert!(err.contains("dialogue node id"), "{err}");
+    }
+
+    /// Every event that can be narrowed has somewhere for its subjects to come
+    /// from, and that somewhere is not empty — an empty table would reject
+    /// every tape that used the event, which is worse than the bug.
+    #[test]
+    fn every_narrowable_event_has_a_non_empty_namespace() {
+        for name in GameEvent::names() {
+            let Some(kind) = GameEvent::subject_kind(name) else {
+                continue;
+            };
+            assert!(
+                !known_subjects(kind).is_empty(),
+                "`{name}` narrows on {} and nothing defines any",
+                kind.label()
+            );
+        }
+    }
+
     /// The other half of "an unset flag reads as 0": nothing can fail to
     /// resolve, so a failure has to say what is actually set — otherwise a
     /// mistyped flag name and a quest that has not started are the same
@@ -817,6 +986,15 @@ mod tests {
         assert!(
             Tape::parse("assert nonsense == x").is_err(),
             "unknown text field"
+        );
+        assert!(Tape::parse("expect nonsense").is_err(), "unknown event");
+        assert!(
+            Tape::parse("expect knight.jumped").is_err(),
+            "an event that records nobody cannot be narrowed"
+        );
+        assert!(
+            Tape::parse("expect nobody.damaged").is_err(),
+            "unknown subject"
         );
     }
 }
