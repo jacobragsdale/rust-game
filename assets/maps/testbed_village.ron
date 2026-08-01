@@ -1,0 +1,65 @@
+// Dialogue testbed — the map tapes/interact_prompt.tape and
+// tapes/dialogue_branch.tape run against.
+//
+// A long empty room with a step down into a two-tile bay at the far end, and
+// Runa the Herbalist in the bay. Deliberately empty otherwise: the tapes here
+// are about a conversation, and every hazard, knight or moving platform in the
+// room would be one more thing the run's timing depended on.
+//
+// A new file rather than an addition to testbed_arena.ron, which is frozen —
+// its tapes encode its exact pixels. Treat this one as a fixture too: add to
+// it, but do not move what is already here.
+//
+// **Why the bay exists.** A villager has `Patrol` and no `Hostile`, so it
+// paces, and a patroller only ever turns at a wall or at the edge of what it is
+// standing on — which means its route is as wide as the room it is in. Runa
+// crossing four hundred pixels while the player walks over would make every
+// assertion in both tapes depend on when, exactly, she turned round. The step
+// pens her into a thirty-pixel beat she cannot stroll out of, the player walks
+// off the ledge into the bay and is stopped by the far wall, and the two are
+// then within reach of each other for as long as either tape cares to take.
+// Neither tape times anything: run right until the wall stops you, and she is
+// there.
+//
+// The villager has no grid character, and that is the same call `Platform` and
+// `Swing` are under. `K` exists because a knight is the same wherever you drop
+// one; a talking NPC is not — it carries a conversation, and which conversation
+// is the whole of what distinguishes one from another. So it is an
+// `Npc(kind:, cell:)` entry, and what it says comes from its stat block's
+// `interact:` group in assets/data/stats.ron.
+//
+// Legend: '#' solid  'P' spawn.
+//
+// 18x10 tiles at 32px = 576x320 world pixels.
+//
+//   spawn        col 2,  row 6    world (70, 190), feet on the ledge at y=224
+//   upper floor  row 7, cols 0-14 surface y=224, x 0..480
+//   bay          cols 15-16       floor surface y=256, x 480..544
+//   right wall   col 17           interior edge x=544
+//   villager     col 15, row 7    world (485, 226), box 485..507
+//
+// Runa strolls at 24 px/s. She turns back at the step when her leading edge
+// plus a 6px look-ahead reaches x=480, and at the far wall when it reaches
+// x=544, so she paces x 485..516 and never leaves the bay. The player runs the
+// 410px from the spawn, walks off the ledge at x=480, drops the one tile into
+// the bay and is stopped by the wall at x=524 — inside the 24px interact reach
+// of her whole beat. Getting out again is a jump, which is what the "walk away
+// and the prompt clears" half of interact_prompt.tape does.
+Level(
+    tileset: "castle",
+    grid: [
+        "##################",
+        "#................#",
+        "#................#",
+        "#................#",
+        "#................#",
+        "#................#",
+        "#.P..............#",
+        "###############..#",
+        "##################",
+        "##################",
+    ],
+    entities: [
+        Npc(kind: "villager", cell: (15, 7)),
+    ],
+)

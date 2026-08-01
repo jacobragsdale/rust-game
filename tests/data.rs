@@ -993,6 +993,92 @@ fn every_dialogue_graph_is_connected() {
     report(&problems);
 }
 
+/// The other direction from [`every_dialogue_graph_is_connected`], and the seam
+/// D-1 introduced: a kind's `interact:` group names a graph by id, and a typo
+/// there is an NPC you can walk up to, press E on, and have nothing happen —
+/// forever, with no error anywhere. Exactly the shape
+/// [`every_spell_a_kind_names_exists_in_the_table`] covers for spells.
+#[test]
+fn every_dialogue_graph_a_kind_names_exists() {
+    let Some(dir) = optional_content("data/dialogue") else {
+        skipping("dialogue id checks", "data/dialogue", "ticket D-2");
+        return;
+    };
+
+    let known = graph_ids(&dir);
+    let stats = stat_table();
+    let stats_path = assets_root().join("data/stats.ron");
+
+    let problems: Vec<String> = animated_kinds()
+        .into_iter()
+        .filter_map(|kind| {
+            let block = stats.get(kind).ok()?;
+            let def = block.interact.as_ref()?;
+            (!known.contains(&def.dialogue)).then(|| {
+                format!(
+                    "{}: `{kind}` offers dialogue `{}`, which no file in \
+                     assets/data/dialogue defines (defined: {})",
+                    rel(&stats_path),
+                    def.dialogue,
+                    known.iter().cloned().collect::<Vec<_>>().join(", "),
+                )
+            })
+        })
+        .collect();
+
+    report(&problems);
+}
+
+/// A graph nothing can open is either dead content or, far more likely, an NPC
+/// this file has not been told about — in which case nothing is checking that
+/// its ids resolve. Failing here is how that gets noticed, the same way
+/// [`every_attack_in_the_table_is_reachable_by_something`] does for swings.
+#[test]
+fn every_dialogue_graph_is_reachable_from_something() {
+    let Some(dir) = optional_content("data/dialogue") else {
+        skipping("dialogue reachability", "data/dialogue", "ticket D-2");
+        return;
+    };
+
+    let stats = stat_table();
+    let named: BTreeSet<String> = animated_kinds()
+        .into_iter()
+        .filter_map(|kind| Some(stats.get(kind).ok()?.interact.as_ref()?.dialogue.clone()))
+        .collect();
+
+    let problems: Vec<String> = graph_ids(&dir)
+        .into_iter()
+        .filter(|id| !named.contains(id))
+        .map(|id| {
+            format!(
+                "{}: dialogue graph `{id}` is defined but nothing opens it — give a \
+                 kind an `interact:` group naming it, or delete the graph",
+                rel(&dir),
+            )
+        })
+        .collect();
+
+    report(&problems);
+}
+
+/// Every graph id under `dir`, read the way the game reads them.
+fn graph_ids(dir: &Path) -> BTreeSet<String> {
+    #[derive(Deserialize)]
+    #[serde(rename = "Dialogue")]
+    struct GraphShape {
+        id: String,
+    }
+
+    ron_files(dir)
+        .into_iter()
+        .map(|path| {
+            load_ron::<GraphShape>(&path)
+                .unwrap_or_else(|e| panic!("{e:#}"))
+                .id
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Reading references out of files no Rust type exists for yet
 // ---------------------------------------------------------------------------

@@ -26,18 +26,19 @@ use hecs::World;
 use serde::{Deserialize, Serialize};
 
 use crate::assets::{
-    Assets, AttackTable, Clip, ClipSet, ItemTable, SpellEffect, SpellTable, StatTable,
+    Assets, AttackTable, Clip, ClipSet, DialogueTable, ItemTable, SpellEffect, SpellTable,
+    StatTable,
 };
 use crate::ecs::components::{
-    AnimationState, Attacking, Avatar, Body, Casting, Equipment, Health, Inventory, Kind, Mana,
-    Patrol, Position, Size, Sprite, Velocity,
+    AnimationState, Attacking, Avatar, Body, Casting, Equipment, Health, InteractTarget, Inventory,
+    Kind, Mana, Patrol, Position, Size, Sprite, Velocity,
 };
 use crate::ecs::spawn;
 use crate::level::LevelData;
 use crate::physics::{Aabb, Geometry};
 use crate::sim::rng::Rng;
 use crate::systems::input::{Action, ActionSet, PlayerInput};
-use crate::systems::{animation, avatar, body, combat, inventory, mover, npc, spell};
+use crate::systems::{animation, avatar, body, combat, dialogue, inventory, mover, npc, spell};
 
 pub use event::GameEvent;
 pub use probe::{ItemProbe, NpcProbe, Probe};
@@ -114,6 +115,9 @@ pub struct Sim {
     pub stats: Arc<StatTable>,
     /// Every item in the game, shared by every bag, loot table and pickup.
     pub items: Arc<ItemTable>,
+    /// Every conversation in the game, by graph id. An `Interactable` names
+    /// one; nothing else reaches in here.
+    pub dialogues: Arc<DialogueTable>,
     /// The simulation's only source of randomness, seeded per run.
     ///
     /// Anything random — a loot roll, a crit, a spell's spread — draws from
@@ -132,6 +136,33 @@ pub struct Sim {
     /// selection is. On `Sim` rather than in a scene because using a potion is
     /// simulation — see [`Mode`].
     screen: inventory::Screen,
+    /// The conversation in progress, if any: which graph, which node, which of
+    /// its replies are on offer and which is highlighted. Here rather than in
+    /// [`crate::scenes::dialogue`] for the reason the screen above is — a
+    /// choice takes an item out of the bag and sets a quest flag — and the
+    /// argument is made in full in [`crate::systems::dialogue`].
+    ///
+    /// An `Option` rather than an always-present struct because "not talking to
+    /// anyone" has no sensible default node, and because closing one
+    /// conversation must not leave a selection behind for the next.
+    conversation: Option<dialogue::Conversation>,
+    /// What pressing `Interact` would act on, recomputed once per tick in the
+    /// resolve phase. Cached rather than worked out at the moment of the press
+    /// so that the prompt drawn on screen and the thing the key does are one
+    /// answer to one question.
+    prompt: Option<dialogue::Prompt>,
+    /// Quest flags: named integers, defaulting to 0.
+    ///
+    /// Integers rather than booleans because a quest *stage* is the common
+    /// case, and a boolean forces `quest.x.started` plus `quest.x.done` plus
+    /// their interaction. Written by dialogue's `SetFlag` and read by its
+    /// `FlagEq` / `FlagAtLeast`, which is the whole of what M5 needs.
+    ///
+    /// Deliberately **not** in the trace or the probe yet: ticket Q-1 owns
+    /// surfacing these as globals, and adding a key here now would churn every
+    /// baseline for a column M5 has nothing to assert with. What M5 needs is
+    /// that `SetFlag` is not a no-op, and that is what this is.
+    flags: HashMap<String, i64>,
     /// What was held last tick.
     ///
     /// Directions are level-triggered, because movement needs them held down;
@@ -177,11 +208,13 @@ impl Sim {
 
         let attacks = assets.attacks()?;
         let stats = assets.stats()?;
-        // Loaded through the cache here so a broken `spells.ron` or item file
-        // fails map loading with a message, rather than panicking inside
-        // `Sim::new`.
+        // Loaded through the cache here so a broken `spells.ron`, item file or
+        // dialogue graph fails map loading with a message, rather than
+        // panicking inside `Sim::new`. A dangling `next` is reported by
+        // `Assets::dialogue`, naming the graph and the node.
         assets.spells()?;
         assets.items()?;
+        assets.dialogue()?;
         Ok(Self::new(
             level,
             &clip_sets,
@@ -294,10 +327,14 @@ impl Sim {
             spells: SpellTable::shipped(),
             stats,
             items: ItemTable::shipped(),
+            dialogues: DialogueTable::shipped(),
             rng: Rng::new(seed),
             tick: 0,
             mode: Mode::Playing,
             screen: inventory::Screen::default(),
+            conversation: None,
+            prompt: None,
+            flags: HashMap::new(),
             prev_held: ActionSet::EMPTY,
             hitstop: 0,
             events: Vec::new(),
@@ -306,6 +343,10 @@ impl Sim {
         // rebuild inside `step` — otherwise the first tick's controllers probe
         // a world with holes in it.
         body::rebuild_geometry(&mut sim.geometry, &sim.world);
+        // ...and the same for the prompt: standing next to someone at the
+        // spawn point should offer the conversation on tick 0 rather than one
+        // tick later, which is what a map with an NPC by the door looks like.
+        sim.prompt = dialogue::nearest_interactable(&sim.world);
         sim
     }
 
@@ -329,6 +370,24 @@ impl Sim {
     /// and for nothing to decide with.
     pub fn screen(&self) -> &inventory::Screen {
         &self.screen
+    }
+
+    /// The conversation in progress, for [`crate::scenes::dialogue`] to draw
+    /// and for nothing to decide with.
+    pub fn conversation(&self) -> Option<&dialogue::Conversation> {
+        self.conversation.as_ref()
+    }
+
+    /// What pressing `Interact` would act on right now, for [`crate::hud`] to
+    /// draw over whoever is offering it.
+    pub fn prompt(&self) -> Option<&dialogue::Prompt> {
+        self.prompt.as_ref()
+    }
+
+    /// Read a quest flag. An unset one is 0 rather than an error: a quest has
+    /// to be able to ask about a stage it has not reached.
+    pub fn flag(&self, name: &str) -> i64 {
+        dialogue::flag(&self.flags, name)
     }
 
     /// Advance one fixed tick, dispatching on the mode.
@@ -366,11 +425,24 @@ impl Sim {
                     self.set_mode(Mode::Playing);
                 }
             }
-            // Nothing enters this yet (D-2 does). `cancel` is honoured anyway,
-            // so a mode set by hand in a test is never a dead end.
             Mode::Dialogue => {
-                if input.pressed(Action::Cancel) {
-                    self.set_mode(Mode::Playing);
+                let close = match self.conversation.as_mut() {
+                    Some(talk) => dialogue::step_conversation(
+                        &mut self.world,
+                        &self.items,
+                        &mut self.flags,
+                        talk,
+                        input,
+                        newly_held,
+                        &mut self.events,
+                    ),
+                    // The mode set by hand with no conversation behind it, as
+                    // a test may do. `cancel` is honoured so it is never a
+                    // dead end.
+                    None => input.pressed(Action::Cancel),
+                };
+                if close {
+                    self.end_dialogue();
                 }
             }
         }
@@ -416,6 +488,40 @@ impl Sim {
         self.events.push(GameEvent::ModeChanged { from, to });
     }
 
+    /// Open the conversation `graph_id` names, if there is one.
+    ///
+    /// Silent about an id the table does not define: load-time validation and
+    /// `tests/data.rs` are where a typo in content is caught, and the
+    /// simulation's job is to keep running. The `Interacted` event has already
+    /// been emitted by then, so a trace still shows the key was pressed.
+    fn begin_dialogue(&mut self, graph_id: &str) {
+        let Some(graph) = self.dialogues.get(graph_id).cloned() else {
+            return;
+        };
+        let Some(talk) = dialogue::open(&self.world, &self.flags, graph) else {
+            return;
+        };
+        self.conversation = Some(talk);
+        self.events.push(GameEvent::DialogueOpened {
+            graph: graph_id.to_string(),
+        });
+        self.set_mode(Mode::Dialogue);
+    }
+
+    /// End whatever conversation is running and hand the world back.
+    ///
+    /// `DialogueClosed` before `ModeChanged`, because the conversation ending
+    /// is the cause and the world restarting is the consequence — a trace reads
+    /// in that order.
+    fn end_dialogue(&mut self) {
+        if let Some(talk) = self.conversation.take() {
+            self.events.push(GameEvent::DialogueClosed {
+                graph: talk.graph_id().to_string(),
+            });
+        }
+        self.set_mode(Mode::Playing);
+    }
+
     /// One tick of the world.
     ///
     /// Decide, move, react — in that order, and with movement as one pass over
@@ -456,6 +562,23 @@ impl Sim {
         if input.pressed(Action::Inventory) {
             self.set_mode(Mode::Inventory);
             return;
+        }
+
+        // Talking is decided in the same place and for the same reason, off
+        // `prompt` — which was worked out in the resolve phase of the previous
+        // tick, from where the bodies actually ended it. Pressing the key with
+        // nothing in reach does nothing at all and emits nothing, so a trace
+        // never has to be read to find out whether a press meant anything.
+        if input.pressed(Action::Interact) {
+            if let Some(prompt) = self.prompt.clone() {
+                self.events.push(GameEvent::Interacted {
+                    target: prompt.target.label().to_string(),
+                });
+                match &prompt.target {
+                    InteractTarget::Dialogue(graph) => self.begin_dialogue(graph),
+                }
+                return;
+            }
         }
 
         // Impact freeze: hold everything for a few ticks after a hit lands.
@@ -523,6 +646,10 @@ impl Sim {
         // walking over something is contact, and contact is decided once
         // everything has stopped moving.
         inventory::collect_pickups(&mut self.world, &mut self.events);
+        // Standing next to something is the same kind of question as walking
+        // over it, so it is answered in the same place: after everything has
+        // moved, from the boxes as they finally are.
+        self.update_prompt();
         combat::settle_dead(&mut self.world);
         // On the tick the corpse died, so a kill and its drops are one frame
         // of the trace rather than two.
@@ -538,6 +665,26 @@ impl Sim {
         animation::select_avatar_clip(&mut self.world, &self.attacks, &self.spells);
         animation::select_patrol_clip(&mut self.world);
         animation::advance(&mut self.world, TICK);
+    }
+
+    /// Work out what is in reach, announcing it when the answer changes.
+    ///
+    /// On the *change* rather than every tick, for the reason
+    /// [`GameEvent::InventoryFull`] fires once per approach: standing beside a
+    /// villager for ten seconds is six hundred ticks, and six hundred identical
+    /// events is not a trace. Walking from one NPC to another announces the
+    /// second, because the entity offered changed.
+    fn update_prompt(&mut self) {
+        let found = dialogue::nearest_interactable(&self.world);
+        let changed = found.as_ref().map(|p| p.entity) != self.prompt.as_ref().map(|p| p.entity);
+        if changed {
+            if let Some(prompt) = &found {
+                self.events.push(GameEvent::InteractPrompted {
+                    target: prompt.target.label().to_string(),
+                });
+            }
+        }
+        self.prompt = found;
     }
 
     /// What happened during the most recent [`Sim::step`].
@@ -696,6 +843,8 @@ impl Sim {
             inventory::pickup_count(&self.world),
             bag.map_or(0, |bag| bag.used_slots()),
             &self.screen,
+            self.prompt.as_ref(),
+            self.conversation.as_ref(),
         )
     }
 

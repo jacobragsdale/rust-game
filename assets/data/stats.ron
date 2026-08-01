@@ -122,4 +122,58 @@ Stats({
             floor_probe: 4.0,
         ),
     ),
+    // The friendly NPC. Everything hostile about the knight lives in its
+    // `Hostile` component, and `spawn` simply does not give this one — which is
+    // exactly the case the `Hostile`/`Patrol` split was designed for: a
+    // blacksmith who paces but will not stab you.
+    //
+    // Same body as the knight, because it is drawn from the knight's sheets.
+    "villager": StatBlock(
+        width: 22.0,
+        height: 30.0,
+        // A stroll rather than a march. Slower than the knight's 55 on
+        // purpose: a civilian who moves like a soldier reads as a threat, and
+        // a slow route is also one a tape can walk up to without chasing.
+        run_speed: 24.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 4,
+        iframe_ticks: 30,
+        // Never thrown. A villager has no `Hostile`, so nothing ever starts a
+        // swing on it — but everything alive names something it *would* swing,
+        // and naming the knight's keeps `tests/data.rs`'s reachability check
+        // honest without inventing an attack nobody performs.
+        attack: "knight_slash",
+        damage_bonus: 0,
+        // No bag, which is also what stops anything that looks for "whoever
+        // carries an inventory" from mistaking a villager for the player.
+        inventory_slots: 0,
+        // A villager drops nothing. Killing one is possible — a knight can do
+        // it, the player cannot; see `crate::systems::dialogue` for the
+        // decision — and it should never be worth doing.
+        loot: [],
+        max_mana: 0,
+        mana_regen: 0,
+        // What standing next to one offers, and which conversation it opens.
+        // Content, so the second talking NPC is a stat block and a dialogue
+        // file rather than a code change. `prompt` is one word because it is
+        // also what a tape reads: `assert prompt == talk`.
+        interact: Interact(prompt: "talk", dialogue: "elder_intro"),
+        // Required by `npc::think`, which every walker goes through. Only
+        // `lookahead` and `floor_probe` are read for a villager — they are what
+        // turn it round at a wall or a ledge — but the group is all-or-nothing,
+        // so the hunting numbers are written out at values that would be sane
+        // if one ever became hostile.
+        ai: AiStats(
+            sight: 0.0,
+            sight_height: 36.0,
+            lose: 0.0,
+            reach: 0.0,
+            cooldown: 0,
+            home_slack: 8.0,
+            chase_multiplier: 1.0,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
 })

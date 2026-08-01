@@ -18,8 +18,8 @@ use hecs::World;
 use crate::assets::{ClipSet, SpellDef, SpellEffect, StatBlock};
 use crate::ecs::components::{
     AnimationState, Attacking, Avatar, Body, Casting, DerivedStats, Equipment, Health, Hostile,
-    Inventory, Kind, Lifetime, Loot, Mana, Patrol, Pickup, Position, Projectile, Size, Sprite,
-    Stats, Team, Velocity,
+    InteractTarget, Interactable, Inventory, Kind, Lifetime, Loot, Mana, Patrol, Pickup, Position,
+    Projectile, Size, Sprite, Stats, Team, Velocity,
 };
 use crate::level::EntitySpawn;
 
@@ -35,7 +35,7 @@ pub const PICKUP_SIZE: Vec2 = Vec2::new(12.0, 12.0);
 /// Every entity kind a map may place. `Sim` loads a clip set and a stat block
 /// per name, so a new kind needs `assets/data/animations/{kind}.ron` to exist
 /// and an entry in `assets/data/stats.ron`.
-pub const KINDS: &[&str] = &["knight"];
+pub const KINDS: &[&str] = &["knight", "villager"];
 
 /// Spawn the player at the level's spawn point.
 ///
@@ -110,6 +110,28 @@ fn give_bag(world: &mut World, entity: hecs::Entity, stats: &StatBlock) {
                 Inventory::new(stats.inventory_slots as usize),
                 Equipment::default(),
             ),
+        )
+        .expect("the entity was just spawned");
+}
+
+/// Give an entity something to say, if its kind has anything to say.
+///
+/// Conditional for the reason [`give_mana`] and [`give_bag`] are: a kind there
+/// is nothing to talk to should not carry a component that only means "no".
+/// Absence is also what makes [`crate::systems::dialogue::nearest_interactable`]
+/// cheap — it queries for `Interactable` and meets only the handful of entities
+/// that have one.
+fn give_interactable(world: &mut World, entity: hecs::Entity, stats: &StatBlock) {
+    let Some(def) = &stats.interact else {
+        return;
+    };
+    world
+        .insert_one(
+            entity,
+            Interactable {
+                prompt: def.prompt.clone(),
+                target: InteractTarget::Dialogue(def.dialogue.clone()),
+            },
         )
         .expect("the entity was just spawned");
 }
@@ -258,6 +280,42 @@ pub fn entity(
             // carried what it drops, is a stat block away.
             give_bag(world, entity, &stats);
             give_loot(world, entity, &stats);
+            Ok(entity)
+        }
+        // The friendly NPC, and the case the `Hostile`/`Patrol` split was
+        // designed for: **`Patrol` without `Hostile` already works**, and is
+        // exactly the blacksmith who paces back and forth without also being
+        // willing to stab you. There is no "friendly" flag anywhere and no
+        // branch in `npc::think` for this — a walker with no fight brain simply
+        // walks, because that is all `Patrol` ever did.
+        //
+        // `Team::Player` is the mortality decision, and it is deliberate:
+        // `combat::resolve` refuses friendly fire, so **the player cannot kill
+        // the quest giver** and no check anywhere has to remember to say so. A
+        // knight still can. The reasoning in full — including why omitting
+        // `Health` instead would have broken patrolling, animation and every
+        // trace — is in `crate::systems::dialogue`.
+        "villager" => {
+            let pos = stand_in_cell(placement.pos, tile_size, stats.size());
+            let offset = art_offset(&clips);
+            let entity = world.spawn((
+                Kind(placement.kind.clone()),
+                Patrol::new(1.0, stats.run_speed),
+                Team::Player,
+                Health::new(stats.max_health, stats.iframe_ticks),
+                // Never started on a villager, and present because
+                // `animation::select_patrol_clip` reads it for every walker.
+                Attacking::default(),
+                Position(pos),
+                Velocity(Vec2::ZERO),
+                Size(stats.size()),
+                Body::new(pos, stats.gravity, stats.max_fall),
+                Sprite { clips, offset },
+                AnimationState::new("idle"),
+                Stats(stats.clone()),
+                DerivedStats(stats.clone()),
+            ));
+            give_interactable(world, entity, &stats);
             Ok(entity)
         }
         other => anyhow::bail!(

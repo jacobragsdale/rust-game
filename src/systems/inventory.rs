@@ -304,6 +304,71 @@ fn drop_site(
     Some((drops, origin, stats.gravity, stats.max_fall))
 }
 
+// ---------------------------------------------------------------------------
+// Handing things over, from anywhere that is not the floor
+// ---------------------------------------------------------------------------
+
+/// Put `count` of `item` in `holder`'s bag, announcing it exactly as walking
+/// over one would. Returns whether it fit.
+///
+/// **This is the only way anything other than a pickup gives an item**, and
+/// dialogue's `GiveItem` goes through it. The alternative — a `Vec::push` at
+/// the call site — would be a second way for an item to enter the bag, with a
+/// second answer to "what if it is full" and no `PickedUp` in the trace, so a
+/// quest reward would be invisible to every tape ever written. There is one
+/// path, so there is one answer.
+pub fn give_item(
+    world: &mut World,
+    holder: hecs::Entity,
+    item: &str,
+    count: u32,
+    events: &mut Vec<GameEvent>,
+) -> bool {
+    let added = world
+        .get::<&mut Inventory>(holder)
+        .map(|mut bag| bag.add(item, count))
+        .unwrap_or(false);
+
+    if added {
+        events.push(GameEvent::PickedUp {
+            item: item.to_string(),
+            count,
+        });
+    } else {
+        // The same refusal a full bag gives a pickup on the floor. Without it,
+        // "the reward is broken" and "your bag is full" are the same absence.
+        events.push(GameEvent::InventoryFull {
+            item: item.to_string(),
+        });
+    }
+    added
+}
+
+/// Take `count` of `item` out of `holder`'s bag. Returns whether they were all
+/// there to take; changes nothing if they were not.
+///
+/// The counterpart of [`give_item`], and dialogue's `TakeItem`. Silent: handing
+/// something over is already reported by the `ChoiceTaken` that caused it, and
+/// an item leaving the bag is visible in `item.<id>.count` on the very next
+/// frame of the trace.
+pub fn take_item(world: &mut World, holder: hecs::Entity, item: &str, count: u32) -> bool {
+    world
+        .get::<&mut Inventory>(holder)
+        .map(|mut bag| bag.remove(item, count))
+        .unwrap_or(false)
+}
+
+/// Restore health, clamped to the derived maximum.
+///
+/// Shared by the potion and by dialogue's `Heal`, so that "a drink can never
+/// put you above what your equipment says you can hold" is one rule in one
+/// place rather than two clamps that eventually disagree.
+pub fn heal(world: &mut World, entity: hecs::Entity, amount: i32) {
+    if let Ok(mut health) = world.get::<&mut Health>(entity) {
+        health.current = (health.current + amount).min(health.max);
+    }
+}
+
 /// How many items are lying in the world, for the trace.
 ///
 /// A count rather than a probe each, for the reason `projectiles` is one: what
@@ -488,13 +553,10 @@ fn use_item(world: &mut World, holder: hecs::Entity, def: &ItemDef, events: &mut
 
     for effect in effects {
         match effect {
-            ItemEffect::Heal(amount) => {
-                if let Ok(mut health) = world.get::<&mut Health>(holder) {
-                    // Clamped to the derived maximum, so a potion can never
-                    // put you above what your equipment says you can hold.
-                    health.current = (health.current + amount).min(health.max);
-                }
-            }
+            // Clamped to the derived maximum, so a potion can never put you
+            // above what your equipment says you can hold — through the same
+            // `heal` a dialogue effect uses, so the two cannot drift apart.
+            ItemEffect::Heal(amount) => heal(world, holder, *amount),
             ItemEffect::RestoreMana(amount) => {
                 if let Ok(mut mana) = world.get::<&mut Mana>(holder) {
                     mana.current = (mana.current + amount).min(mana.max);

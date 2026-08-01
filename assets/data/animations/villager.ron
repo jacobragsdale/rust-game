@@ -1,0 +1,74 @@
+// Villager — the friendly NPC.
+//
+// **Art choice, written down so it is a decision rather than an oversight:
+// this is the knight's sprite pack, unmodified.** There is no villager art in
+// the repo and drawing some is not this ticket. Recolouring the PNGs offline
+// would have produced seven more files that the moment real art arrives become
+// seven files to delete; instead the villager reuses the knight's sheets and
+// `crate::scenes::adventure` draws it through a colour tint, so the two are
+// unmistakable on screen and there is exactly one thing to undo when the art
+// exists — this file's `sheet:` lines, and that tint.
+//
+// The clip list is `animation::PATROL_CLIPS`: idle, run, jump, fall, death and
+// attack. `attack` and `death` are never selected on a villager today — nothing
+// starts a swing on one, and the player cannot kill one — but the selector can
+// ask for either, and a clip set missing one that a selector can reach fails
+// loudly in `Sim::check_invariants` rather than freezing the sprite quietly.
+//
+// Sheet geometry is the knight's, and documented there: single rows of 64px
+// cells, one file per animation, each with its own frame width.
+ClipSet(
+    // The knight pack draws feet at row 44 of its 64px cell. Same art, same
+    // nudge.
+    offset: (0.0, 20.0),
+    clips: {
+        "idle": Clip(
+            sheet: "knight/knightIdle",
+            frame_size: (64.0, 64.0),
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0),
+                     (8, 0), (9, 0), (10, 0), (11, 0), (12, 0), (13, 0), (14, 0)],
+            fps: 10.0,
+            looping: true,
+        ),
+        // A stroll rather than a march: the same eight frames the knight runs
+        // on, played slower, which is the cheapest possible way to make a
+        // civilian move like one.
+        "run": Clip(
+            sheet: "knight/knightRun",
+            frame_size: (96.0, 64.0),
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0)],
+            fps: 7.0,
+            looping: true,
+        ),
+        "jump": Clip(
+            sheet: "knight/knightJumpAndFall",
+            frame_size: (144.0, 64.0),
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0)],
+            fps: 12.0,
+            looping: false,
+        ),
+        "fall": Clip(
+            sheet: "knight/knightJumpAndFall",
+            frame_size: (144.0, 64.0),
+            frames: [(7, 0), (8, 0), (9, 0)],
+            fps: 8.0,
+            looping: true,
+        ),
+        "attack": Clip(
+            sheet: "knight/knightAttack",
+            frame_size: (144.0, 64.0),
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0),
+                     (6, 0), (7, 0), (8, 0), (9, 0), (10, 0), (11, 0)],
+            fps: 20.0,
+            looping: false,
+        ),
+        "death": Clip(
+            sheet: "knight/knightDeath",
+            frame_size: (96.0, 64.0),
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0),
+                     (8, 0), (9, 0), (10, 0), (11, 0), (12, 0), (13, 0), (14, 0)],
+            fps: 12.0,
+            looping: false,
+        ),
+    },
+)

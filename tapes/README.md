@@ -91,6 +91,12 @@ has not lapsed, or if the pool is short — see `cast_failed` below.
 [Modes](#modes) — the screen is simulation, so every one of those keys is a
 real key going through the real action table, and a tape can walk the whole UI.
 
+`interact` (E) talks to whatever is in reach, and the same `confirm`, `cancel`,
+`up` and `down` drive the conversation. There is deliberately no `choose 2`
+directive: a tape selects a reply by pressing the keys a player presses, so what
+the tape exercises is the input path the game ships. See
+[Talking to people](#talking-to-people).
+
 **Edge-triggered actions fire once per press.** `jump 10` is one jump held for
 ten ticks — exactly what holding the key does — not ten jumps. Releasing and
 pressing again is what produces a second. `attack 1` is the usual way to write
@@ -111,10 +117,12 @@ Assertions read `assert <flag>`, `assert !<flag>`, or `assert <field> <op>
 
 - numeric: `x`, `y`, `vx`, `vy`, `tick`, `air_jumps`, `frame`, `hp`, `hp_max`,
   `iframes`, `hitstun`, `mana`, `mana_max`, `cast_cooldown`, `projectiles`,
-  `pickups`, `inventory_count`, `selection`
+  `pickups`, `inventory_count`, `selection`, `dialogue_choices`,
+  `dialogue_selection`
 - boolean: `grounded`, `facing_right`, `wall_sliding`, `double_jumping`,
   `crouching`, `dead`, `on_one_way_only`, `attacking`, `casting`, `plunging`
-- text: `clip`, `mode`, `pane` — compared with `==` or `!=` only
+- text: `clip`, `mode`, `pane`, `prompt`, `dialogue_node` — compared with `==`
+  or `!=` only
 
 `projectiles` and `pickups` are counts of every bolt in the air and every item
 on the floor anywhere in the world, not a probe each: a line per entity per
@@ -157,6 +165,47 @@ detour deleted.
 
 Pause (`P`) is deliberately *not* a mode. It stops the sim being stepped at
 all, and nothing about it is simulation.
+
+## Talking to people
+
+Dialogue is the other modal state, and it is simulation for a stronger reason
+than the inventory is: a reply takes an item out of the bag, puts one in, and
+sets a quest flag. So the graph, the current node, which replies are on offer
+and where the highlight sits all live in `Sim`, and a tape drives the whole
+conversation through the real action table:
+
+```
+right 160
+assert prompt == talk         # `none` when nothing is in reach
+interact 1                    # the world stops on this very tick
+assert mode == dialogue
+assert dialogue_node == greet
+assert dialogue_choices == 3  # what you can actually say, see below
+confirm 1                     # read the next line of the speech
+wait 1
+down 1                        # one press is one step, even if the key is held
+confirm 1                     # take the reply under the highlight
+assert item.minor_potion.count == 1
+cancel 1                      # back out from anywhere
+assert mode == playing
+```
+
+**A reply whose condition fails is hidden, not greyed out.** There is no row you
+can highlight and be refused, so `dialogue_choices` is a count of what the
+player can *do* and `dialogue_selection` indexes into that. The observable this
+buys is the one that matters: the count goes up the moment you are carrying the
+thing a branch is gated on, which is what `tapes/dialogue_branch.tape` asserts.
+`src/systems/dialogue.rs` has the full argument.
+
+`prompt` is the word the interactable offers — `talk` — or the literal `none`
+when nothing is in reach. A word rather than an empty string because an
+assertion is whitespace-separated tokens, so `assert prompt ==` with nothing
+after it would not parse and "there is nobody there" would be unassertable.
+
+`dialogue_choices` is the current node's filtered count from the moment the node
+is entered, including while there is still speech to page through — the
+filtering is a fact about the world, not about how far into a speech you have
+read. Only whether the overlay *draws* the replies waits for the last line.
 
 ## Asserting on items
 
@@ -239,11 +288,12 @@ expect wall_jumped == 1  # fired exactly once
 Events: `jumped`, `double_jumped`, `wall_jumped`, `landed`, `dropped_through`,
 `slid`, `died`, `respawned`, `attacked`, `damaged`, `spell_cast`,
 `cast_failed`, `mode_changed`, `picked_up`, `inventory_full`, `item_used`,
-`equipped`, `unequipped`.
+`equipped`, `unequipped`, `interact_prompted`, `interacted`, `dialogue_opened`,
+`choice_taken`, `dialogue_closed`.
 
 Three things to know:
 
-**Narrow with `<name>.<event>`.** Eleven events carry a discriminating name.
+**Narrow with `<name>.<event>`.** Sixteen events carry a discriminating name.
 `damaged` and `died` carry the victim, so `expect knight.damaged == 3` counts
 hits on the knight and `expect player.damaged == 4` counts hits on you.
 `attacked` carries the attack id, so `expect player_slash3.attacked >= 3` says
@@ -252,7 +302,11 @@ tape never plunged. `spell_cast` and `cast_failed` carry the spell id, so
 `expect shock.spell_cast == 1`. The six item events carry the item, so
 `expect knight_helm.equipped == 1` and `expect minor_potion.item_used == 2`;
 `mode_changed` carries the mode *entered*, so `expect inventory.mode_changed`
-counts openings rather than openings and closings. A bare `expect damaged`
+counts openings rather than openings and closings. The four dialogue events
+carry the graph — `expect elder_intro.dialogue_opened == 2` — except
+`choice_taken`, which carries the *node*, because "how many replies were taken
+at this node" is the question worth asking of a conversation and the graph is
+already countable through `dialogue_opened`. A bare `expect damaged`
 counts every hit on anything, which is rarely what you mean now that both sides
 bleed — and a bare `expect no died` counts the knight's death as well as yours,
 so what you almost always want is `expect no player.died`.
@@ -303,6 +357,7 @@ do not move what is already there.
 | `testbed_fire.ron` | fire: two alternating fires on a flat corridor, one to cross while it is out and one to stand in until it lights |
 | `testbed_mover.ron` | moving platforms: two ledges with a spiked pit between them and one platform ferrying across |
 | `testbed_swing.ron` | swinging hazards: one room with a spiked ball on a chain across the middle of it |
+| `testbed_village.ron` | interaction and dialogue: a long empty room with a step down into a bay, and Runa the Herbalist in it |
 
 Items have no fixture map of their own, and deliberately so: the only source of
 items in the game is a corpse, so `loot.tape` and `inventory_use.tape` both run
@@ -330,6 +385,16 @@ window rather than a safe route: `swing_dodge.tape` starts its run on the tick
 that leaves the widest clearance (66px), and starting twenty-two ticks later or
 sixty-five earlier is a death. That number came out of a sweep, not out of
 guessing — see "Balance by probing" in the dev skill.
+
+`testbed_village.ron`'s bay is the one piece of its geometry that is load-
+bearing. A villager has `Patrol` and no `Hostile`, so it paces, and a patroller
+only turns at a wall or at the edge of what it is standing on — which makes its
+route as wide as the room it is in. Runa crossing four hundred pixels while the
+player walks over would make every assertion in both dialogue tapes depend on
+when exactly she turned round. The step down at the far end pens her into a
+thirty-pixel beat, the player runs off the ledge into the bay and is stopped by
+the far wall, and neither tape has to time anything: run right until the wall
+stops you, and she is there.
 
 `castle_spawn.tape` is the exception: it runs on the real map but asserts only
 that the player spawns on solid ground and is not standing in a hazard, so

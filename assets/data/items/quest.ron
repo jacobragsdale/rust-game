@@ -1,0 +1,23 @@
+// Things handed over rather than found: quest rewards, and anything a
+// conversation gives you.
+//
+// A file of its own, for the reason items get a directory at all — ids are
+// global whatever file they live in, so a file is an organizing convenience and
+// never part of an item's identity. Keeping rewards apart from loot means the
+// question "what can this game actually give me?" has one place to look.
+[
+    ItemDef(
+        id: "elder_charm",
+        name: "Runa's Charm",
+        sprite: "items/charm",
+        kind: Equipment(
+            slot: Trinket,
+            // One point of mana: a single extra cast, which is the smallest
+            // reward that is still unmistakably a reward. It is a trinket
+            // rather than armour because the Trinket slot was empty and a
+            // reward that competes with the knight's helm for the head slot is
+            // a reward you have to think about wearing.
+            modifiers: [MaxMana(1)],
+        ),
+    ),
+]

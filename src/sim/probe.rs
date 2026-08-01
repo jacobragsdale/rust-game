@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ecs::components::{AnimationState, Attacking, Avatar, Body, Casting, Health, Mana};
 use crate::sim::Mode;
+use crate::systems::dialogue::{self, Conversation, Prompt};
 use crate::systems::inventory::Screen;
 
 /// `coyote_ticks` uses `u32::MAX`-ish sentinels to mean "no coyote jump
@@ -37,10 +38,12 @@ const FIELD_NAMES: &[&str] = &[
     "pickups",
     "inventory_count",
     "selection",
+    "dialogue_choices",
+    "dialogue_selection",
 ];
 
 /// Text fields addressable by tape assertions. Only `==` and `!=` apply.
-const TEXT_NAMES: &[&str] = &["clip", "mode", "pane"];
+const TEXT_NAMES: &[&str] = &["clip", "mode", "pane", "prompt", "dialogue_node"];
 
 /// Boolean fields addressable by tape assertions.
 const FLAG_NAMES: &[&str] = &[
@@ -106,6 +109,27 @@ pub struct Probe {
     /// them while it is shut.
     pub pane: String,
     pub selection: usize,
+    /// What pressing `Interact` would act on right now, by the word the
+    /// interactable offers — `talk` — or [`dialogue::NO_PROMPT`] when nothing
+    /// is in reach. A word rather than an empty string so a tape can assert
+    /// both states; see that constant for why.
+    pub prompt: String,
+    /// Where a conversation is: the current node's id, or
+    /// [`dialogue::NO_PROMPT`] when there is no conversation.
+    pub dialogue_node: String,
+    /// How many replies the current node offers. This is the *filtered* count —
+    /// choices whose conditions fail are hidden rather than greyed out, so it
+    /// is a count of what the player can actually do, and it going up is how a
+    /// tape sees a gated branch unlock.
+    ///
+    /// It is the node's count from the moment the node is entered, including
+    /// while there is still speech to page through: the filtering is a fact
+    /// about the world, not about how far into a speech you have read. Only
+    /// whether the overlay *draws* them waits for the last line, which is
+    /// `Conversation::choosing`.
+    pub dialogue_choices: usize,
+    /// Which of those is highlighted.
+    pub dialogue_selection: usize,
     pub clip: String,
     pub frame: usize,
 }
@@ -271,6 +295,8 @@ impl Probe {
         pickups: usize,
         inventory_count: usize,
         screen: &Screen,
+        prompt: Option<&Prompt>,
+        talk: Option<&Conversation>,
     ) -> Self {
         Probe {
             tick,
@@ -305,6 +331,14 @@ impl Probe {
             mode: mode.name().to_string(),
             pane: screen.pane.name().to_string(),
             selection: screen.selection,
+            prompt: prompt
+                .map_or(dialogue::NO_PROMPT, |p| p.prompt.as_str())
+                .to_string(),
+            dialogue_node: talk
+                .map_or(dialogue::NO_PROMPT, |t| t.node_id())
+                .to_string(),
+            dialogue_choices: talk.map_or(0, |t| t.choice_count()),
+            dialogue_selection: talk.map_or(0, |t| t.selection()),
             clip: anim.clip.clone(),
             frame: anim.frame,
         }
@@ -331,6 +365,8 @@ impl Probe {
             "pickups" => self.pickups as f32,
             "inventory_count" => self.inventory_count as f32,
             "selection" => self.selection as f32,
+            "dialogue_choices" => self.dialogue_choices as f32,
+            "dialogue_selection" => self.dialogue_selection as f32,
             _ => return None,
         })
     }
@@ -358,6 +394,8 @@ impl Probe {
             "clip" => Some(&self.clip),
             "mode" => Some(&self.mode),
             "pane" => Some(&self.pane),
+            "prompt" => Some(&self.prompt),
+            "dialogue_node" => Some(&self.dialogue_node),
             _ => None,
         }
     }
@@ -427,6 +465,8 @@ mod tests {
             0,
             0,
             &Screen::default(),
+            None,
+            None,
         )
     }
 

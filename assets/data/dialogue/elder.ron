@@ -1,0 +1,98 @@
+// Runa the Herbalist — the first conversation in the game, and the shape every
+// later one is a bigger version of.
+//
+// Code holds the mechanics of walking a graph; this holds what is said and what
+// saying it does. See `crate::systems::dialogue` for the rules, and
+// `crate::assets::DialogueGraph` for what each field means.
+//
+// Three things about this file are load-bearing rather than decorative:
+//
+//   * `start` and every `next` are checked when the file is read, not when a
+//     player reaches them. A typo here stops the map loading with a message
+//     naming this graph and the node, rather than producing a conversation that
+//     quietly ends early.
+//
+//   * A choice with a `condition` that does not hold is **hidden**, not greyed
+//     out. "I brought your draught back." does not exist until you are actually
+//     carrying one, which is the whole reason a fetch quest is a quest.
+//
+//   * `next: None` is how a reply ends the conversation. It is not the absence
+//     of a target; it is the target.
+//
+// The errand is deliberately a loop rather than a line — `who` leads back to
+// `greet`, and `greet` re-reads its conditions every time it is entered — so
+// that "come back when you have it" is the same node offering a different set
+// of replies, rather than a second copy of the greeting.
+//
+// Runa does not run out of draughts: the `gift` branch has no condition, so
+// asking twice works. That is generosity in the fiction and an observable in
+// the harness — the number of replies on offer goes from three to four the
+// moment the player is carrying one, and `dialogue_choices` is what a tape
+// watches to see a gated branch unlock.
+Dialogue(
+    id: "elder_intro",
+    start: "greet",
+    nodes: {
+        "greet": Node(
+            speaker: "Runa the Herbalist",
+            // More than one line, so the paging is exercised by shipped
+            // content rather than only by a test: `confirm` reads on, and the
+            // replies are offered once the last line has been.
+            lines: [
+                "You are the one who came down out of the castle.",
+                "Sit if you like. You have the look of someone who has been fighting.",
+            ],
+            choices: [
+                Choice(text: "Who are you?", next: "who"),
+                Choice(text: "Have you anything for the road?", next: "gift"),
+                Choice(
+                    text: "I brought your draught back.",
+                    next: "thanks",
+                    condition: HasItem("minor_potion"),
+                    effects: [
+                        TakeItem("minor_potion", 1),
+                        GiveItem("elder_charm", 1),
+                        SetFlag("quest.draught.stage", 2),
+                    ],
+                ),
+                Choice(text: "Not now.", next: None),
+            ],
+        ),
+        "who": Node(
+            speaker: "Runa the Herbalist",
+            lines: [
+                "Runa. I keep what is left of this village on its feet.",
+                "There were forty of us before the knights came down.",
+            ],
+            choices: [
+                Choice(text: "I am sorry.", next: "greet"),
+            ],
+        ),
+        "gift": Node(
+            speaker: "Runa the Herbalist",
+            lines: [
+                "Take this, then. Bring back what you do not drink — glass is dear here.",
+            ],
+            choices: [
+                Choice(
+                    text: "I will.",
+                    next: None,
+                    effects: [
+                        GiveItem("minor_potion", 1),
+                        SetFlag("quest.draught.stage", 1),
+                    ],
+                ),
+            ],
+        ),
+        "thanks": Node(
+            speaker: "Runa the Herbalist",
+            lines: [
+                "Kept whole. Not many would have bothered.",
+                "Here — my mother's charm. It keeps the cold out.",
+            ],
+            choices: [
+                Choice(text: "Thank you.", next: None),
+            ],
+        ),
+    },
+)

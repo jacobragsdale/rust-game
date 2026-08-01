@@ -8,7 +8,8 @@ use hecs::World;
 
 use crate::assets::AiStats;
 use crate::ecs::components::{
-    Attacking, Body, DerivedStats, Health, Hostile, Patrol, Position, Size, Stance, Team, Velocity,
+    Attacking, Avatar, Body, DerivedStats, Health, Hostile, Patrol, Position, Size, Stance,
+    Velocity,
 };
 use crate::physics::{Aabb, SolidQuery, SolidRect};
 use crate::sim::event::GameEvent;
@@ -159,11 +160,16 @@ fn walk<Q: SolidQuery + ?Sized>(
 }
 
 /// The player's collider, if there is one to look for.
+///
+/// `Avatar` rather than `Team::Player`, and the distinction now matters: M5's
+/// villager is on the player's team so that friendly fire cannot touch it, so
+/// "the first player-team body" would have a knight chasing the herbalist. The
+/// avatar is the one thing a player actually drives.
 fn player_position(world: &World) -> Option<(Vec2, Vec2)> {
     world
-        .query::<(&Team, &Position, &Size, &Health)>()
+        .query::<(&Avatar, &Position, &Size, &Health)>()
         .iter()
-        .find(|(_, (team, _, _, health))| **team == Team::Player && !health.dead())
+        .find(|(_, (_, _, _, health))| !health.dead())
         .map(|(_, (_, pos, size, _))| (pos.0, size.0))
 }
 
@@ -257,6 +263,7 @@ mod tests {
 
     use super::*;
     use crate::assets::{StatBlock, StatTable};
+    use crate::ecs::components::Team;
     use crate::sim::{Sim, TICK};
     use crate::systems::body;
     use crate::systems::input::PlayerInput;
@@ -302,16 +309,27 @@ mod tests {
         entity
     }
 
-    /// A stand-in player for the AI to notice.
+    /// A stand-in player for the AI to notice. Carries an `Avatar`, because
+    /// that is what `player_position` looks for — being on the player's team is
+    /// no longer enough, and deliberately so: villagers are too.
     fn spawn_target(world: &mut World, pos: Vec2) -> hecs::Entity {
         let player = stats("player");
         world.spawn((
+            Avatar::new(player.avatar()),
             Team::Player,
             Health::new(player.max_health, player.iframe_ticks),
             Position(pos),
             Velocity(Vec2::ZERO),
             Size(SIZE),
         ))
+    }
+
+    /// A friendly walker on the player's team, to prove a knight does not hunt
+    /// one. This is what a villager is.
+    fn spawn_friendly(world: &mut World, pos: Vec2, dir: f32) -> hecs::Entity {
+        let entity = spawn(world, pos, dir);
+        world.insert_one(entity, Team::Player).unwrap();
+        entity
     }
 
     fn tick(world: &mut World, geo: &[SolidRect]) {
@@ -457,6 +475,27 @@ mod tests {
         // one tick, before the patrol can turn it around
         tick(&mut world, &geo);
         assert_eq!(stance_of(&world, knight), Stance::Patrol);
+    }
+
+    /// A villager is on the player's team so the player's sword cannot touch
+    /// it. That must not make it prey: a knight hunts the *avatar*, not the
+    /// team, or the first friendly NPC on a map turns every knight on the
+    /// nearest civilian.
+    #[test]
+    fn a_knight_ignores_a_friendly_walker_standing_in_front_of_it() {
+        let mut world = World::new();
+        let geo = flat_floor();
+        let knight = spawn_hostile(&mut world, Vec2::new(200.0, 400.0 - SIZE.y), 1.0);
+        spawn_friendly(&mut world, Vec2::new(240.0, 400.0 - SIZE.y), -1.0);
+
+        for _ in 0..60 {
+            tick(&mut world, &geo);
+            assert_eq!(
+                stance_of(&world, knight),
+                Stance::Patrol,
+                "the knight went hunting a neighbour"
+            );
+        }
     }
 
     #[test]

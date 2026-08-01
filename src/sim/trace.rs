@@ -312,6 +312,8 @@ mod tests {
             0,
             0,
             &crate::systems::inventory::Screen::default(),
+            None,
+            None,
         )
     }
 

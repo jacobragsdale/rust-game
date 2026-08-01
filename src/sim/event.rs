@@ -41,6 +41,11 @@ const EVENT_NAMES: &[&str] = &[
     "item_used",
     "equipped",
     "unequipped",
+    "interact_prompted",
+    "interacted",
+    "dialogue_opened",
+    "choice_taken",
+    "dialogue_closed",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +159,39 @@ pub enum GameEvent {
         item: String,
         slot: Slot,
     },
+    /// Something interactable came within reach and is now being offered.
+    /// Fires when the offer *changes*, not once per tick of standing there —
+    /// the same rule [`GameEvent::InventoryFull`] follows, and for the same
+    /// reason: sixty identical events a second is not a trace.
+    ///
+    /// `target` is what the press would do, which for now is a dialogue graph
+    /// id, so `expect elder_intro.interact_prompted == 1` reads.
+    InteractPrompted {
+        target: String,
+    },
+    /// The key was actually pressed with something in reach. Emitted whatever
+    /// the target turns out to be, so "I pressed E and nothing happened" is
+    /// distinguishable from "there was nothing to press E on" — which is the
+    /// same absence otherwise.
+    Interacted {
+        target: String,
+    },
+    /// A conversation started. The world freezes on this tick.
+    DialogueOpened {
+        graph: String,
+    },
+    /// A reply was taken. `index` is the choice's position in the *authored*
+    /// list rather than in the filtered one on screen, so it names the same
+    /// line of the same content file however much of it was on offer.
+    ChoiceTaken {
+        node: String,
+        index: usize,
+    },
+    /// A conversation ended, by reaching a choice with no `next` or by being
+    /// backed out of. Emitted before the `ModeChanged` that follows from it.
+    DialogueClosed {
+        graph: String,
+    },
 }
 
 /// Events carrying a discriminating name that `expect` can filter on:
@@ -170,6 +208,11 @@ const SUBJECT_EVENTS: &[&str] = &[
     "item_used",
     "equipped",
     "unequipped",
+    "interact_prompted",
+    "interacted",
+    "dialogue_opened",
+    "choice_taken",
+    "dialogue_closed",
 ];
 
 impl GameEvent {
@@ -188,6 +231,16 @@ impl GameEvent {
             | GameEvent::ItemUsed { item }
             | GameEvent::Equipped { item, .. }
             | GameEvent::Unequipped { item, .. } => Some(item),
+            GameEvent::InteractPrompted { target } | GameEvent::Interacted { target } => {
+                Some(target)
+            }
+            GameEvent::DialogueOpened { graph } | GameEvent::DialogueClosed { graph } => {
+                Some(graph)
+            }
+            // The node rather than the graph: `expect greet.choice_taken == 2`
+            // is the question worth asking of a conversation, and the graph is
+            // already countable through `dialogue_opened`.
+            GameEvent::ChoiceTaken { node, .. } => Some(node),
             _ => None,
         }
     }
@@ -222,6 +275,11 @@ impl GameEvent {
             GameEvent::ItemUsed { .. } => "item_used",
             GameEvent::Equipped { .. } => "equipped",
             GameEvent::Unequipped { .. } => "unequipped",
+            GameEvent::InteractPrompted { .. } => "interact_prompted",
+            GameEvent::Interacted { .. } => "interacted",
+            GameEvent::DialogueOpened { .. } => "dialogue_opened",
+            GameEvent::ChoiceTaken { .. } => "choice_taken",
+            GameEvent::DialogueClosed { .. } => "dialogue_closed",
         }
     }
 
@@ -337,6 +395,22 @@ mod tests {
             GameEvent::Unequipped {
                 item: "knight_helm".to_string(),
                 slot: Slot::Head,
+            },
+            GameEvent::InteractPrompted {
+                target: "elder_intro".to_string(),
+            },
+            GameEvent::Interacted {
+                target: "elder_intro".to_string(),
+            },
+            GameEvent::DialogueOpened {
+                graph: "elder_intro".to_string(),
+            },
+            GameEvent::ChoiceTaken {
+                node: "greet".to_string(),
+                index: 1,
+            },
+            GameEvent::DialogueClosed {
+                graph: "elder_intro".to_string(),
             },
         ]
     }

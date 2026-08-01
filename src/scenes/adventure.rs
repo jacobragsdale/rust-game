@@ -22,7 +22,7 @@ use crate::ecs::components::{
     AnimationState, Avatar, Collider, Fire, Health, Mover, Patrol, Pendulum, Pickup, Position,
     Size, Sprite,
 };
-use crate::scenes::{inventory, pause::PauseScene, Resources, Scene, Transition};
+use crate::scenes::{dialogue, inventory, pause::PauseScene, Resources, Scene, Transition};
 use crate::sim::{Mode, Sim};
 use crate::systems::{camera::Camera, input};
 
@@ -405,7 +405,43 @@ impl AdventureScene {
                     .dest(draw_pos + Vec2::new(fw, 0.0))
                     .scale(Vec2::new(-1.0, 1.0))
             };
-            canvas.draw(image, param.color(self.hit_tint(entity)));
+            canvas.draw(image, param.color(self.tint(entity)));
+        }
+    }
+
+    /// What colour to draw an entity's sprite.
+    ///
+    /// Two things multiply here. The hit flash is a state, and the kind tint is
+    /// a stand-in for art that does not exist: `assets/data/animations/
+    /// villager.ron` is the knight's sprite pack unmodified, because there is
+    /// no villager art in the repo, so a villager and the thing that stabs you
+    /// would otherwise be the same pixels. Recolouring at draw time means
+    /// exactly one thing to delete the day real art lands.
+    fn tint(&self, entity: hecs::Entity) -> Color {
+        let base = self.kind_tint(entity);
+        let flash = self.hit_tint(entity);
+        Color::new(
+            base.r * flash.r,
+            base.g * flash.g,
+            base.b * flash.b,
+            base.a * flash.a,
+        )
+    }
+
+    /// The stand-in recolour for a kind with no art of its own.
+    fn kind_tint(&self, entity: hecs::Entity) -> Color {
+        match self
+            .sim
+            .world
+            .get::<&crate::ecs::components::Kind>(entity)
+            .ok()
+            .map(|kind| kind.0.clone())
+            .as_deref()
+        {
+            // Green and washed out: unmistakably not a knight at a glance,
+            // which is the whole job.
+            Some("villager") => Color::new(0.55, 0.95, 0.62, 1.0),
+            _ => Color::WHITE,
         }
     }
 
@@ -461,15 +497,24 @@ impl Scene for AdventureScene {
         self.draw_pickups(ctx, &mut canvas)?;
         self.draw_sprites(&mut canvas);
         crate::hud::draw(&mut canvas, &self.sim, self.camera.offset());
-        // The overlay follows the sim's mode rather than the scene stack: the
-        // mode is the one place "the inventory is open" is recorded, and a
-        // stack entry beside it would be a second one that could disagree.
-        if self.sim.mode() == Mode::Inventory {
-            inventory::draw(
+        // The overlays follow the sim's mode rather than the scene stack: the
+        // mode is the one place "the inventory is open" or "a conversation is
+        // running" is recorded, and a stack entry beside it would be a second
+        // one that could disagree. Matched exhaustively rather than tested with
+        // `if`, so a third modal state cannot be added without deciding here
+        // what it looks like.
+        match self.sim.mode() {
+            Mode::Playing => {}
+            Mode::Inventory => inventory::draw(
                 &mut canvas,
                 &self.sim,
                 Vec2::new(INTERNAL_WIDTH, INTERNAL_HEIGHT),
-            );
+            ),
+            Mode::Dialogue => dialogue::draw(
+                &mut canvas,
+                &self.sim,
+                Vec2::new(INTERNAL_WIDTH, INTERNAL_HEIGHT),
+            ),
         }
         self.debug.draw(
             ctx,

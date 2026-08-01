@@ -153,6 +153,44 @@ impl Equipment {
     }
 }
 
+/// Something the player can stand next to and press `Interact` on.
+///
+/// The component carries only *what is offered*: which word the prompt shows
+/// and what the press does. Who is nearest, whether anything is in reach at
+/// all, and what happens next are [`crate::systems::dialogue`]'s — a component
+/// is data, and "the nearest of these" is a decision about the whole world.
+///
+/// Both fields are owned `String`s rather than `&'static str`, because both
+/// come out of RON at load: hecs components must be `Send + Sync`, and this is.
+#[derive(Clone, Debug)]
+pub struct Interactable {
+    /// The verb the HUD shows and a tape reads: `assert prompt == talk`.
+    pub prompt: String,
+    pub target: InteractTarget,
+}
+
+/// What interacting with something does.
+///
+/// One variant today. An enum from the start because PLAN.md names doors and
+/// chests next, and because the alternative — a bare `dialogue: String` on
+/// [`Interactable`] — would have to be widened into exactly this the first time
+/// a door existed, by which point every map naming one would need rewriting.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InteractTarget {
+    /// Open this dialogue graph, from `assets/data/dialogue/`.
+    Dialogue(String),
+}
+
+impl InteractTarget {
+    /// What an event and a tape call this target: the graph id, so
+    /// `expect elder_intro.dialogue_opened == 1` reads.
+    pub fn label(&self) -> &str {
+        match self {
+            InteractTarget::Dialogue(graph) => graph,
+        }
+    }
+}
+
 /// An item lying in the world, waiting to be walked over.
 ///
 /// A plain entity with a [`Body`], which is what `move_bodies` was generalized

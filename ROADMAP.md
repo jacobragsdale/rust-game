@@ -236,7 +236,7 @@ walk-over the melee kill cannot (the knockback drops the corpse underfoot) and
 `tapes/inventory_frozen.tape` measuring the freeze against the same run with
 the detour deleted — twenty-three tapes and twenty-three golden traces in all.
 
-## M5 — Interaction and dialogue
+## M5 — Interaction and dialogue ✅ done
 
 **Size:** medium. **Depends on:** M2, M4 (mode enum).
 
@@ -253,8 +253,40 @@ the single largest system in the game that cannot be tested without a human.
 **Harness work:** tapes need a way to select dialogue choices, and events for
 `DialogueOpened`, `ChoiceTaken`, `DialogueClosed`.
 
+Shipped as: `Interactable { prompt, target }` with the proximity check in the
+resolve phase and the answer cached on `Sim`, so the prompt drawn on screen and
+the thing the key does are one answer to one question; dialogue graphs under
+`assets/data/dialogue/` with `HasItem` / `FlagEq` / `FlagAtLeast` conditions and
+`SetFlag` / `GiveItem` / `TakeItem` / `Heal` effects, validated at *load* so a
+dangling `next` names its graph and node instead of dead-ending a player; a
+`Conversation` on `Sim` driving `Mode::Dialogue` through the dispatch M4 left
+open; and `scenes/dialogue.rs` as an overlay that draws and decides nothing.
+
+Two decisions worth knowing before M6 builds on them. **A reply whose condition
+fails is hidden, not greyed out** — the filtered list is the only list, which is
+what makes `dialogue_choices` a count of what the player can actually do and
+therefore what makes a gated branch unlocking visible to a tape at all. And **a
+villager is on the player's team and does carry `Health`**: the player cannot
+kill the quest giver, because friendly fire is already impossible in
+`combat::resolve` and so needs no special case that could later be forgotten; a
+knight still can, which is why the proximity check skips the dead.
+
+Tape support needed no parser work: `interact`, `up`, `down`, `confirm` and
+`cancel` were already in the action table, so a tape selects a reply by pressing
+the keys a player presses rather than through a bespoke `choose 2` directive.
+
+M6 inherits a `flags` map on `Sim` that `SetFlag` already writes and the
+conditions already read; Q-1's remaining work is surfacing it in the probe and
+the trace, which is why nothing about flags is in a baseline yet.
+
 **Exit criteria:** a tape walks an NPC conversation, takes a branch gated on an
-inventory item, and asserts the resulting state change.
+inventory item, and asserts the resulting state change. ✅ Met:
+`tapes/dialogue_branch.tape` visits the same node twice — three replies with an
+empty bag, four once Runa's draught is in it — takes the branch that did not
+exist the first time, and asserts the draught leaving the bag and the charm
+arriving in it. `tapes/interact_prompt.tape` covers the prompt appearing,
+clearing, being announced once per approach, and doing nothing at all when there
+is nobody in reach — twenty-six tapes and twenty-six golden traces in all.
 
 ## M6 — Quests
 
@@ -385,7 +417,7 @@ serves, not after.
 | ~~M2 NPCs~~ | ~~snapshot `Probe`, path assertions, ordering guard~~ (RNG moved to M3) |
 | M3 Combat | combat events, action-set inputs (attack/cast) in tapes |
 | ~~M4 Items~~ | ~~inventory in the snapshot, pickup/equip events~~ (`item.<id>.count`, `mode`, six item events) |
-| M5 Dialogue | choice selection in tapes, dialogue events |
+| ~~M5 Dialogue~~ | ~~choice selection in tapes, dialogue events~~ (no parser work needed — `interact`/`up`/`down`/`confirm` were already actions; `prompt`, `dialogue_node`, `dialogue_choices`, `dialogue_selection` and five events) |
 | M6 Quests | quest flags as snapshot globals |
 | ~~M7 Map features~~ | ~~property tests for dynamic geometry and rider carry~~ (six sweeps in `tests/physics_diagnostics.rs`) |
 | M8 Content | `tests/data.rs` cross-reference validation, per-map smoke tapes |

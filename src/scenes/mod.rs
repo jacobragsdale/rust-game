@@ -2,6 +2,7 @@
 //! overlays that draw (and optionally update) the scene beneath them.
 
 pub mod adventure;
+pub mod dialogue;
 pub mod inventory;
 pub mod main_menu;
 pub mod pause;

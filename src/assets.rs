@@ -494,6 +494,142 @@ pub struct LootDrop {
     pub chance: f32,
 }
 
+/// One conversation, as a graph of nodes. See `assets/data/dialogue/*.ron`.
+/// Spelled `Dialogue(...)` in the RON files.
+///
+/// This is *content*: what is said, what may be said back, and what saying it
+/// does. Walking the graph is [`crate::systems::dialogue`], and it is a
+/// simulation system rather than a scene for the reason set out there.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "Dialogue")]
+pub struct DialogueGraph {
+    /// What an `Interactable` names this conversation by. Unique across every
+    /// file, the same way an item id is.
+    pub id: String,
+    /// The node the conversation opens on. Checked at load.
+    pub start: String,
+    pub nodes: HashMap<String, DialogueNode>,
+}
+
+impl DialogueGraph {
+    pub fn node(&self, id: &str) -> Option<&DialogueNode> {
+        self.nodes.get(id)
+    }
+
+    /// Every node id, sorted, for error messages.
+    pub fn node_ids(&self) -> Vec<&str> {
+        let mut ids: Vec<&str> = self.nodes.keys().map(String::as_str).collect();
+        ids.sort_unstable();
+        ids
+    }
+}
+
+/// One thing an NPC says, and what may be said back.
+///
+/// `lines` is a list rather than a string because a speech is paged: `confirm`
+/// walks to the next line, and the choices are offered once the last one has
+/// been read. A node with no choices is an end of the conversation.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "Node")]
+pub struct DialogueNode {
+    pub speaker: String,
+    pub lines: Vec<String>,
+    #[serde(default)]
+    pub choices: Vec<DialogueChoice>,
+}
+
+/// One reply, where it leads, and what it costs or gives.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "Choice")]
+pub struct DialogueChoice {
+    pub text: String,
+    /// The node this leads to. `None` ends the conversation — which is what
+    /// "Goodbye." is.
+    #[serde(default)]
+    pub next: Option<String>,
+    /// When this may be offered at all. A choice whose condition fails is
+    /// **hidden**, not greyed out; see [`crate::systems::dialogue`] for why.
+    #[serde(default)]
+    pub condition: Option<DialogueCondition>,
+    /// What taking it does, applied in order, before the conversation moves on.
+    #[serde(default)]
+    pub effects: Vec<DialogueEffect>,
+}
+
+/// When a choice may be offered.
+///
+/// An enum from the start, with the flag variants present before there is much
+/// to point them at, because the shape is what later tickets extend rather than
+/// replace — Q-2's quest branches are `FlagAtLeast` and nothing else new.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub enum DialogueCondition {
+    /// The player is carrying at least one of this item.
+    HasItem(String),
+    /// A quest flag is exactly this. An unset flag reads as 0.
+    FlagEq(String, i64),
+    /// A quest flag has reached at least this stage.
+    FlagAtLeast(String, i64),
+}
+
+/// What taking a choice does.
+///
+/// Every one of these goes through the system that owns the state it touches —
+/// `GiveItem` through the same [`crate::ecs::components::Inventory`] a pickup
+/// lands in, `Heal` through the same clamp a potion uses. Nothing here writes
+/// to a component that some other system also writes to by a different route.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub enum DialogueEffect {
+    /// Set a quest flag to a stage.
+    SetFlag(String, i64),
+    /// Put items in the bag, exactly as walking over them would.
+    GiveItem(String, u32),
+    /// Take items out of it. Does nothing if they are not there.
+    TakeItem(String, u32),
+    /// Restore health, clamped to the derived maximum.
+    Heal(i32),
+}
+
+/// Every conversation in the game, by id. Assembled from every `.ron` file
+/// under `assets/data/dialogue/`, each of which holds one `Dialogue(...)`.
+///
+/// A file per graph, for the reason items get a directory: conversations are
+/// the content type that grows without bound, and one file per graph is one
+/// diff per rewrite. Ids are global regardless of the file, so a filename is an
+/// organizing convenience and never part of a graph's identity.
+#[derive(Clone, Debug, Default)]
+pub struct DialogueTable(HashMap<String, Arc<DialogueGraph>>);
+
+impl DialogueTable {
+    pub fn get(&self, id: &str) -> Option<&Arc<DialogueGraph>> {
+        self.0.get(id)
+    }
+
+    /// Every graph id, sorted, for error messages.
+    pub fn ids(&self) -> Vec<&str> {
+        let mut ids: Vec<&str> = self.0.keys().map(String::as_str).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// The shipped table, read once per process — the counterpart of
+    /// [`ItemTable::shipped`] and [`SpellTable::shipped`].
+    ///
+    /// Panics if it does not load, for the same reason those do: dialogue is
+    /// content, and a graph that does not parse — or that points at a node it
+    /// does not define — is a broken build rather than something to degrade
+    /// around at runtime.
+    pub fn shipped() -> Arc<DialogueTable> {
+        static SHIPPED: OnceLock<Arc<DialogueTable>> = OnceLock::new();
+        SHIPPED
+            .get_or_init(|| {
+                Assets::new()
+                    .dialogue()
+                    .expect("assets/data/dialogue should load")
+            })
+            .clone()
+    }
+}
+
 /// Every item in the game, by id. Assembled from every `.ron` file under
 /// `assets/data/items/`, each of which holds one `ItemDef(...)` or a list of
 /// them.
@@ -607,6 +743,11 @@ pub struct StatBlock {
     /// anything that does not cast.
     #[serde(default)]
     pub spell: Option<String>,
+    /// What pressing `Interact` beside one of these offers. Absent for
+    /// anything there is nothing to say to — which is every kind but the
+    /// villager today.
+    #[serde(default)]
+    pub interact: Option<InteractDef>,
     /// Present only for a kind the player drives.
     #[serde(default)]
     pub avatar: Option<AvatarStats>,
@@ -670,6 +811,20 @@ pub struct AvatarStats {
     /// it starts when the ground arrives, and nothing in an attack's fixed
     /// timeline knows when that is.
     pub plunge_impact_ticks: u32,
+}
+
+/// What a kind offers the player standing next to it. Spelled
+/// `Interact(...)` in the RON file.
+///
+/// Content rather than code, so a second talking NPC is a stat block and a
+/// dialogue file. `prompt` is the word the HUD shows and the word a tape reads
+/// with `assert prompt == talk`, so it is deliberately one token.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "Interact")]
+pub struct InteractDef {
+    pub prompt: String,
+    /// A graph id from `assets/data/dialogue/`.
+    pub dialogue: String,
 }
 
 /// The knobs [`crate::systems::npc`] walks and hunts with. Spelled
@@ -839,6 +994,7 @@ pub struct Assets {
     spells: Option<Arc<SpellTable>>,
     stats: Option<Arc<StatTable>>,
     items: Option<Arc<ItemTable>>,
+    dialogue: Option<Arc<DialogueTable>>,
 }
 
 impl Default for Assets {
@@ -857,8 +1013,18 @@ impl Assets {
         } else {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
         };
+        Assets::rooted(base)
+    }
+
+    /// An asset cache reading from `base` instead of the shipped `assets/`.
+    ///
+    /// Exists so that a test can point the loaders at content written to be
+    /// wrong — a dialogue graph with a dangling `next`, say. The alternative is
+    /// committing broken files into `assets/`, where every other check would
+    /// have to learn to ignore them.
+    pub fn rooted(base: impl Into<PathBuf>) -> Self {
         Assets {
-            base,
+            base: base.into(),
             images: HashMap::new(),
             clip_sets: HashMap::new(),
             tilesets: HashMap::new(),
@@ -866,6 +1032,7 @@ impl Assets {
             spells: None,
             stats: None,
             items: None,
+            dialogue: None,
         }
     }
 
@@ -1021,6 +1188,60 @@ impl Assets {
         Ok(table)
     }
 
+    /// Load every `.ron` file under `assets/data/dialogue/` into one table,
+    /// checking as it goes that each graph actually holds together.
+    ///
+    /// **A dangling `next` is a load-time error naming the graph and the
+    /// node**, not a conversation that dead-ends in front of a player. The
+    /// alternative — resolving targets when a choice is taken — turns a
+    /// one-character typo into a branch that silently closes the conversation,
+    /// which is indistinguishable from a branch that was meant to. Same for a
+    /// `start` that names nothing: the conversation would open on nothing at
+    /// all.
+    ///
+    /// What is *not* checked here is reachability. A node nothing points at is
+    /// writing that ships and is never read — a content mistake rather than a
+    /// broken graph, so it fails in `tests/data.rs` where the whole corpus is
+    /// visible, rather than stopping a map from loading.
+    ///
+    /// Files are read in sorted order so a duplicate id always blames the same
+    /// pair of files, whatever order the filesystem hands them back in.
+    pub fn dialogue(&mut self) -> anyhow::Result<Arc<DialogueTable>> {
+        if let Some(table) = &self.dialogue {
+            return Ok(table.clone());
+        }
+
+        let dir = self.base.join("data/dialogue");
+        let entries = fs::read_dir(&dir)
+            .with_context(|| format!("failed to read dialogue directory {}", dir.display()))?;
+        let mut paths: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.extension().is_some_and(|e| e == "ron"))
+            .collect();
+        paths.sort();
+
+        let mut graphs: HashMap<String, Arc<DialogueGraph>> = HashMap::new();
+        let mut sources: HashMap<String, PathBuf> = HashMap::new();
+        for path in paths {
+            let graph: DialogueGraph = load_ron(&path)?;
+            validate_dialogue(&graph, &path)?;
+            if let Some(first) = sources.insert(graph.id.clone(), path.clone()) {
+                anyhow::bail!(
+                    "dialogue graph `{}` is defined in both {} and {} — ids are how an \
+                     NPC names a conversation, so they have to be unique",
+                    graph.id,
+                    first.display(),
+                    path.display(),
+                );
+            }
+            graphs.insert(graph.id.clone(), Arc::new(graph));
+        }
+
+        let table = Arc::new(DialogueTable(graphs));
+        self.dialogue = Some(table.clone());
+        Ok(table)
+    }
+
     /// Load `assets/data/tilesets/{name}.ron`.
     pub fn tileset(&mut self, name: &str) -> anyhow::Result<Rc<TilesetDef>> {
         if let Some(def) = self.tilesets.get(name) {
@@ -1032,6 +1253,46 @@ impl Assets {
         self.tilesets.insert(name.to_string(), def.clone());
         Ok(def)
     }
+}
+
+/// Every way a dialogue graph can fail to hold together, reported against the
+/// file it was read from.
+///
+/// Both checks are about *edges* of the graph, which is the only part of a
+/// conversation no type can enforce: `start` and `next` are strings, and a
+/// string that names nothing parses perfectly.
+fn validate_dialogue(graph: &DialogueGraph, path: &std::path::Path) -> anyhow::Result<()> {
+    let known = graph.node_ids().join(", ");
+
+    anyhow::ensure!(
+        graph.nodes.contains_key(&graph.start),
+        "{}: dialogue graph `{}` starts at node `{}`, which it does not define \
+         (nodes: {known})",
+        path.display(),
+        graph.id,
+        graph.start,
+    );
+
+    // Sorted, so two runs blame the same node first.
+    for node_id in graph.node_ids() {
+        let node = &graph.nodes[node_id];
+        for (index, choice) in node.choices.iter().enumerate() {
+            let Some(next) = &choice.next else {
+                continue; // ending the conversation is a legitimate target
+            };
+            anyhow::ensure!(
+                graph.nodes.contains_key(next),
+                "{}: dialogue graph `{}`, node `{node_id}`: choice {index} \
+                 (`{}`) leads to `{next}`, which the graph does not define \
+                 (nodes: {known})",
+                path.display(),
+                graph.id,
+                choice.text,
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// Parse a RON data file.

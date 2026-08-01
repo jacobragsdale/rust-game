@@ -11,9 +11,9 @@
 //! have actually hit something.
 
 use ggez::glam::Vec2;
-use ggez::graphics::{Canvas, Color, DrawParam, Quad};
+use ggez::graphics::{Canvas, Color, DrawParam, PxScale, Quad, Text, TextFragment};
 
-use crate::ecs::components::{Casting, Health, Mana, Position, Size, Team};
+use crate::ecs::components::{Avatar, Casting, Health, Mana, Position, Size, Team};
 use crate::sim::Sim;
 
 const PANEL: Color = Color::new(0.05, 0.04, 0.09, 0.85);
@@ -50,9 +50,68 @@ const ENEMY_BAR_H: f32 = 3.0;
 /// How far above an enemy's collider its bar sits.
 const ENEMY_BAR_LIFT: f32 = 7.0;
 
+/// Interact prompt geometry. It sits higher than an enemy's health bar so the
+/// two never collide on something that could show both.
+const PROMPT_FONT: f32 = 9.0;
+const PROMPT_H: f32 = 10.0;
+const PROMPT_LIFT: f32 = 10.0;
+/// Rough glyph width at [`PROMPT_FONT`], for centring. The font is not
+/// monospaced, so this is an estimate; being a pixel off centre is invisible
+/// and being wrong about it costs nothing.
+const PROMPT_CHAR_W: f32 = 5.0;
+const PROMPT_TEXT: Color = Color::new(0.95, 0.93, 0.80, 1.0);
+
 pub fn draw(canvas: &mut Canvas, sim: &Sim, camera_offset: Vec2) {
     draw_player_bars(canvas, sim);
     draw_enemy_bars(canvas, sim, camera_offset);
+    draw_interact_prompt(canvas, sim, camera_offset);
+}
+
+/// "[E] talk", floating over whatever is in reach.
+///
+/// **Drawing only.** *Whether* there is anything to prompt, *which* of two
+/// neighbours wins, and *what* the word is are all decided in
+/// [`crate::systems::dialogue`] and cached on the sim as
+/// [`Sim::prompt`] — so the prompt on screen and the thing the key actually
+/// does are one answer to one question rather than two that drift a tick apart.
+///
+/// Hidden while modal: a conversation is already up, and the overlay is drawn
+/// over the world the prompt would be floating in.
+fn draw_interact_prompt(canvas: &mut Canvas, sim: &Sim, camera_offset: Vec2) {
+    if sim.mode().is_modal() {
+        return;
+    }
+    let Some(prompt) = sim.prompt() else {
+        return;
+    };
+    let (Ok(pos), Ok(size)) = (
+        sim.world.get::<&Position>(prompt.entity),
+        sim.world.get::<&Size>(prompt.entity),
+    ) else {
+        return;
+    };
+
+    let text = format!("[E] {}", prompt.prompt);
+    let width = text.chars().count() as f32 * PROMPT_CHAR_W;
+    let origin = Vec2::new(
+        pos.0.x + size.0.x / 2.0 - width / 2.0,
+        pos.0.y - PROMPT_LIFT - PROMPT_H,
+    ) - camera_offset;
+
+    fill(
+        canvas,
+        origin.floor() - Vec2::new(2.0, 1.0),
+        Vec2::new(width + 4.0, PROMPT_H + 2.0),
+        PANEL,
+    );
+    canvas.draw(
+        &Text::new(
+            TextFragment::new(text)
+                .scale(PxScale::from(PROMPT_FONT))
+                .color(PROMPT_TEXT),
+        ),
+        DrawParam::default().dest(origin.floor()),
+    );
 }
 
 fn draw_player_bars(canvas: &mut Canvas, sim: &Sim) {
@@ -174,21 +233,29 @@ fn fill(canvas: &mut Canvas, origin: Vec2, size: Vec2, colour: Color) {
     );
 }
 
+/// The player's own health.
+///
+/// Keyed off [`Avatar`] rather than off `Team::Player`, and that is not a
+/// tidy-up: M5's villager is on the player's team so that friendly fire cannot
+/// touch it, which means "the first player-team thing with health" stopped
+/// being the player the day a villager stood next to one. `Avatar` is the
+/// component only the thing the player drives has.
 fn player_health(sim: &Sim) -> Option<Health> {
-    let mut query = sim.world.query::<(&Health, &Team)>();
-    query
-        .iter()
-        .find(|(_, (_, team))| **team == Team::Player)
-        .map(|(_, (health, _))| *health)
+    let mut query = sim.world.query::<&Health>().with::<&Avatar>();
+    query.iter().map(|(_, health)| *health).next()
 }
 
-/// The player's pool, and whether a cast is on cooldown right now.
+/// The player's pool, and whether a cast is on cooldown right now. Keyed off
+/// [`Avatar`] for the reason [`player_health`] is.
 fn player_mana(sim: &Sim) -> Option<(Mana, bool)> {
-    let mut query = sim.world.query::<(&Mana, &Team, Option<&Casting>)>();
+    let mut query = sim
+        .world
+        .query::<(&Mana, Option<&Casting>)>()
+        .with::<&Avatar>();
     query
         .iter()
-        .find(|(_, (_, team, _))| **team == Team::Player)
-        .map(|(_, (mana, _, casting))| (*mana, casting.is_some_and(|c| c.cooldown > 0)))
+        .map(|(_, (mana, casting))| (*mana, casting.is_some_and(|c| c.cooldown > 0)))
+        .next()
 }
 
 #[cfg(test)]
