@@ -82,7 +82,7 @@ pub fn control(
         } else {
             avatar.coyote_ticks = avatar.coyote_ticks.saturating_add(1);
         }
-        if input.jump_pressed {
+        if input.jump_pressed() {
             avatar.jump_buffer = Avatar::JUMP_BUFFER_TICKS;
         } else {
             avatar.jump_buffer = avatar.jump_buffer.saturating_sub(1);
@@ -91,7 +91,7 @@ pub fn control(
         avatar.slide_ticks = avatar.slide_ticks.saturating_sub(1);
         avatar.slide_cooldown = avatar.slide_cooldown.saturating_sub(1);
 
-        let dir = f32::from(input.right) - f32::from(input.left);
+        let dir = input.dir();
 
         // --- attack ---
         //
@@ -99,7 +99,7 @@ pub fn control(
         // is a single cheaper swing. Which link comes next is data: pressing
         // during the current attack's chain window buffers its successor, and
         // `combat::advance_attacks` starts it when this animation ends.
-        if input.attack_pressed && !avatar.sliding() {
+        if input.attack_pressed() && !avatar.sliding() {
             match current_attack(attacking, attacks) {
                 Some(def) if def.chains() => {
                     attacking.chained = def.chain.clone();
@@ -123,8 +123,8 @@ pub fn control(
         //
         // Distinct from drop-through, which is down alone on a platform, and
         // from crouching, which is down while standing still.
-        if input.jump_pressed
-            && input.down
+        if input.jump_pressed()
+            && input.down()
             && body.grounded
             && !body.on_one_way_only()
             && dir != 0.0
@@ -205,7 +205,7 @@ pub fn control(
         // "go down". Crouching still works on solid ground, which is what
         // `on_one_way_only` distinguishes. A buffered jump press is discarded
         // so the drop is not immediately cancelled by a jump on the way out.
-        if input.down && body.grounded && body.on_one_way_only() {
+        if input.down() && body.grounded && body.on_one_way_only() {
             avatar.drop_ticks = Avatar::DROP_TICKS;
             avatar.jump_buffer = 0;
             events.push(GameEvent::DroppedThrough);
@@ -239,7 +239,7 @@ pub fn control(
         // Heavier gravity while rising with the jump key released is what
         // makes a tap a short hop and a hold a full jump. Read after the jump
         // block, so a launch on this very tick is already accounted for.
-        body.gravity = if vel.0.y < 0.0 && !input.jump_held {
+        body.gravity = if vel.0.y < 0.0 && !input.jump_held() {
             Avatar::GRAVITY + Avatar::LOW_JUMP_GRAVITY
         } else {
             Avatar::GRAVITY
@@ -262,7 +262,7 @@ pub fn after_move(
     input: PlayerInput,
     events: &mut Vec<GameEvent>,
 ) {
-    let dir = f32::from(input.right) - f32::from(input.left);
+    let dir = input.dir();
 
     for (_, (avatar, pos, vel, size, body, health)) in world.query_mut::<(
         &mut Avatar,
@@ -291,7 +291,7 @@ pub fn after_move(
             avatar.double_jumping = false;
         }
 
-        avatar.crouching = body.grounded && input.down && dir == 0.0 && !avatar.sliding();
+        avatar.crouching = body.grounded && input.down() && dir == 0.0 && !avatar.sliding();
 
         // --- map bounds ---
         let max_x = level.pixel_width() - size.0.x;
@@ -380,6 +380,7 @@ fn move_toward(current: f32, target: f32, max_delta: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::systems::input::Action;
 
     const DT: f32 = 1.0 / 60.0;
     const FLOOR_Y: f32 = 256.0;
@@ -453,22 +454,9 @@ mod tests {
         assert!(body(world).grounded, "avatar failed to settle on ground");
     }
 
-    const JUMP: PlayerInput = PlayerInput {
-        left: false,
-        right: false,
-        down: false,
-        jump_pressed: true,
-        jump_held: true,
-        attack_pressed: false,
-    };
-    const HOLD_JUMP: PlayerInput = PlayerInput {
-        left: false,
-        right: false,
-        down: false,
-        jump_pressed: false,
-        jump_held: true,
-        attack_pressed: false,
-    };
+    const JUMP: PlayerInput = PlayerInput::from_actions(&[Action::Jump]);
+    /// The key still down on a later tick: held, but no new press.
+    const HOLD_JUMP: PlayerInput = PlayerInput::holding(&[Action::Jump]);
 
     #[test]
     fn walks_and_jumps() {
@@ -478,10 +466,7 @@ mod tests {
         spawn_avatar(&mut world, level.player_spawn);
         settle(&mut world, &level, &geo);
 
-        let run = PlayerInput {
-            right: true,
-            ..Default::default()
-        };
+        let run = PlayerInput::from_actions(&[Action::Right]);
         for _ in 0..30 {
             update(&mut world, &level, &geo, run, DT);
         }
@@ -547,10 +532,7 @@ mod tests {
         settle(&mut world, &level, &geo);
 
         // walk off the ledge
-        let run = PlayerInput {
-            right: true,
-            ..Default::default()
-        };
+        let run = PlayerInput::from_actions(&[Action::Right]);
         let mut airborne_at = None;
         for tick in 0..60 {
             update(&mut world, &level, &geo, run, DT);
@@ -645,10 +627,7 @@ mod tests {
         spawn_avatar(&mut world, Vec2::new(100.0, 50.0));
 
         // fall while pressing right into the wall
-        let press = PlayerInput {
-            right: true,
-            ..Default::default()
-        };
+        let press = PlayerInput::from_actions(&[Action::Right]);
         for _ in 0..60 {
             update(&mut world, &level, &geo, press, DT);
         }
@@ -661,12 +640,7 @@ mod tests {
         );
 
         // wall jump: kicks up and away (leftward), flips facing
-        let wall_jump = PlayerInput {
-            right: true,
-            jump_pressed: true,
-            jump_held: true,
-            ..Default::default()
-        };
+        let wall_jump = PlayerInput::from_actions(&[Action::Right, Action::Jump]);
         update(&mut world, &level, &geo, wall_jump, DT);
         let (avatar, _, vel) = state(&mut world);
         assert!(vel.y < 0.0, "kicked upward");
@@ -691,19 +665,10 @@ mod tests {
         spawn_avatar(&mut world, level.player_spawn);
         settle(&mut world, level, geo);
 
-        let right_hold = PlayerInput {
-            right: true,
-            jump_pressed: true,
-            jump_held: true,
-            ..Default::default()
-        };
+        let right_hold = PlayerInput::from_actions(&[Action::Right, Action::Jump]);
         update(&mut world, level, geo, right_hold, DT);
 
-        let drift = PlayerInput {
-            right: true,
-            jump_held: true,
-            ..Default::default()
-        };
+        let drift = PlayerInput::holding(&[Action::Right, Action::Jump]);
         for _ in 0..20 {
             update(&mut world, level, geo, drift, DT);
             let (avatar, pos, vel) = state(&mut world);
@@ -747,10 +712,7 @@ mod tests {
         let mut world = rising_against_the_wall(&level, &geo);
 
         // peel off the wall, then press
-        let away = PlayerInput {
-            left: true,
-            ..Default::default()
-        };
+        let away = PlayerInput::from_actions(&[Action::Left]);
         for _ in 0..3 {
             update(&mut world, &level, &geo, away, DT);
         }
@@ -777,10 +739,7 @@ mod tests {
 
         // peel off the wall, then coast until the window is well past — so
         // horizontal speed has bled to zero and a kick would be unmistakable
-        let away = PlayerInput {
-            left: true,
-            ..Default::default()
-        };
+        let away = PlayerInput::from_actions(&[Action::Left]);
         for _ in 0..3 {
             update(&mut world, &level, &geo, away, DT);
         }
@@ -856,12 +815,7 @@ mod tests {
         assert!(body(&mut world).on_one_way_only());
 
         // down + jump: fall through the platform...
-        let down_jump = PlayerInput {
-            down: true,
-            jump_pressed: true,
-            jump_held: true,
-            ..Default::default()
-        };
+        let down_jump = PlayerInput::from_actions(&[Action::Down, Action::Jump]);
         update(&mut world, &level, &geo, down_jump, DT);
         assert!(!body(&mut world).grounded, "dropped off the platform");
 
@@ -874,12 +828,7 @@ mod tests {
         assert_eq!(pos.y, 400.0 - Avatar::HEIGHT);
 
         // down + jump on solid ground is just a jump
-        let down_jump2 = PlayerInput {
-            down: true,
-            jump_pressed: true,
-            jump_held: true,
-            ..Default::default()
-        };
+        let down_jump2 = PlayerInput::from_actions(&[Action::Down, Action::Jump]);
         update(&mut world, &level, &geo, down_jump2, DT);
         let (_, _, vel) = state(&mut world);
         assert!(vel.y < 0.0, "jumped instead of dropping");
@@ -898,10 +847,7 @@ mod tests {
         assert!(avatar.dead());
 
         // input is ignored while dead
-        let run = PlayerInput {
-            right: true,
-            ..Default::default()
-        };
+        let run = PlayerInput::from_actions(&[Action::Right]);
         let x_dead = state(&mut world).1.x;
         update(&mut world, &level, &geo, run, DT);
         assert_eq!(state(&mut world).1.x, x_dead);

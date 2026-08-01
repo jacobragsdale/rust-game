@@ -12,6 +12,7 @@
 
 pub mod event;
 pub mod probe;
+pub mod rng;
 pub mod run;
 pub mod tape;
 pub mod trace;
@@ -30,11 +31,13 @@ use crate::ecs::components::{
 use crate::ecs::spawn;
 use crate::level::LevelData;
 use crate::physics::{Aabb, SolidRect};
+use crate::sim::rng::Rng;
 use crate::systems::input::PlayerInput;
 use crate::systems::{animation, avatar, body, combat, npc};
 
 pub use event::GameEvent;
 pub use probe::{NpcProbe, Probe};
+pub use rng::DEFAULT_SEED;
 
 /// The simulation runs on a fixed timestep so that behavior is identical at
 /// any frame rate — and, just as importantly, reproducible between runs.
@@ -53,6 +56,13 @@ pub struct Sim {
     pub geometry: Vec<SolidRect>,
     /// Every attack's timing and effect, shared by every attacker.
     pub attacks: Arc<AttackTable>,
+    /// The simulation's only source of randomness, seeded per run.
+    ///
+    /// Anything random — a loot roll, a crit, a spell's spread — draws from
+    /// here and from nowhere else. A tape and its golden trace are only worth
+    /// anything if the same seed replays the same run, and an unseeded
+    /// generator anywhere would silently end that.
+    pub rng: Rng,
     /// Ticks elapsed since the sim was created.
     pub tick: u64,
     /// Ticks of impact freeze remaining. A hit stops the whole world for a
@@ -89,7 +99,7 @@ impl Sim {
         }
 
         let attacks = assets.attacks()?;
-        Ok(Self::new(level, &clip_sets, attacks))
+        Ok(Self::new(level, &clip_sets, attacks, rng::DEFAULT_SEED))
     }
 
     /// A sim built from an inline ASCII grid, with placeholder animation
@@ -115,17 +125,22 @@ impl Sim {
         let attacks = Assets::new()
             .attacks()
             .expect("assets/data/attacks.ron should load");
-        Sim::new(level, &fixture_clip_sets(), attacks)
+        Sim::new(level, &fixture_clip_sets(), attacks, rng::DEFAULT_SEED)
     }
 
-    /// Build a sim from level data and a clip set per entity kind (plus
-    /// `"player"`). Panics if a kind the level places has no clip set — callers
-    /// are expected to have loaded one, and there is nothing sensible to draw
-    /// otherwise.
+    /// Build a sim from level data, a clip set per entity kind (plus
+    /// `"player"`), and the seed its randomness runs at. Panics if a kind the
+    /// level places has no clip set — callers are expected to have loaded one,
+    /// and there is nothing sensible to draw otherwise.
+    ///
+    /// The seed is a parameter rather than a constant because a run has to be
+    /// reproducible from what is written down: a tape's `seed` directive, or
+    /// [`rng::DEFAULT_SEED`] when nothing says otherwise.
     pub fn new(
         level: LevelData,
         clip_sets: &HashMap<String, Arc<ClipSet>>,
         attacks: Arc<AttackTable>,
+        seed: u64,
     ) -> Self {
         let mut geometry: Vec<SolidRect> =
             level.solids.iter().map(|&r| SolidRect::solid(r)).collect();
@@ -160,10 +175,22 @@ impl Sim {
             level,
             geometry,
             attacks,
+            rng: Rng::new(seed),
             tick: 0,
             hitstop: 0,
             events: Vec::new(),
         }
+    }
+
+    /// The seed this run's randomness started from.
+    pub fn seed(&self) -> u64 {
+        self.rng.seed()
+    }
+
+    /// Restart the randomness at a new seed. Used by the tape runner, which
+    /// only learns the seed after the sim has been built from a map.
+    pub fn reseed(&mut self, seed: u64) {
+        self.rng = Rng::new(seed);
     }
 
     /// Advance one fixed tick.
@@ -421,6 +448,7 @@ fn penetrates(a: &Aabb, b: &Aabb, eps: f32) -> bool {
 mod tests {
     use super::*;
     use crate::sim::event::DeathCause;
+    use crate::systems::input::Action;
 
     /// A flat floor with a pit on the right.
     fn test_sim() -> Sim {
@@ -431,17 +459,11 @@ mod tests {
             level,
             &fixture_clip_sets(),
             Assets::new().attacks().unwrap(),
+            rng::DEFAULT_SEED,
         )
     }
 
-    const JUMP: PlayerInput = PlayerInput {
-        left: false,
-        right: false,
-        down: false,
-        jump_pressed: true,
-        jump_held: true,
-        attack_pressed: false,
-    };
+    const JUMP: PlayerInput = PlayerInput::from_actions(&[Action::Jump]);
 
     /// Step until `pred` holds, returning the tick it happened on. Fixture
     /// tests care about "did this happen", not about counting ticks by hand.
@@ -489,10 +511,7 @@ mod tests {
         }
         let start_x = sim.probe().x;
 
-        let run = PlayerInput {
-            right: true,
-            ..Default::default()
-        };
+        let run = PlayerInput::from_actions(&[Action::Right]);
         for _ in 0..30 {
             sim.step(run);
         }
@@ -625,22 +644,52 @@ mod tests {
     /// trace diffing are worthless.
     #[test]
     fn simulation_is_deterministic() {
-        let run = PlayerInput {
-            right: true,
-            jump_held: true,
-            ..Default::default()
-        };
+        let run = PlayerInput::holding(&[Action::Right, Action::Jump]);
         let trace = |_| {
             let mut sim = test_sim();
             let mut probes = Vec::new();
             for tick in 0..120 {
                 let mut input = run;
-                input.jump_pressed = tick == 20;
+                input.set_pressed(Action::Jump, tick == 20);
                 sim.step(input);
                 probes.push(sim.probe());
             }
             probes
         };
         assert_eq!(trace(()), trace(()));
+    }
+
+    // --- randomness -----------------------------------------------------
+
+    /// The property every tape and golden trace rests on: the seed is the
+    /// whole of what the randomness depends on.
+    #[test]
+    fn two_sims_with_the_same_seed_roll_the_same_numbers() {
+        let sample = |seed| {
+            let mut sim = Sim::fixture(&["..........", "..P.......", "##########"]);
+            sim.reseed(seed);
+            (0..32).map(|_| sim.rng.next_u64()).collect::<Vec<u64>>()
+        };
+        assert_eq!(sample(rng::DEFAULT_SEED), sample(rng::DEFAULT_SEED));
+        assert_ne!(sample(rng::DEFAULT_SEED), sample(99));
+    }
+
+    #[test]
+    fn a_sim_starts_at_the_default_seed() {
+        let sim = Sim::fixture(&["..........", "..P.......", "##########"]);
+        assert_eq!(sim.seed(), rng::DEFAULT_SEED);
+    }
+
+    /// Nothing draws from the generator yet, which is exactly why the golden
+    /// traces did not move when it was added. Once something does, delete
+    /// this — it is a statement about today, not an invariant.
+    #[test]
+    fn stepping_the_sim_consumes_no_randomness() {
+        let mut sim = Sim::fixture(&["..........", "..P.......", "##########"]);
+        let before = sim.rng.clone();
+        for _ in 0..60 {
+            sim.step(JUMP);
+        }
+        assert_eq!(sim.rng, before, "a system started rolling dice");
     }
 }

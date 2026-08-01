@@ -37,6 +37,15 @@ pub struct Frame {
     pub npcs: Vec<NpcProbe>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<GameEvent>,
+    /// The random seed this run used, recorded on the first frame so a trace
+    /// says what it takes to reproduce it.
+    ///
+    /// Absent means [`crate::sim::rng::DEFAULT_SEED`]: writing it out on every
+    /// baseline would churn all of them to record the one value that is
+    /// already implied, which is exactly the kind of noise that makes a trace
+    /// diff unreadable. A tape that sets a seed says so, here, on line 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
 }
 
 impl Frame {
@@ -148,6 +157,7 @@ impl Trace {
             probe,
             npcs,
             events: events.to_vec(),
+            seed: None,
         });
     }
 
@@ -326,7 +336,32 @@ mod tests {
             probe: probe(0),
             npcs: vec![npc("knight", 10.0, 1.0), npc("knight", 20.0, -1.0)],
             events: Vec::new(),
+            seed: None,
         }
+    }
+
+    /// The default seed is the absence of a seed, so adding the field did not
+    /// rewrite a single baseline.
+    #[test]
+    fn a_default_seeded_run_carries_no_seed_key() {
+        let mut trace = Trace::new();
+        trace.push(probe(0), Vec::new(), &[]);
+        assert!(!trace.to_jsonl().contains("seed"));
+    }
+
+    #[test]
+    fn a_recorded_seed_survives_a_round_trip() {
+        let mut trace = Trace::new();
+        trace.push_frame(Frame {
+            probe: probe(0),
+            npcs: Vec::new(),
+            events: Vec::new(),
+            seed: Some(4242),
+        });
+        let line = trace.to_jsonl();
+        let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(value["seed"], 4242);
+        assert_eq!(Trace::parse(&line).unwrap().frames(), trace.frames());
     }
 
     /// A bare name has always meant the player and must keep meaning it, or

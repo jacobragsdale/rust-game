@@ -17,20 +17,23 @@
 //! assert !grounded
 //! ```
 //!
-//! Each line is `<keys> [count]`, where `<keys>` is `+`-separated from
-//! `left right down jump attack`, or `wait`/`none` for no input. `count` defaults
-//! to 1. `#` starts a comment. Two directives are also recognized:
-//! `map <path>` names the map to run against, and `assert ...` checks the
-//! player's state at the tick where it appears.
+//! Each line is `<keys> [count]`, where `<keys>` is `+`-separated from the
+//! names in [`crate::systems::input::ACTIONS`] (`left right down up jump
+//! attack cast ...`), or `wait`/`none` for no input. `count` defaults to 1.
+//! `#` starts a comment. Three directives are also recognized: `map <path>`
+//! names the map to run against, `seed <n>` fixes the simulation's random
+//! seed, and `assert ...` checks the player's state at the tick where it
+//! appears.
 //!
-//! The subtle part is [`Tape::inputs`]: `PlayerInput::jump_pressed` is
-//! edge-triggered while `jump_held` is level-triggered, exactly as
+//! The subtle part is [`Tape::inputs`]: `jump_pressed` is edge-triggered while
+//! `jump_held` is level-triggered, exactly as
 //! [`crate::systems::input::InputLatch`] delivers them from the keyboard. The
 //! tape reproduces that by diffing consecutive ticks, so `jump 10` is one jump
 //! held for ten ticks — what actually happens when you hold the key — rather
 //! than ten jumps. Get this wrong and tapes would perform inputs no human
 //! could. (One press reaching two ticks is exactly the bug the latch exists to
-//! prevent, so a tape must never express it either.)
+//! prevent, so a tape must never express it either.) Every edge-triggered
+//! action is diffed the same way, so a new one needs no work here.
 
 use std::fs;
 use std::path::Path;
@@ -38,24 +41,19 @@ use std::path::Path;
 use anyhow::{bail, Context as _};
 
 use crate::sim::event::{EventCounts, GameEvent};
+use crate::sim::rng;
 use crate::sim::trace::{Frame, ProbePath};
-use crate::systems::input::PlayerInput;
+use crate::systems::input::{Action, PlayerInput};
+
+/// Which actions are down on a single tick. The same bitset the keyboard
+/// reader fills, so a tape cannot express an input a player could not.
+pub use crate::systems::input::ActionSet as Keys;
 
 /// Runaway-tape guard: 100k ticks is ~28 minutes of game time.
 const MAX_TICKS: usize = 100_000;
 
 /// Tolerance for `==` / `!=` on floats.
 const EPSILON: f32 = 1e-3;
-
-/// Which keys are down on a single tick.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Keys {
-    pub left: bool,
-    pub right: bool,
-    pub down: bool,
-    pub jump: bool,
-    pub attack: bool,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Op {
@@ -245,6 +243,10 @@ pub struct Tape {
     /// Tapes carry their own map so that a runner can replay any tape
     /// without being told which fixture it belongs to.
     pub map: Option<String>,
+    /// Random seed, from a `seed <n>` directive. Carried for the same reason
+    /// the map is: a tape plus its map must be the whole of what a golden
+    /// trace depends on, or the trace stops being reproducible from the files.
+    pub seed: Option<u64>,
     /// Keys held, one entry per tick.
     pub keys: Vec<Keys>,
     pub asserts: Vec<Assertion>,
@@ -281,6 +283,23 @@ impl Tape {
                     bail!("line {line}: `map` is already set");
                 }
                 tape.map = Some(path.to_string());
+                continue;
+            }
+
+            if head == "seed" {
+                let raw = tokens
+                    .next()
+                    .with_context(|| format!("line {line}: `seed` needs a number"))?;
+                let seed: u64 = raw
+                    .parse()
+                    .with_context(|| format!("line {line}: `{raw}` is not a seed"))?;
+                if tokens.next().is_some() {
+                    bail!("line {line}: `seed` takes exactly one number");
+                }
+                if tape.seed.is_some() {
+                    bail!("line {line}: `seed` is already set");
+                }
+                tape.seed = Some(seed);
                 continue;
             }
 
@@ -327,25 +346,27 @@ impl Tape {
         self.keys.len()
     }
 
+    /// The seed this tape runs at, defaulting to the constant every sim
+    /// starts from.
+    pub fn seed(&self) -> u64 {
+        self.seed.unwrap_or(rng::DEFAULT_SEED)
+    }
+
     /// Compile held-key sets into per-tick `PlayerInput`, deriving the
-    /// edge-triggered `jump_pressed` by diffing against the previous tick —
-    /// the same way `input::read` derives it from the keyboard.
+    /// edge-triggered presses by diffing against the previous tick — the same
+    /// way `input::read` derives them from the keyboard latch.
+    ///
+    /// Holding a key must be one press, not one per tick, for every one-shot
+    /// action there is: `PlayerInput::new` keeps only the edge-triggered bits
+    /// of the diff, so nothing here needs to know which actions those are.
     pub fn inputs(&self) -> Vec<PlayerInput> {
         let mut prev = Keys::default();
         self.keys
             .iter()
             .map(|&keys| {
-                let input = PlayerInput {
-                    // left and right cancel, matching `input::read`
-                    left: keys.left && !keys.right,
-                    right: keys.right && !keys.left,
-                    down: keys.down,
-                    jump_pressed: keys.jump && !prev.jump,
-                    jump_held: keys.jump,
-                    // Edge-triggered for the same reason jump is: holding the
-                    // key must be one swing, not one per tick.
-                    attack_pressed: keys.attack && !prev.attack,
-                };
+                // `PlayerInput::new` applies the rest of what the keyboard
+                // reader applies, including left and right cancelling.
+                let input = PlayerInput::new(keys, keys.newly_set(prev));
                 prev = keys;
                 input
             })
@@ -358,17 +379,20 @@ impl Tape {
     }
 }
 
+/// Resolve a `+`-separated token against the action table. Adding an action
+/// to that table is all it takes to be able to write it in a tape.
 fn parse_keys(token: &str) -> anyhow::Result<Keys> {
     let mut keys = Keys::default();
     for part in token.split('+') {
         match part {
             "wait" | "none" | "idle" => {}
-            "left" => keys.left = true,
-            "right" => keys.right = true,
-            "down" => keys.down = true,
-            "jump" => keys.jump = true,
-            "attack" => keys.attack = true,
-            other => bail!("unknown key `{other}` (expected left, right, down, jump, or wait)"),
+            name => match Action::from_name(name) {
+                Some(action) => keys.insert(action),
+                None => bail!(
+                    "unknown key `{name}` (expected one of {}, or wait)",
+                    Action::name_list()
+                ),
+            },
         }
     }
     Ok(keys)
@@ -496,8 +520,8 @@ mod tests {
     fn expands_counts_into_per_tick_keys() {
         let tape = Tape::parse("right 3\nwait 2\n").unwrap();
         assert_eq!(tape.ticks(), 5);
-        assert!(tape.keys[0].right);
-        assert!(tape.keys[2].right);
+        assert!(tape.keys[0].contains(Action::Right));
+        assert!(tape.keys[2].contains(Action::Right));
         assert_eq!(tape.keys[3], Keys::default());
     }
 
@@ -510,8 +534,33 @@ mod tests {
     #[test]
     fn parses_key_combinations() {
         let tape = Tape::parse("right+jump 1\ndown+left 1").unwrap();
-        assert!(tape.keys[0].right && tape.keys[0].jump);
-        assert!(tape.keys[1].down && tape.keys[1].left);
+        assert!(tape.keys[0].contains(Action::Right) && tape.keys[0].contains(Action::Jump));
+        assert!(tape.keys[1].contains(Action::Down) && tape.keys[1].contains(Action::Left));
+    }
+
+    /// The point of the action table: a new action is spelled in tapes with no
+    /// parser change at all. `cast` is bound to nothing in gameplay yet.
+    #[test]
+    fn every_action_in_the_table_is_a_tape_key() {
+        for action in Action::all() {
+            let source = format!("{} 1", action.name());
+            let tape = Tape::parse(&source).unwrap_or_else(|e| panic!("`{source}`: {e:#}"));
+            assert!(
+                tape.keys[0].contains(action),
+                "`{}` did not resolve to its action",
+                action.name()
+            );
+        }
+
+        let tape = Tape::parse("cast 1").expect("`cast 1` parses");
+        assert!(tape.inputs()[0].pressed(Action::Cast));
+    }
+
+    /// An unknown key names the whole table, so the fix is in the message.
+    #[test]
+    fn an_unknown_key_lists_the_actions() {
+        let err = format!("{:#}", Tape::parse("sideways 3").unwrap_err());
+        assert!(err.contains("left, right, down, up, jump"), "{err}");
     }
 
     /// The whole reason tapes are trustworthy: holding jump for N ticks must
@@ -521,13 +570,13 @@ mod tests {
     fn jump_is_edge_triggered_but_stays_held() {
         let tape = Tape::parse("jump 5").unwrap();
         let inputs = tape.inputs();
-        assert!(inputs[0].jump_pressed, "press fires on the first tick");
+        assert!(inputs[0].jump_pressed(), "press fires on the first tick");
         assert!(
-            inputs[1..].iter().all(|i| !i.jump_pressed),
+            inputs[1..].iter().all(|i| !i.jump_pressed()),
             "and never again while held"
         );
         assert!(
-            inputs.iter().all(|i| i.jump_held),
+            inputs.iter().all(|i| i.jump_held()),
             "but the key stays held throughout"
         );
     }
@@ -539,17 +588,58 @@ mod tests {
         let presses: Vec<usize> = inputs
             .iter()
             .enumerate()
-            .filter(|(_, i)| i.jump_pressed)
+            .filter(|(_, i)| i.jump_pressed())
             .map(|(t, _)| t)
             .collect();
         assert_eq!(presses, vec![0, 4]);
+    }
+
+    /// ...and that is true of every one-shot action, not just the two that
+    /// existed when the rule was written.
+    #[test]
+    fn every_edge_triggered_action_fires_once_per_press() {
+        for action in Action::all().filter(|a| a.is_edge()) {
+            let name = action.name();
+            let tape = Tape::parse(&format!("{name} 3\nwait 2\n{name} 3")).unwrap();
+            let presses: Vec<usize> = tape
+                .inputs()
+                .iter()
+                .enumerate()
+                .filter(|(_, i)| i.pressed(action))
+                .map(|(t, _)| t)
+                .collect();
+            assert_eq!(presses, vec![0, 5], "`{name}` should fire twice, not six");
+        }
+    }
+
+    /// Level-triggered actions have no press at all — holding is the whole of
+    /// what `left` means.
+    #[test]
+    fn level_triggered_actions_never_report_a_press() {
+        let tape = Tape::parse("left 3\ndown 3\nup 3").unwrap();
+        for input in tape.inputs() {
+            for action in Action::all().filter(|a| !a.is_edge()) {
+                assert!(!input.pressed(action), "`{}` is not a press", action.name());
+            }
+        }
     }
 
     #[test]
     fn opposing_directions_cancel_like_the_keyboard() {
         let tape = Tape::parse("left+right 1").unwrap();
         let input = tape.inputs()[0];
-        assert!(!input.left && !input.right);
+        assert!(!input.left() && !input.right());
+    }
+
+    #[test]
+    fn seed_directive_is_captured_and_defaults_to_the_constant() {
+        let tape = Tape::parse("right 2").unwrap();
+        assert_eq!(tape.seed, None);
+        assert_eq!(tape.seed(), rng::DEFAULT_SEED);
+
+        let tape = Tape::parse("seed 12345\nright 2").unwrap();
+        assert_eq!(tape.seed(), 12345);
+        assert_eq!(tape.ticks(), 2, "the directive costs no ticks");
     }
 
     #[test]
@@ -617,6 +707,13 @@ mod tests {
             "duplicate map"
         );
         assert!(Tape::parse("sideways 3").is_err(), "unknown key");
+        assert!(Tape::parse("seed").is_err(), "seed without a number");
+        assert!(Tape::parse("seed x").is_err(), "seed that is not a number");
+        assert!(
+            Tape::parse("seed 1 2").is_err(),
+            "seed with a trailing token"
+        );
+        assert!(Tape::parse("seed 1\nseed 2").is_err(), "duplicate seed");
         assert!(Tape::parse("right zero").is_err(), "bad count");
         assert!(Tape::parse("right 0").is_err(), "zero count");
         assert!(Tape::parse("right 3 extra").is_err(), "trailing token");

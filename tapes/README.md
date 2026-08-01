@@ -45,6 +45,7 @@ Re-recording is deliberate: the diff lands in the commit, where it can be read.
 
 ```
 map maps/testbed.ron   # which map to run on — required
+seed 1234              # random seed, optional (see below)
 
 right 40               # hold right for 40 ticks (60 ticks = 1 second)
 right+jump 1           # combine keys with '+'
@@ -53,17 +54,45 @@ assert x > 384         # check the player's state at this point in the tape
 assert !grounded
 ```
 
-Keys are `left`, `right`, `down`, `jump`, `attack`, and `wait`/`none`. The
-count defaults to 1. `#` starts a comment.
+A count defaults to 1, and `#` starts a comment. `wait`, `none` and `idle` all
+mean "no input". Every other key is an action from the table below, which is
+generated from `ACTIONS` in `src/systems/input.rs` — the single place an action
+is defined, and what `tapes_readme_lists_every_action` checks this against.
+
+<!-- actions:begin -->
+| Tape name | Keyboard | Trigger |
+| --- | --- | --- |
+| `left` | Left, A | level |
+| `right` | Right, D | level |
+| `down` | Down, S | level |
+| `up` | Up, W | level |
+| `jump` | Up, W, Space | edge |
+| `attack` | J, X | edge |
+| `cast` | K | edge |
+| `interact` | E | edge |
+| `inventory` | I | edge |
+| `confirm` | Enter | edge |
+| `cancel` | Backspace | edge |
+<!-- actions:end -->
 
 Combined keys do double duty: `down+jump` while running is a slide, `down`
 alone on a one-way platform is a drop-through, and `attack` during a swing
 chains the next link of the combo.
 
-**Jump and attack are edge-triggered.** `jump 10` is one jump held for ten
-ticks — exactly what holding the key does — not ten jumps. Releasing and
+**Edge-triggered actions fire once per press.** `jump 10` is one jump held for
+ten ticks — exactly what holding the key does — not ten jumps. Releasing and
 pressing again is what produces a second. `attack 1` is the usual way to write
-a swing, since holding the key does nothing after the first tick.
+a swing, since holding the key does nothing after the first tick. Level-
+triggered ones are the opposite: `right 40` is 40 ticks of running.
+
+## Randomness
+
+The simulation has one seeded generator (`Sim::rng`) and nothing else — no
+`thread_rng`, no clock — because a tape that rolled different numbers each run
+would assert nothing. `seed <n>` fixes it for a tape; leave it out and the run
+uses the default every trace here was recorded at. A tape that sets a seed gets
+it written onto the first line of its trace, so a recording says what it takes
+to reproduce it.
 
 Assertions read `assert <flag>`, `assert !<flag>`, or `assert <field> <op>
 <value>` with `< <= > >= == !=`. Available names:

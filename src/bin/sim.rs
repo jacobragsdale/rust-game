@@ -180,10 +180,11 @@ fn run() -> anyhow::Result<bool> {
         Some(tape) => {
             if !args.quiet {
                 println!(
-                    "tape {} — {} ticks, {} assertions",
+                    "tape {} — {} ticks, {} assertions, seed {}",
                     args.tape.as_ref().expect("tape implies a path").display(),
                     tape.ticks(),
-                    tape.asserts.len()
+                    tape.asserts.len(),
+                    tape.seed(),
                 );
             }
             let outcome = run_tape(&mut sim, tape);

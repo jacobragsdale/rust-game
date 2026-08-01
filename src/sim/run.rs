@@ -7,6 +7,7 @@
 //! `right 10` is checked once ten ticks have been *stepped*.
 
 use crate::sim::event::EventCounts;
+use crate::sim::rng;
 use crate::sim::tape::Tape;
 use crate::sim::trace::{Frame, Trace};
 use crate::sim::Sim;
@@ -54,6 +55,10 @@ pub fn run_tape(sim: &mut Sim, tape: &Tape) -> RunOutcome {
     // Cumulative, so `expect` reads as "by this point in the tape".
     let mut counts = EventCounts::new();
 
+    // The tape owns the seed the way it owns the map: a replay must depend on
+    // nothing but the files, not on how the caller happened to build the sim.
+    sim.reseed(tape.seed());
+
     let record = |sim: &Sim,
                   tick: usize,
                   counts: &EventCounts,
@@ -65,6 +70,9 @@ pub fn run_tape(sim: &mut Sim, tape: &Tape) -> RunOutcome {
             probe: sim.probe(),
             npcs: sim.npc_probes(),
             events: sim.events().to_vec(),
+            // Only on the first line, and only when it is not the value every
+            // trace already runs at — see `Frame::seed`.
+            seed: (tick == 0 && sim.seed() != rng::DEFAULT_SEED).then(|| sim.seed()),
         };
         for assertion in tape.asserts_at(tick) {
             if let Err(message) = assertion.evaluate(&frame, counts) {
@@ -170,6 +178,30 @@ mod tests {
             "{}",
             outcome.failures[0].message
         );
+    }
+
+    /// A tape's `seed` reaches the sim, and lands in the trace so the run can
+    /// be reproduced from the recording alone.
+    #[test]
+    fn a_tapes_seed_is_applied_and_recorded() {
+        let tape = Tape::parse("seed 777\nwait 2\nassert grounded").unwrap();
+        let mut sim = castle();
+        let outcome = run_tape(&mut sim, &tape);
+        assert_eq!(sim.seed(), 777);
+        assert_eq!(outcome.trace.frames()[0].seed, Some(777));
+        assert_eq!(outcome.trace.frames()[1].seed, None, "first line only");
+    }
+
+    /// ...and a tape that does not ask for one runs at the default, which the
+    /// trace leaves unwritten. This is why adding the seed moved no baseline.
+    #[test]
+    fn a_tape_without_a_seed_records_none() {
+        let tape = Tape::parse("wait 2\nassert grounded").unwrap();
+        let mut sim = castle();
+        let outcome = run_tape(&mut sim, &tape);
+        assert_eq!(sim.seed(), crate::sim::rng::DEFAULT_SEED);
+        assert!(outcome.trace.frames().iter().all(|f| f.seed.is_none()));
+        assert!(!outcome.trace.to_jsonl().contains("seed"));
     }
 
     #[test]

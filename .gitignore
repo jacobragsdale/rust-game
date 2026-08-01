@@ -4,3 +4,6 @@ scores.db
 
 # Personal Claude Code permissions; the shared skill lives in .claude/skills/
 .claude/settings.local.json
+
+# Scratch git worktrees created for parallel agent runs
+.claude/worktrees/
