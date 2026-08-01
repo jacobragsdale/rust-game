@@ -15,11 +15,34 @@
 
 use hecs::World;
 
-use crate::ecs::components::{Body, Position, Size, Velocity};
-use crate::physics::{self, SolidRect};
+use crate::ecs::components::{Body, Collider, Position, Size, Velocity};
+use crate::physics::{self, Geometry, SolidQuery, SolidRect, SolidsOnly};
+
+/// Refresh the entity-owned half of the world's geometry.
+///
+/// Called from one place, [`crate::sim::Sim::step`], immediately before
+/// [`move_bodies`]: every collider is read at the position its owner decided
+/// on this tick, and the geometry then holds still for the whole movement
+/// phase. Fire that blinks on a schedule, a platform that moves, a hazard on a
+/// rope — all of them are "an entity moved its collider" and all of them land
+/// here rather than in a special case inside collision.
+///
+/// Sorted by entity id, not taken in query order. hecs iterates archetypes in
+/// creation order, so adding a component to one entity mid-run would otherwise
+/// reshuffle the list that `resolve_move` walks — the same trap
+/// [`crate::sim::Sim::npcs`] guards against, with the same fix.
+pub fn rebuild_geometry(geometry: &mut Geometry, world: &World) {
+    let mut owned: Vec<(u32, SolidRect)> = world
+        .query::<(&Position, &Collider)>()
+        .iter()
+        .filter_map(|(entity, (pos, collider))| Some((entity.id(), collider.solid_rect(pos.0)?)))
+        .collect();
+    owned.sort_by_key(|(id, _)| *id);
+    geometry.set_entity_rects(owned.into_iter().map(|(_, rect)| rect));
+}
 
 /// Advance every body one tick: gravity, integrate, resolve, record contact.
-pub fn move_bodies(world: &mut World, geometry: &[SolidRect], dt: f32) {
+pub fn move_bodies<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, dt: f32) {
     for (_, (pos, vel, size, body)) in
         world.query_mut::<(&mut Position, &mut Velocity, &Size, &mut Body)>()
     {
@@ -39,9 +62,13 @@ pub fn move_bodies(world: &mut World, geometry: &[SolidRect], dt: f32) {
 
         // --- collide ---
         let contact = if body.ignore_one_way {
-            let solids_only: Vec<SolidRect> =
-                geometry.iter().copied().filter(|s| !s.one_way).collect();
-            physics::resolve_move(&mut pos.0, &mut vel.0, body.prev_pos, size.0, &solids_only)
+            physics::resolve_move(
+                &mut pos.0,
+                &mut vel.0,
+                body.prev_pos,
+                size.0,
+                &SolidsOnly(geometry),
+            )
         } else {
             physics::resolve_move(&mut pos.0, &mut vel.0, body.prev_pos, size.0, geometry)
         };
@@ -174,6 +201,128 @@ mod tests {
             pos.y,
             400.0 - SIZE.y,
             "through the platform, onto the floor"
+        );
+    }
+
+    // --- entity-owned geometry ------------------------------------------
+
+    /// The rebuild reads a collider at its owner's position, so a collider
+    /// that moves is geometry that moves — no special case anywhere in
+    /// collision, which is the whole point of the ticket.
+    #[test]
+    fn a_collider_follows_its_owner() {
+        let mut world = World::new();
+        let platform = world.spawn((
+            Position(Vec2::new(100.0, 200.0)),
+            Collider::solid(Vec2::new(64.0, 16.0)),
+        ));
+        let mut geometry = Geometry::default();
+
+        rebuild_geometry(&mut geometry, &world);
+        assert_eq!(
+            geometry.rects()[0].rect,
+            Aabb::new(100.0, 200.0, 64.0, 16.0)
+        );
+
+        world.get::<&mut Position>(platform).unwrap().0.x = 180.0;
+        rebuild_geometry(&mut geometry, &world);
+        assert_eq!(
+            geometry.rects()[0].rect,
+            Aabb::new(180.0, 200.0, 64.0, 16.0)
+        );
+    }
+
+    /// Entity-owned rects arrive in entity-id order however hecs feels like
+    /// iterating. Adding a component moves an entity to another archetype,
+    /// which is exactly what reshuffles a raw query.
+    #[test]
+    fn entity_rects_are_assembled_in_entity_id_order() {
+        #[derive(Clone, Copy, Debug)]
+        struct Stunned;
+
+        let mut world = World::new();
+        let ids: Vec<hecs::Entity> = (0..6)
+            .map(|i| {
+                world.spawn((
+                    Position(Vec2::new(i as f32 * 40.0, 0.0)),
+                    Collider::solid(Vec2::new(8.0, 8.0)),
+                ))
+            })
+            .collect();
+        let mut geometry = Geometry::default();
+
+        rebuild_geometry(&mut geometry, &world);
+        let xs: Vec<f32> = geometry.rects().iter().map(|s| s.rect.x).collect();
+        assert_eq!(xs, vec![0.0, 40.0, 80.0, 120.0, 160.0, 200.0]);
+
+        // Shuffle the archetypes underneath it.
+        world.insert_one(ids[3], Stunned).unwrap();
+        world.insert_one(ids[0], Stunned).unwrap();
+        world.remove_one::<Stunned>(ids[3]).unwrap();
+
+        rebuild_geometry(&mut geometry, &world);
+        let xs: Vec<f32> = geometry.rects().iter().map(|s| s.rect.x).collect();
+        assert_eq!(
+            xs,
+            vec![0.0, 40.0, 80.0, 120.0, 160.0, 200.0],
+            "id order held"
+        );
+    }
+
+    /// A hazard is geometry, but it is not an obstruction: you walk into fire
+    /// rather than bumping off it. L-2 gives it a query of its own.
+    #[test]
+    fn a_hazard_collider_contributes_nothing_to_collision() {
+        let mut world = World::new();
+        world.spawn((
+            Position(Vec2::new(0.0, 0.0)),
+            Collider::hazard(Vec2::new(32.0, 32.0)),
+        ));
+        world.spawn((
+            Position(Vec2::new(64.0, 0.0)),
+            Collider::one_way(Vec2::new(32.0, 8.0)),
+        ));
+        let mut geometry = Geometry::default();
+
+        rebuild_geometry(&mut geometry, &world);
+        assert_eq!(geometry.entity_rect_count(), 1, "only the platform");
+        assert!(geometry.rects()[0].one_way);
+    }
+
+    /// A body lands on an entity's collider exactly as it lands on a tile, and
+    /// falls again the moment the entity is gone.
+    #[test]
+    fn a_body_lands_on_an_entity_collider_and_falls_when_it_goes_away() {
+        let mut world = World::new();
+        let body = spawn_body(&mut world, Vec2::new(100.0, 100.0));
+        let ledge = world.spawn((
+            Position(Vec2::new(80.0, 300.0)),
+            Collider::solid(Vec2::new(96.0, 16.0)),
+        ));
+        let mut geometry = Geometry::from_level(&[Aabb::new(0.0, 400.0, 400.0, 32.0)], &[]);
+
+        for _ in 0..120 {
+            rebuild_geometry(&mut geometry, &world);
+            move_bodies(&mut world, &geometry, TICK);
+            if body_of(&world, body).grounded {
+                break;
+            }
+        }
+        assert_eq!(
+            world.get::<&Position>(body).unwrap().0.y,
+            300.0 - SIZE.y,
+            "came to rest on the entity's collider, not the floor"
+        );
+
+        world.despawn(ledge).unwrap();
+        for _ in 0..120 {
+            rebuild_geometry(&mut geometry, &world);
+            move_bodies(&mut world, &geometry, TICK);
+        }
+        assert_eq!(
+            world.get::<&Position>(body).unwrap().0.y,
+            400.0 - SIZE.y,
+            "dropped to the floor once the collider stopped existing"
         );
     }
 

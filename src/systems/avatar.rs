@@ -21,16 +21,16 @@ use hecs::World;
 use crate::assets::{AttackDef, AttackTable};
 use crate::ecs::components::{Attacking, Avatar, Body, Health, Position, Size, Velocity};
 use crate::level::LevelData;
-use crate::physics::{self, Aabb, SolidRect};
+use crate::physics::{self, Aabb, SolidQuery};
 use crate::sim::event::{DeathCause, GameEvent};
 use crate::systems::input::PlayerInput;
 
 /// Phase 1: turn this tick's input into a velocity and body settings.
 #[allow(clippy::too_many_arguments)]
-pub fn control(
+pub fn control<Q: SolidQuery + ?Sized>(
     world: &mut World,
     level: &LevelData,
-    geometry: &[SolidRect],
+    geometry: &Q,
     attacks: &AttackTable,
     input: PlayerInput,
     dt: f32,
@@ -380,6 +380,7 @@ fn move_toward(current: f32, target: f32, max_delta: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physics::SolidRect;
 
     const DT: f32 = 1.0 / 60.0;
     const FLOOR_Y: f32 = 256.0;

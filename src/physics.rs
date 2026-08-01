@@ -1,4 +1,12 @@
 //! Collision primitives, independent of ggez so they can be unit tested.
+//!
+//! The collision routines here never take a list of rectangles. They take a
+//! [`SolidQuery`] — "give me the solids that could overlap this box" — so that
+//! where the geometry lives, and how it is indexed, is not their problem.
+//! [`Geometry`] is the implementation the game uses: static level rects plus
+//! whatever colliders entities own this tick, behind a uniform grid.
+
+use std::collections::HashMap;
 
 use ggez::glam::Vec2;
 
@@ -21,6 +29,18 @@ impl Aabb {
 
     pub fn bottom(&self) -> f32 {
         self.y + self.h
+    }
+
+    /// The smallest box containing both.
+    pub fn union(&self, other: &Aabb) -> Aabb {
+        let x = self.x.min(other.x);
+        let y = self.y.min(other.y);
+        Aabb {
+            x,
+            y,
+            w: self.right().max(other.right()) - x,
+            h: self.bottom().max(other.bottom()) - y,
+        }
     }
 
     /// Strict overlap: sharing an edge is *not* an intersection.
@@ -64,6 +84,274 @@ impl SolidRect {
     }
 }
 
+/// What the collision routines ask the world for: the solids that could
+/// overlap a box.
+///
+/// This exists so that `resolve_move` and the wall probes do not care whether
+/// the geometry is a flat slice, a level's static rects, or a grid holding
+/// both those and a moving platform's collider. Two rules make swapping the
+/// implementation safe:
+///
+/// 1. **Conservative.** A query may return solids that do not overlap `area`,
+///    but never omit one that does. A caller that hands over a box containing
+///    every position it will test therefore behaves exactly as if it had
+///    scanned everything: the extra solids it never sees would have failed
+///    their overlap test anyway.
+/// 2. **Stable order.** Every method returns solids in one fixed order, the
+///    same relative order for a subset as for [`SolidQuery::all`]. Resolution
+///    walks the list, so an order that depended on which grid cells happened
+///    to be visited — or on hecs archetype layout — would let the game move
+///    when nothing about it changed.
+pub trait SolidQuery {
+    /// Replace `out` with every solid that could overlap `area`.
+    fn overlapping(&self, area: Aabb, out: &mut Vec<SolidRect>);
+
+    /// Replace `out` with every solid there is, in the same order.
+    fn all(&self, out: &mut Vec<SolidRect>);
+}
+
+/// A slice is its own broadphase: it hands back everything, which is what the
+/// collision routines did with a `&[SolidRect]` before this trait existed.
+/// Tests and small fixtures use it, and it is the reference the grid is
+/// checked against.
+impl SolidQuery for [SolidRect] {
+    fn overlapping(&self, _area: Aabb, out: &mut Vec<SolidRect>) {
+        self.all(out);
+    }
+
+    fn all(&self, out: &mut Vec<SolidRect>) {
+        out.clear();
+        out.extend_from_slice(self);
+    }
+}
+
+impl<const N: usize> SolidQuery for [SolidRect; N] {
+    fn overlapping(&self, area: Aabb, out: &mut Vec<SolidRect>) {
+        self[..].overlapping(area, out);
+    }
+
+    fn all(&self, out: &mut Vec<SolidRect>) {
+        self[..].all(out);
+    }
+}
+
+impl SolidQuery for Vec<SolidRect> {
+    fn overlapping(&self, area: Aabb, out: &mut Vec<SolidRect>) {
+        self[..].overlapping(area, out);
+    }
+
+    fn all(&self, out: &mut Vec<SolidRect>) {
+        self[..].all(out);
+    }
+}
+
+/// A view of a solid set with one-way platforms filtered out: what a body
+/// dropping through a platform sees.
+pub struct SolidsOnly<'a, Q: ?Sized>(pub &'a Q);
+
+impl<Q: SolidQuery + ?Sized> SolidQuery for SolidsOnly<'_, Q> {
+    fn overlapping(&self, area: Aabb, out: &mut Vec<SolidRect>) {
+        self.0.overlapping(area, out);
+        out.retain(|s| !s.one_way);
+    }
+
+    fn all(&self, out: &mut Vec<SolidRect>) {
+        self.0.all(out);
+        out.retain(|s| !s.one_way);
+    }
+}
+
+/// Cell size of the broadphase grid, in pixels: two 32px tiles.
+///
+/// One tile makes the buckets tiny and the cell walk long; four puts most of a
+/// room in one bucket. Two sits between, and a merged floor row — one rect per
+/// horizontal run of tiles — still spans few enough cells to bucket cheaply.
+const CELL: f32 = 64.0;
+
+/// How many cells one query may walk before it gives up and scans everything.
+///
+/// A query box that large is a body crossing the map in a tick, or a caller
+/// asking about the whole world; walking thousands of buckets to reach the
+/// same answer is slower than the linear scan the grid replaced.
+const MAX_CELLS_PER_QUERY: i64 = 4096;
+
+/// How many cells one rect may be bucketed into. A rect wider than this is
+/// kept in `always`, so it is a candidate for every query — cheaper than
+/// writing its index into a thousand buckets it will never be looked up from.
+const MAX_CELLS_PER_RECT: i64 = 4096;
+
+/// A uniform grid over rect *indices*. Indices rather than rects so a query
+/// can sort them and hand back a subset in the owner's order.
+#[derive(Clone, Debug, Default)]
+struct Grid {
+    /// Ascending index lists, bucketed by cell.
+    cells: HashMap<(i32, i32), Vec<u32>>,
+    /// Rects too large to bucket: candidates for every query.
+    always: Vec<u32>,
+}
+
+impl Grid {
+    fn clear(&mut self) {
+        self.cells.clear();
+        self.always.clear();
+    }
+
+    /// Bucket one rect. Indices must be inserted in ascending order, which is
+    /// what keeps each bucket sorted.
+    fn insert(&mut self, index: u32, rect: &Aabb) {
+        let Some(((x0, y0), (x1, y1))) = cell_range(rect, MAX_CELLS_PER_RECT) else {
+            self.always.push(index);
+            return;
+        };
+        for cy in y0..=y1 {
+            for cx in x0..=x1 {
+                self.cells.entry((cx, cy)).or_default().push(index);
+            }
+        }
+    }
+
+    /// Append the indices of everything bucketed near `area` to `out`.
+    /// Returns false when the area cannot be walked cell by cell, in which
+    /// case `out` is meaningless and the caller should scan all.
+    fn gather(&self, area: &Aabb, out: &mut Vec<u32>) -> bool {
+        let Some(((x0, y0), (x1, y1))) = cell_range(area, MAX_CELLS_PER_QUERY) else {
+            return false;
+        };
+        out.extend_from_slice(&self.always);
+        for cy in y0..=y1 {
+            for cx in x0..=x1 {
+                if let Some(bucket) = self.cells.get(&(cx, cy)) {
+                    out.extend_from_slice(bucket);
+                }
+            }
+        }
+        true
+    }
+}
+
+/// The inclusive cell coordinates a box touches, or `None` when it covers
+/// more than `budget` of them.
+///
+/// `None` also covers a box with a non-finite corner. Casting NaN to `i32`
+/// yields 0, so without the check a garbage box would quietly bucket itself
+/// at the origin and be invisible everywhere else — a wrong answer, where the
+/// fallback is merely a slow one.
+fn cell_range(rect: &Aabb, budget: i64) -> Option<((i32, i32), (i32, i32))> {
+    if !(rect.x.is_finite() && rect.y.is_finite() && rect.w.is_finite() && rect.h.is_finite()) {
+        return None;
+    }
+    let lo = |v: f32| (v / CELL).floor() as i32;
+    let (x0, y0) = (lo(rect.x), lo(rect.y));
+    let (x1, y1) = (lo(rect.right()), lo(rect.bottom()));
+    let w = (x1 as i64 - x0 as i64 + 1).max(0);
+    let h = (y1 as i64 - y0 as i64 + 1).max(0);
+    (w.saturating_mul(h) <= budget).then_some(((x0, y0), (x1, y1)))
+}
+
+/// Every solid in the world: the level's own rects, plus the colliders
+/// entities own this tick.
+///
+/// Static rects are bucketed once when the level loads. Entity-owned rects are
+/// replaced wholesale each tick by [`Geometry::set_entity_rects`] — cheap
+/// because there are a handful of them next to thousands of tiles, and
+/// simpler than tracking which ones moved.
+///
+/// The two halves live in one list, statics first, so an index into it is a
+/// total order over the world's geometry. That order is what
+/// [`SolidQuery::overlapping`] restores by sorting, and it is why swapping the
+/// grid in for a linear scan cannot move the game: the grid returns a subset
+/// of the same list in the same order, and the solids it filtered out would
+/// have failed their overlap test anyway.
+#[derive(Clone, Debug, Default)]
+pub struct Geometry {
+    /// Static level rects, then entity-owned ones.
+    rects: Vec<SolidRect>,
+    /// Where the entity-owned half starts.
+    static_len: usize,
+    statics: Grid,
+    dynamics: Grid,
+}
+
+impl Geometry {
+    /// Bucket a level's static geometry: solids first, then one-way platforms.
+    ///
+    /// That order is load-bearing. It is the order the flattened
+    /// `Vec<SolidRect>` had before `Geometry` existed, and resolution walks
+    /// the list, so keeping it is what makes this refactor invisible in the
+    /// golden traces.
+    pub fn from_level(solids: &[Aabb], one_way: &[Aabb]) -> Self {
+        let mut rects: Vec<SolidRect> = solids.iter().map(|&r| SolidRect::solid(r)).collect();
+        rects.extend(one_way.iter().map(|&r| SolidRect::one_way(r)));
+        Geometry::from_rects(rects)
+    }
+
+    /// Bucket an already-flattened list, keeping its order.
+    pub fn from_rects(rects: Vec<SolidRect>) -> Self {
+        let mut geometry = Geometry {
+            static_len: rects.len(),
+            rects,
+            statics: Grid::default(),
+            dynamics: Grid::default(),
+        };
+        for (index, solid) in geometry.rects.iter().enumerate() {
+            geometry.statics.insert(index as u32, &solid.rect);
+        }
+        geometry
+    }
+
+    /// Replace the entity-owned rects and rebucket them.
+    ///
+    /// The caller decides the order and this preserves it; see
+    /// [`crate::systems::body::rebuild_geometry`], which sorts by entity id so
+    /// that hecs archetype layout is never observable in the physics.
+    pub fn set_entity_rects(&mut self, rects: impl IntoIterator<Item = SolidRect>) {
+        self.rects.truncate(self.static_len);
+        self.rects.extend(rects);
+        self.dynamics.clear();
+        for index in self.static_len..self.rects.len() {
+            let rect = self.rects[index].rect;
+            self.dynamics.insert(index as u32, &rect);
+        }
+    }
+
+    /// Every solid, static and entity-owned, in query order.
+    pub fn rects(&self) -> &[SolidRect] {
+        &self.rects
+    }
+
+    /// How many of them are entity-owned.
+    pub fn entity_rect_count(&self) -> usize {
+        self.rects.len() - self.static_len
+    }
+}
+
+impl SolidQuery for Geometry {
+    fn overlapping(&self, area: Aabb, out: &mut Vec<SolidRect>) {
+        let mut hits: Vec<u32> = Vec::new();
+        if !self.statics.gather(&area, &mut hits) || !self.dynamics.gather(&area, &mut hits) {
+            self.all(out);
+            return;
+        }
+        hits.sort_unstable();
+        hits.dedup();
+
+        out.clear();
+        out.extend(
+            hits.iter()
+                .map(|&i| self.rects[i as usize])
+                // Safe to drop the near-misses the buckets turned up: a solid
+                // that overlaps the body overlaps any box containing it, so
+                // anything failing here would have failed inside the passes.
+                .filter(|s| area.overlaps(&s.rect)),
+        );
+    }
+
+    fn all(&self, out: &mut Vec<SolidRect>) {
+        out.clear();
+        out.extend_from_slice(&self.rects);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Contact {
     pub grounded: bool,
@@ -74,8 +362,8 @@ pub struct Contact {
     pub on_one_way: bool,
 }
 
-/// Resolve a body's move against static geometry, one axis at a time, using
-/// the previous position to decide which side it approached from.
+/// Resolve a body's move against the world's geometry, one axis at a time,
+/// using the previous position to decide which side it approached from.
 ///
 /// The two passes are not cosmetic. Resolving both axes in a single loop lets
 /// a decision made at one position survive a later correction that invalidates
@@ -84,17 +372,27 @@ pub struct Contact {
 /// Which of those happened depended on the order of `solids`. Settling x first
 /// and only then testing y means the vertical pass sees the position the body
 /// actually ends the tick at.
-pub fn resolve_move(
+///
+/// One broadphase query serves both passes. Neither pass can push the body
+/// outside the box swept from `prev_pos` to `pos` — each correction moves it
+/// back *toward* where it came from and stops at the surface — so a query over
+/// that box holds every solid either pass could touch.
+pub fn resolve_move<Q: SolidQuery + ?Sized>(
     pos: &mut Vec2,
     vel: &mut Vec2,
     prev_pos: Vec2,
     size: Vec2,
-    solids: &[SolidRect],
+    solids: &Q,
 ) -> Contact {
     let mut contact = Contact::default();
 
+    let swept = Aabb::new(prev_pos.x, prev_pos.y, size.x, size.y)
+        .union(&Aabb::new(pos.x, pos.y, size.x, size.y));
+    let mut candidates: Vec<SolidRect> = Vec::new();
+    solids.overlapping(swept, &mut candidates);
+
     // --- horizontal: test the new x against the previous y ---
-    for solid in solids {
+    for solid in &candidates {
         // One-way platforms never block horizontal motion.
         if solid.one_way {
             continue;
@@ -118,7 +416,7 @@ pub fn resolve_move(
     }
 
     // --- vertical: x is settled, so this sees the final column ---
-    for solid in solids {
+    for solid in &candidates {
         let body = Aabb::new(pos.x, pos.y, size.x, size.y);
         if !body.overlaps(&solid.rect) {
             continue;
@@ -149,7 +447,23 @@ pub fn resolve_move(
     // diagonal entry into a corner. Without this the body is trapped forever,
     // sinking a fraction of a pixel per tick. Push out along the shallowest
     // axis so nothing can be permanently stuck.
-    for solid in solids {
+    //
+    // This is the one pass the swept box does not bound: a push escapes along
+    // the shallowest axis, which can carry the body half a rect clear of
+    // anywhere it has been. So it runs against everything — but only once the
+    // candidates prove the body is stuck, which they can, being a superset of
+    // what overlaps the final position. On every ordinary tick this costs one
+    // overlap test per candidate and stops.
+    let body = Aabb::new(pos.x, pos.y, size.x, size.y);
+    if !candidates
+        .iter()
+        .any(|s| !s.one_way && body.overlaps(&s.rect))
+    {
+        return contact;
+    }
+    solids.all(&mut candidates);
+
+    for solid in &candidates {
         if solid.one_way {
             continue;
         }
@@ -193,14 +507,18 @@ fn shallower(a: f32, b: f32) -> f32 {
 /// Is a body pressed against a full solid on the given side (`dir` -1 left,
 /// +1 right)? Probes a 1px strip beside the body, inset vertically so floor
 /// and ceiling contacts don't count as walls.
-pub fn touching_wall(pos: Vec2, size: Vec2, solids: &[SolidRect], dir: f32) -> bool {
+pub fn touching_wall<Q: SolidQuery + ?Sized>(pos: Vec2, size: Vec2, solids: &Q, dir: f32) -> bool {
     let probe_x = if dir > 0.0 {
         pos.x + size.x
     } else {
         pos.x - 1.0
     };
     let probe = Aabb::new(probe_x, pos.y + 2.0, 1.0, size.y - 4.0);
-    solids.iter().any(|s| !s.one_way && probe.overlaps(&s.rect))
+    let mut candidates: Vec<SolidRect> = Vec::new();
+    solids.overlapping(probe, &mut candidates);
+    candidates
+        .iter()
+        .any(|s| !s.one_way && probe.overlaps(&s.rect))
 }
 
 /// Which side, if either, a body is pressed against a wall on: -1 left,
@@ -209,7 +527,7 @@ pub fn touching_wall(pos: Vec2, size: Vec2, solids: &[SolidRect], dir: f32) -> b
 /// `prefer` (-1, 0, or +1) breaks the tie when both sides touch: in a shaft
 /// barely wider than the body, the wall the player is pushing into is the one
 /// they mean. With no preference the right wall wins, arbitrarily but stably.
-pub fn wall_contact(pos: Vec2, size: Vec2, solids: &[SolidRect], prefer: f32) -> f32 {
+pub fn wall_contact<Q: SolidQuery + ?Sized>(pos: Vec2, size: Vec2, solids: &Q, prefer: f32) -> f32 {
     let left = touching_wall(pos, size, solids, -1.0);
     let right = touching_wall(pos, size, solids, 1.0);
     match (left, right) {
@@ -218,6 +536,147 @@ pub fn wall_contact(pos: Vec2, size: Vec2, solids: &[SolidRect], prefer: f32) ->
         (true, false) => -1.0,
         (false, true) => 1.0,
         (false, false) => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    fn tiles(count: u32) -> Vec<SolidRect> {
+        (0..count)
+            .map(|i| SolidRect::solid(Aabb::new(i as f32 * 32.0, 0.0, 32.0, 32.0)))
+            .collect()
+    }
+
+    fn query(geometry: &Geometry, area: Aabb) -> Vec<Aabb> {
+        let mut out = Vec::new();
+        geometry.overlapping(area, &mut out);
+        out.into_iter().map(|s| s.rect).collect()
+    }
+
+    #[test]
+    fn a_query_finds_what_overlaps_it_and_leaves_out_the_rest() {
+        let geometry = Geometry::from_rects(tiles(40));
+        let found = query(&geometry, Aabb::new(100.0, 8.0, 16.0, 16.0));
+        assert_eq!(found, vec![Aabb::new(96.0, 0.0, 32.0, 32.0)]);
+        assert!(
+            query(&geometry, Aabb::new(0.0, 200.0, 16.0, 16.0)).is_empty(),
+            "nothing down there"
+        );
+    }
+
+    /// The contract the whole refactor rests on: a query is a *subsequence* of
+    /// the full list. Resolution walks whatever it is handed, so a query that
+    /// reordered — by grid cell, by bucket, by hash — would move the game while
+    /// claiming to be a lookup optimisation.
+    #[test]
+    fn a_query_is_a_subsequence_of_the_full_list() {
+        let mut geometry = Geometry::from_rects(tiles(40));
+        geometry.set_entity_rects([
+            SolidRect::one_way(Aabb::new(150.0, 10.0, 64.0, 8.0)),
+            SolidRect::solid(Aabb::new(40.0, 4.0, 20.0, 20.0)),
+        ]);
+
+        let mut everything = Vec::new();
+        geometry.all(&mut everything);
+
+        // A box over the whole world: many cells, many buckets, and every rect
+        // reachable from more than one of them.
+        let found = query(&geometry, Aabb::new(-100.0, -100.0, 1500.0, 300.0));
+        let order: Vec<usize> = found
+            .iter()
+            .map(|rect| {
+                everything
+                    .iter()
+                    .position(|s| s.rect == *rect)
+                    .expect("query returned a rect that is not in the world")
+            })
+            .collect();
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "query order diverged from list order: {order:?}"
+        );
+        assert_eq!(found.len(), everything.len(), "and found all of them");
+    }
+
+    #[test]
+    fn entity_rects_replace_rather_than_accumulate() {
+        // Well clear of the static tiles, so a hit can only be the entity's.
+        let mut geometry = Geometry::from_rects(tiles(4));
+        for x in [1000.0, 2000.0, 3000.0] {
+            geometry.set_entity_rects([SolidRect::solid(Aabb::new(x, 0.0, 16.0, 16.0))]);
+            assert_eq!(geometry.entity_rect_count(), 1);
+            assert_eq!(geometry.rects().len(), 5);
+            assert_eq!(query(&geometry, Aabb::new(x + 4.0, 4.0, 4.0, 4.0)).len(), 1);
+        }
+        // ...and the ones from earlier calls really are gone from the grid.
+        assert!(query(&geometry, Aabb::new(1004.0, 4.0, 4.0, 4.0)).is_empty());
+    }
+
+    /// Test worlds sit at negative coordinates (the mirror-symmetry sweeps
+    /// build one), and cell indices have to floor rather than truncate or the
+    /// bucket for -0.5 and the bucket for +0.5 are the same one.
+    #[test]
+    fn negative_coordinates_bucket_correctly() {
+        let geometry = Geometry::from_rects(vec![
+            SolidRect::solid(Aabb::new(-300.0, 400.0, 200.0, 32.0)),
+            SolidRect::solid(Aabb::new(-32.0, -32.0, 32.0, 32.0)),
+        ]);
+        assert_eq!(
+            query(&geometry, Aabb::new(-200.0, 410.0, 4.0, 4.0)).len(),
+            1
+        );
+        assert_eq!(query(&geometry, Aabb::new(-16.0, -16.0, 4.0, 4.0)).len(), 1);
+        assert!(query(&geometry, Aabb::new(16.0, 16.0, 4.0, 4.0)).is_empty());
+    }
+
+    /// A rect far bigger than the grid, and a query far bigger than the grid,
+    /// both have to still find each other — by whatever route.
+    #[test]
+    fn rects_and_queries_too_large_to_bucket_still_find_each_other() {
+        let huge = SolidRect::solid(Aabb::new(-1e6, -1e6, 2e6, 2e6));
+        let geometry =
+            Geometry::from_rects(vec![huge, SolidRect::solid(Aabb::new(0.0, 0.0, 8.0, 8.0))]);
+
+        assert_eq!(
+            query(&geometry, Aabb::new(500.0, 500.0, 4.0, 4.0)).len(),
+            1,
+            "a small query still finds the oversized rect"
+        );
+        assert_eq!(
+            query(&geometry, Aabb::new(-1e5, -1e5, 2e5, 2e5)).len(),
+            2,
+            "an oversized query gives up on the grid and finds everything"
+        );
+    }
+
+    /// A garbage box must fall back to scanning, not bucket itself at the
+    /// origin and come back with the wrong answer.
+    #[test]
+    fn a_non_finite_query_falls_back_to_everything() {
+        let geometry = Geometry::from_rects(tiles(4));
+        assert_eq!(
+            query(&geometry, Aabb::new(f32::NAN, 0.0, 8.0, 8.0)).len(),
+            4
+        );
+        assert_eq!(
+            query(&geometry, Aabb::new(0.0, 0.0, f32::INFINITY, 8.0)).len(),
+            4
+        );
+    }
+
+    #[test]
+    fn a_level_flattens_solids_first_then_platforms() {
+        let geometry = Geometry::from_level(
+            &[
+                Aabb::new(0.0, 0.0, 32.0, 32.0),
+                Aabb::new(32.0, 0.0, 32.0, 32.0),
+            ],
+            &[Aabb::new(0.0, 64.0, 64.0, 8.0)],
+        );
+        let kinds: Vec<bool> = geometry.rects().iter().map(|s| s.one_way).collect();
+        assert_eq!(kinds, vec![false, false, true]);
     }
 }
 

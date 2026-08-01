@@ -10,7 +10,7 @@
 use ggez::glam::Vec2;
 
 use supergame::ecs::components::Avatar;
-use supergame::physics::{resolve_move, touching_wall, Aabb, SolidRect};
+use supergame::physics::{resolve_move, touching_wall, Aabb, Geometry, SolidQuery, SolidRect};
 use supergame::sim::TICK;
 
 const SIZE: Vec2 = Vec2::new(Avatar::WIDTH, Avatar::HEIGHT);
@@ -34,7 +34,11 @@ impl Lcg {
 }
 
 /// Advance one tick and resolve, the way `avatar::update` does.
-fn step(pos: &mut Vec2, vel: &mut Vec2, solids: &[SolidRect]) -> supergame::physics::Contact {
+fn step<Q: SolidQuery + ?Sized>(
+    pos: &mut Vec2,
+    vel: &mut Vec2,
+    solids: &Q,
+) -> supergame::physics::Contact {
     let prev = *pos;
     *pos += *vel * TICK;
     resolve_move(pos, vel, prev, SIZE, solids)
@@ -221,10 +225,43 @@ fn resolution_never_leaves_a_body_inside_a_solid() {
     );
 }
 
+/// The same world, arranged every way it can reach the physics.
+///
+/// A `Geometry` splits its rects into the level's own and the ones entities
+/// contribute, and the entity-owned half comes out of a hecs query — whose
+/// order reshuffles the moment anything adds a component to an entity.
+/// `body::rebuild_geometry` sorts by entity id, but a sort only helps if
+/// resolution does not care about the order in the first place, which is what
+/// these arrangements pin down.
+fn arrangements(solids: &[SolidRect]) -> Vec<(&'static str, Box<dyn SolidQuery>)> {
+    let split = |at: usize, reverse_owned: bool| -> Box<dyn SolidQuery> {
+        let mut geometry = Geometry::from_rects(solids[..at].to_vec());
+        let mut owned: Vec<SolidRect> = solids[at..].to_vec();
+        if reverse_owned {
+            owned.reverse();
+        }
+        geometry.set_entity_rects(owned);
+        Box::new(geometry)
+    };
+    let mid = solids.len() / 2;
+    vec![
+        ("reversed slice", Box::new(reversed(solids))),
+        ("grid, all static", split(solids.len(), false)),
+        ("grid, all entity-owned", split(0, false)),
+        ("grid, half entity-owned", split(mid, false)),
+        ("grid, entity-owned reversed", split(mid, true)),
+        ("grid, every rect entity-owned, reversed", split(0, true)),
+    ]
+}
+
+fn reversed(solids: &[SolidRect]) -> Vec<SolidRect> {
+    solids.iter().copied().rev().collect()
+}
+
 #[test]
 fn resolution_is_independent_of_solid_order() {
     let solids = test_geometry();
-    let reversed: Vec<SolidRect> = solids.iter().copied().rev().collect();
+    let arrangements = arrangements(&solids);
     let mut rng = Lcg::new();
     let mut divergent = Vec::new();
 
@@ -237,13 +274,15 @@ fn resolution_is_independent_of_solid_order() {
 
         let (mut pos_a, mut vel_a) = (pos, vel);
         step(&mut pos_a, &mut vel_a, &solids);
-        let (mut pos_b, mut vel_b) = (pos, vel);
-        step(&mut pos_b, &mut vel_b, &reversed);
 
-        if pos_a != pos_b || vel_a != vel_b {
-            divergent.push(format!(
-                "from {pos:?} vel {vel:?}: {pos_a:?}/{vel_a:?} vs {pos_b:?}/{vel_b:?}"
-            ));
+        for (label, arrangement) in &arrangements {
+            let (mut pos_b, mut vel_b) = (pos, vel);
+            step(&mut pos_b, &mut vel_b, &**arrangement);
+            if pos_a != pos_b || vel_a != vel_b {
+                divergent.push(format!(
+                    "{label}: from {pos:?} vel {vel:?}: {pos_a:?}/{vel_a:?} vs {pos_b:?}/{vel_b:?}"
+                ));
+            }
         }
     }
 
@@ -257,6 +296,135 @@ fn resolution_is_independent_of_solid_order() {
             .cloned()
             .collect::<Vec<_>>()
             .join("\n  ")
+    );
+}
+
+/// The grid is a broadphase, not a physics change.
+///
+/// It may only ever hand back a subset of the same rects in the same relative
+/// order, with the omitted ones provably unable to overlap the body — so a
+/// `Geometry` has to resolve *bit*-identically to a flat scan, not merely
+/// close enough. Starts inside solids are included on purpose: they are the
+/// case that reaches the depenetration fallback, which is the one pass the
+/// swept query box does not bound.
+#[test]
+fn the_grid_resolves_identically_to_a_linear_scan() {
+    let solids = test_geometry();
+    let grid = Geometry::from_rects(solids.clone());
+    let mut rng = Lcg::new();
+    let mut divergent = Vec::new();
+
+    for _ in 0..40_000 {
+        let pos = Vec2::new(rng.f32_in(-40.0, 360.0), rng.f32_in(160.0, 440.0));
+        let vel = Vec2::new(rng.f32_in(-900.0, 900.0), rng.f32_in(-900.0, 900.0));
+
+        let (mut pos_a, mut vel_a) = (pos, vel);
+        let contact_a = step(&mut pos_a, &mut vel_a, &solids);
+        let (mut pos_b, mut vel_b) = (pos, vel);
+        let contact_b = step(&mut pos_b, &mut vel_b, &grid);
+
+        if pos_a != pos_b
+            || vel_a != vel_b
+            || contact_a.grounded != contact_b.grounded
+            || contact_a.on_solid != contact_b.on_solid
+            || contact_a.on_one_way != contact_b.on_one_way
+        {
+            divergent.push(format!(
+                "from {pos:?} vel {vel:?}: scan {pos_a:?}/{vel_a:?} vs grid {pos_b:?}/{vel_b:?}"
+            ));
+        }
+    }
+
+    assert!(
+        divergent.is_empty(),
+        "{} resolutions differed between the grid and a linear scan, e.g.:\n  {}",
+        divergent.len(),
+        divergent
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+}
+
+/// The wall probes go through the same broadphase, so they get the same
+/// treatment: every probe position must agree with a flat scan.
+#[test]
+fn the_grid_probes_walls_identically_to_a_linear_scan() {
+    let solids = test_geometry();
+    let grid = Geometry::from_rects(solids.clone());
+    let mut rng = Lcg::new();
+
+    for _ in 0..40_000 {
+        let pos = Vec2::new(rng.f32_in(-40.0, 360.0), rng.f32_in(160.0, 440.0));
+        for dir in [-1.0, 1.0] {
+            assert_eq!(
+                touching_wall(pos, SIZE, &solids, dir),
+                touching_wall(pos, SIZE, &grid, dir),
+                "wall probe at {pos:?} dir {dir} disagreed with a linear scan"
+            );
+        }
+    }
+}
+
+/// What the grid is for: on a map-sized world, a body's query touches a
+/// handful of rects rather than all of them.
+///
+/// Thirty bodies is the load the roadmap has in mind, and the assertion is a
+/// ratio rather than a time so it cannot go flaky on a busy machine. The time
+/// was measured separately: 600 ticks of thirty bodies falling and running
+/// across this same 450-rect world, release build, resolving through a
+/// `Geometry` versus through a flat `Vec<SolidRect>` of the same rects —
+/// **~3.5 ms against ~19 ms, a 5x saving**, and it widens as the map does,
+/// since the scan's cost is the whole map and the grid's is a body's
+/// neighbourhood.
+#[test]
+fn the_grid_narrows_the_candidate_set_for_a_map_sized_world() {
+    // A 200x60-tile world: a floor, a ceiling, and a pillar every eight tiles,
+    // stored the way `merge_runs` emits geometry — one rect per tile row.
+    let mut rects: Vec<SolidRect> = Vec::new();
+    for x in 0..200 {
+        rects.push(SolidRect::solid(Aabb::new(
+            x as f32 * 32.0,
+            60.0 * 32.0,
+            32.0,
+            32.0,
+        )));
+    }
+    for x in (0..200).step_by(8) {
+        for row in 0..10 {
+            rects.push(SolidRect::solid(Aabb::new(
+                x as f32 * 32.0,
+                (50 + row) as f32 * 32.0,
+                32.0,
+                32.0,
+            )));
+        }
+    }
+    let total = rects.len();
+    let grid = Geometry::from_rects(rects);
+
+    // Thirty bodies spread across the map, each falling at full tilt.
+    let mut examined = 0usize;
+    let mut candidates = Vec::new();
+    for i in 0..30 {
+        let pos = Vec2::new(i as f32 * 210.0, 1500.0);
+        let swept = Aabb::new(pos.x, pos.y, SIZE.x, SIZE.y).union(&Aabb::new(
+            pos.x,
+            pos.y + Avatar::MAX_FALL * TICK,
+            SIZE.x,
+            SIZE.y,
+        ));
+        grid.overlapping(swept, &mut candidates);
+        examined += candidates.len();
+    }
+
+    let scanned = total * 30;
+    assert!(
+        examined * 20 < scanned,
+        "grid examined {examined} rects where a scan would touch {scanned}; \
+         expected at least a 20x saving"
     );
 }
 

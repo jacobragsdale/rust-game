@@ -29,7 +29,7 @@ use crate::ecs::components::{
 };
 use crate::ecs::spawn;
 use crate::level::LevelData;
-use crate::physics::{Aabb, SolidRect};
+use crate::physics::{Aabb, Geometry};
 use crate::systems::input::PlayerInput;
 use crate::systems::{animation, avatar, body, combat, npc};
 
@@ -49,8 +49,10 @@ const HITSTOP_TICKS: u32 = 4;
 pub struct Sim {
     pub world: World,
     pub level: LevelData,
-    /// Solids + one-way platforms, pre-flattened for the physics pass.
-    pub geometry: Vec<SolidRect>,
+    /// Everything a body can collide with: the level's solids and one-way
+    /// platforms, plus whatever colliders entities own this tick. Rebuilt at
+    /// one point per tick — see [`Sim::step`].
+    pub geometry: Geometry,
     /// Every attack's timing and effect, shared by every attacker.
     pub attacks: Arc<AttackTable>,
     /// Ticks elapsed since the sim was created.
@@ -127,9 +129,7 @@ impl Sim {
         clip_sets: &HashMap<String, Arc<ClipSet>>,
         attacks: Arc<AttackTable>,
     ) -> Self {
-        let mut geometry: Vec<SolidRect> =
-            level.solids.iter().map(|&r| SolidRect::solid(r)).collect();
-        geometry.extend(level.one_way.iter().map(|&r| SolidRect::one_way(r)));
+        let geometry = Geometry::from_level(&level.solids, &level.one_way);
 
         let clips_for = |kind: &str| -> Arc<ClipSet> {
             clip_sets
@@ -155,7 +155,7 @@ impl Sim {
             .expect("level entities were validated on load");
         }
 
-        Sim {
+        let mut sim = Sim {
             world,
             level,
             geometry,
@@ -163,7 +163,12 @@ impl Sim {
             tick: 0,
             hitstop: 0,
             events: Vec::new(),
-        }
+        };
+        // Colliders the map placed exist from tick 0, not from the first
+        // rebuild inside `step` — otherwise the first tick's controllers probe
+        // a world with holes in it.
+        body::rebuild_geometry(&mut sim.geometry, &sim.world);
+        sim
     }
 
     /// Advance one fixed tick.
@@ -172,6 +177,15 @@ impl Sim {
     /// every body. New systems slot into the phase they belong to rather than
     /// being appended here, which is what keeps this readable as the game
     /// grows past one entity.
+    ///
+    /// **Geometry is rebuilt exactly once per tick**, by
+    /// [`body::rebuild_geometry`] on the line before `body::move_bodies`:
+    /// after every controller has decided and before anything has moved. A
+    /// system that owns a collider — a fire on a cycle, a moving platform —
+    /// therefore belongs in the decide phase, and its collider is picked up
+    /// the same tick. Everything from that line to the end of movement sees
+    /// one unchanging world; `avatar::control` and `npc::think` probe the
+    /// geometry as it stood when they ran, which is the previous rebuild.
     pub fn step(&mut self, input: PlayerInput) {
         self.events.clear();
 
@@ -199,6 +213,9 @@ impl Sim {
             &mut self.events,
         );
         npc::think(&mut self.world, &self.geometry, &mut self.events);
+
+        // The one point in the tick where the world's geometry changes.
+        body::rebuild_geometry(&mut self.geometry, &self.world);
         body::move_bodies(&mut self.world, &self.geometry, TICK);
         avatar::after_move(&mut self.world, &self.level, input, &mut self.events);
 
@@ -345,7 +362,7 @@ impl Sim {
             // The player should never end a tick meaningfully inside a solid.
             // Resting contact is not penetration, hence the tolerance.
             let body = Aabb::new(pos.0.x, pos.0.y, size.0.x, size.0.y);
-            for solid in &self.geometry {
+            for solid in self.geometry.rects() {
                 if solid.one_way {
                     continue;
                 }
@@ -525,6 +542,56 @@ mod tests {
         let sim = Sim::fixture(&["..........", "..P..==...", ".....^^...", "##########"]);
         assert_eq!(sim.level.one_way.len(), 1);
         assert_eq!(sim.level.hazards.len(), 1);
+    }
+
+    /// Geometry an entity owns is geometry: it stops the player like a tile
+    /// does, it appears the tick the entity does, and it is gone the tick the
+    /// entity is. Everything M7 places — fire, moving platforms, swinging
+    /// hazards — is this test with a system driving the position.
+    #[test]
+    fn an_entity_collider_blocks_the_player_and_stops_when_it_goes_away() {
+        use crate::ecs::components::Collider;
+
+        let run = PlayerInput {
+            right: true,
+            ..Default::default()
+        };
+        let mut sim = Sim::fixture(&["................", "..P.............", "################"]);
+        step_until(&mut sim, 30, PlayerInput::default(), |s| s.probe().grounded);
+        let statics = sim.geometry.rects().len();
+
+        // A wall drops in mid-run, well to the player's right.
+        let wall = sim.world.spawn((
+            Position(Vec2::new(250.0, 0.0)),
+            Collider::solid(Vec2::new(32.0, 64.0)),
+        ));
+
+        for _ in 0..120 {
+            sim.step(run);
+        }
+        assert_eq!(
+            sim.geometry.entity_rect_count(),
+            1,
+            "the wall joined the geometry"
+        );
+        assert_eq!(sim.geometry.rects().len(), statics + 1);
+        assert_eq!(
+            sim.probe().x + Avatar::WIDTH,
+            250.0,
+            "ran into the wall and stopped flush against it"
+        );
+
+        // Take it away and the same run carries straight through.
+        sim.world.despawn(wall).unwrap();
+        for _ in 0..120 {
+            sim.step(run);
+        }
+        assert_eq!(sim.geometry.entity_rect_count(), 0);
+        assert!(
+            sim.probe().x > 250.0,
+            "walked through where the wall used to be, ended at {}",
+            sim.probe().x
+        );
     }
 
     // --- events ---------------------------------------------------------
