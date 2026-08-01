@@ -1,0 +1,47 @@
+// Moving-platform testbed — the map tapes/platform_ride.tape runs against.
+//
+// Two ledges with a spiked pit between them, and one platform ferrying across.
+// The pit is lethal on purpose: `expect no died` is then a real assertion that
+// the ride worked, rather than a statement that falling in was survivable.
+//
+// A new file rather than an addition to testbed_platform.ron, which is frozen —
+// its tapes encode its exact pixels. Treat this one as a fixture too.
+//
+// Legend: '#' solid  '^' spikes  'P' spawn.  Moving platforms have no grid
+// character: a character can say where something is but not where it goes, so
+// they are authored as `Platform(...)` entries below.
+//
+// 24x12 tiles at 32px = 768x384 world pixels.
+//
+//   spawn        col 2, row 7      world (70, 222), feet on the ledge at y=256
+//   left ledge   cols 0-4          surface y=256, x 0..160
+//   right ledge  cols 19-23        surface y=256, x 608..768
+//   pit          cols 5-18         spikes at y 336..352, x 160..608
+//   platform     3 tiles solid, top y=256 — level with both ledges, so it is
+//                walked onto and off rather than jumped between.
+//                from (5, 8) = x 160, docked against the left ledge
+//                to   (16, 8) = x 512, right edge 608, flush with the right
+//                88 px/s over 352px = 240 ticks a leg, 480 ticks a round trip.
+//                phase 420 puts it back at the left ledge on tick 60, which is
+//                after the player has walked to the edge and stopped — the
+//                whole point being that the ride is boarded, not jumped onto.
+Level(
+    tileset: "castle",
+    grid: [
+        "########################",
+        "#......................#",
+        "#......................#",
+        "#......................#",
+        "#......................#",
+        "#......................#",
+        "#......................#",
+        "#.P....................#",
+        "#####..............#####",
+        "#####..............#####",
+        "#####^^^^^^^^^^^^^^#####",
+        "########################",
+    ],
+    entities: [
+        Platform(from: (5, 8), to: (16, 8), tiles: 3, speed: 88.0, phase: 420),
+    ],
+)

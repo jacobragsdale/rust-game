@@ -225,11 +225,19 @@ do not move what is already there.
 | `testbed_knight.ron` | patrolling: a knight on a ledge, with the player on a shelf below and out of its sight |
 | `testbed_arena.ron` | fighting: a small walled room with a knight and nowhere to run |
 | `testbed_fire.ron` | fire: two alternating fires on a flat corridor, one to cross while it is out and one to stand in until it lights |
+| `testbed_mover.ron` | moving platforms: two ledges with a spiked pit between them and one platform ferrying across |
 
 `testbed_knight.ron` keeps the player two tiles below the knight's ledge on
 purpose. Once the knight became hostile, a player standing on the same ledge
 got chased, hit and knocked into the pit — correct behaviour, and useless for
 testing a patrol route.
+
+`testbed_mover.ron`'s pit is spiked on purpose too: if the ride fails in any
+way the player lands in it, so `expect no died` is the whole crossing in one
+line. The platform's path is level with both ledges, so the crossing is walked
+onto and off rather than jumped between — which is what lets the tape assert
+`expect no jumped` and `expect landed == 1` and thereby claim that contact
+never flickered off, not even for a tick, while the ground was moving.
 
 `castle_spawn.tape` is the exception: it runs on the real map but asserts only
 that the player spawns on solid ground and is not standing in a hazard, so

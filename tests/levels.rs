@@ -11,6 +11,7 @@ use ggez::glam::Vec2;
 
 use supergame::assets::{Assets, StatBlock, StatTable};
 use supergame::level::LevelData;
+use supergame::physics::Aabb;
 
 fn map_paths() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/maps");
@@ -74,8 +75,6 @@ fn every_one_way_platform_has_room_to_stand_on() {
 /// depenetration fallback on the first tick, which looks like a teleport.
 #[test]
 fn every_spawn_point_is_clear_of_solid_geometry() {
-    use supergame::physics::Aabb;
-
     let mut assets = Assets::new();
     let mut problems: Vec<String> = Vec::new();
 
@@ -96,4 +95,73 @@ fn every_spawn_point_is_clear_of_solid_geometry() {
     }
 
     assert!(problems.is_empty(), "{}", problems.join("\n  "));
+}
+
+/// A moving platform whose path runs into the level is the map-authoring bug
+/// that reads as a physics bug.
+///
+/// Two things go wrong when it happens, and neither looks like a map problem
+/// from inside the game. The platform disappears into a wall, which looks like
+/// geometry failing to render. And it can wedge a body between itself and that
+/// wall with nowhere legal to put it — the crush case in
+/// `tests/physics_diagnostics.rs`, which the physics survives but which is
+/// never what an author meant. A platform is a ride; a ride that ends inside a
+/// wall is a mistake in the map, and this is where the repo catches those.
+///
+/// The path is sampled rather than bounded by the union of its ends, so a
+/// diagonal path is checked where it actually goes rather than over the whole
+/// rectangle it spans.
+#[test]
+fn every_moving_platform_has_a_path_clear_of_the_level() {
+    /// Enough samples that nothing the size of a tile can hide between two of
+    /// them on any path a map can author.
+    const SAMPLES: u32 = 256;
+
+    let mut assets = Assets::new();
+    let mut problems: Vec<String> = Vec::new();
+
+    for path in map_paths() {
+        let level = LevelData::load(&path, &mut assets)
+            .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+
+        for (index, mover) in level.movers.iter().enumerate() {
+            for sample in 0..=SAMPLES {
+                let at = mover.from.lerp(mover.to, sample as f32 / SAMPLES as f32);
+                let box_ = Aabb::new(at.x, at.y, mover.size.x, mover.size.y);
+                if let Some(hit) = level.solids.iter().find(|s| box_.overlaps(s)) {
+                    problems.push(format!(
+                        "{name}: platform {index} ({:.0}, {:.0}) -> ({:.0}, {:.0}) passes \
+                         through solid {hit:?} at ({:.0}, {:.0})",
+                        mover.from.x, mover.from.y, mover.to.x, mover.to.y, at.x, at.y
+                    ));
+                    break;
+                }
+            }
+
+            // ...and the spawn point is not somewhere the platform sweeps
+            // through, for the same reason a spawn inside a wall is rejected.
+            let spawn = level.player_spawn;
+            let body = body();
+            let occupied = Aabb::new(spawn.x, spawn.y, body.x, body.y);
+            for sample in 0..=SAMPLES {
+                let at = mover.from.lerp(mover.to, sample as f32 / SAMPLES as f32);
+                if occupied.overlaps(&Aabb::new(at.x, at.y, mover.size.x, mover.size.y)) {
+                    problems.push(format!(
+                        "{name}: platform {index} sweeps through the player spawn \
+                         ({:.0}, {:.0})",
+                        spawn.x, spawn.y
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "{} bad platform path(s):\n  {}",
+        problems.len(),
+        problems.join("\n  ")
+    );
 }

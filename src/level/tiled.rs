@@ -8,10 +8,13 @@ use std::path::Path;
 use anyhow::Context as _;
 use ggez::glam::Vec2;
 
-use crate::ecs::components::Avatar;
 use crate::level::{merge_runs, LevelData};
 
-pub fn load(path: &Path) -> anyhow::Result<LevelData> {
+/// Load a Tiled map. `player` is the player's collider box: the `.tmx` format
+/// has no spawn marker, so [`find_spawn`] has to stand a body of that size on a
+/// ledge, and it runs before any entity exists to ask. See
+/// [`crate::level::LevelData::load`].
+pub fn load(path: &Path, player: Vec2) -> anyhow::Result<LevelData> {
     let map = tiled::Loader::new()
         .load_tmx_map(path)
         .with_context(|| format!("failed to load {}", path.display()))?;
@@ -69,7 +72,7 @@ pub fn load(path: &Path) -> anyhow::Result<LevelData> {
     }
 
     let solids = merge_runs(&solid_cells, width, height, tile_size, tile_size, 0.0);
-    let player_spawn = find_spawn(&solid_cells, width, height, tile_size)
+    let player_spawn = find_spawn(&solid_cells, width, height, tile_size, player)
         .context("no standable spawn cell found")?;
 
     Ok(LevelData {
@@ -83,22 +86,29 @@ pub fn load(path: &Path) -> anyhow::Result<LevelData> {
         one_way: Vec::new(),
         hazards: Vec::new(),
         fires: Vec::new(),
+        movers: Vec::new(),
         player_spawn,
         entities: Vec::new(),
     })
 }
 
-/// The tmx format has no spawn marker; stand the player on the lowest ledge
-/// in the leftmost column that has one.
-fn find_spawn(solid: &[bool], width: u32, height: u32, tile_size: f32) -> Option<Vec2> {
+/// The tmx format has no spawn marker; stand a body of `player` size on the
+/// lowest ledge in the leftmost column that has one.
+fn find_spawn(
+    solid: &[bool],
+    width: u32,
+    height: u32,
+    tile_size: f32,
+    player: Vec2,
+) -> Option<Vec2> {
     for x in 1..width {
         for y in (0..height - 1).rev() {
             let open = !solid[(y * width + x) as usize];
             let floor_below = solid[((y + 1) * width + x) as usize];
             if open && floor_below {
                 return Some(Vec2::new(
-                    x as f32 * tile_size + (tile_size - Avatar::WIDTH) / 2.0,
-                    (y + 1) as f32 * tile_size - Avatar::HEIGHT,
+                    x as f32 * tile_size + (tile_size - player.x) / 2.0,
+                    (y + 1) as f32 * tile_size - player.y,
                 ));
             }
         }
@@ -115,9 +125,18 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/graphics/levels/castle_level.tmx")
     }
 
+    /// The player's real box, from the shipped table — the same one
+    /// `LevelData::load` threads in.
+    fn player() -> Vec2 {
+        crate::assets::StatTable::shipped()
+            .get("player")
+            .unwrap()
+            .size()
+    }
+
     #[test]
     fn legacy_castle_level_loads() {
-        let level = load(&castle_map_path()).unwrap();
+        let level = load(&castle_map_path(), player()).unwrap();
 
         assert_eq!(level.width, 50);
         assert_eq!(level.height, 20);

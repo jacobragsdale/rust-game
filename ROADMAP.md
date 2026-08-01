@@ -257,26 +257,46 @@ survive save and load.
 
 **Size:** medium. **Depends on:** M1. **Parallelizable** — independent of the
 combat/dialogue chain, so it can slot in wherever there is appetite.
+**In progress:** entity colliders, the broadphase, fire and moving platforms
+have landed; swinging hazards (L-4) remain.
 
 Fire (a hazard that toggles on a cycle), moving platforms, and swinging
 hazards. All three need the same thing: **geometry that changes every tick**.
 
 This is the deepest change to the physics layer on the roadmap:
 
-- Colliders owned by entities, not just flattened from the level at load.
-- **Rider carry** — standing on a moving platform has to transport you. This is
-  the genuinely tricky part and the source of most platformer physics bugs;
-  budget accordingly and write property tests, not just examples.
-- A broadphase (uniform grid). The current linear scan over `Vec<SolidRect>` is
-  fine for one body and wasteful for thirty NPCs plus projectiles on a large
-  map. Introduce the interface early even if the naive implementation stays.
+- ✅ Colliders owned by entities, not just flattened from the level at load.
+- ✅ **Rider carry** — standing on a moving platform has to transport you. This
+  was the genuinely tricky part and the source of most platformer physics bugs.
+- ✅ A broadphase (uniform grid), behind `SolidQuery`.
 
-Fire is the cheap one — a hazard rect with a schedule — and is a good first
-slice to prove entity-owned colliders before taking on rider carry.
+Fire was the cheap one — a hazard rect with a schedule — and proved
+entity-owned colliders before rider carry was attempted.
 
-**Exit criteria:** a tape rides a moving platform across a gap and arrives; the
-property sweeps in `tests/physics_diagnostics.rs` still pass with dynamic
-geometry in the mix.
+**Exit criteria:** ✅ `tapes/platform_ride.tape` rides a platform across a
+spiked gap and arrives; the property sweeps in `tests/physics_diagnostics.rs`
+pass with dynamic geometry in the mix, and six new ones cover carry itself.
+
+Notes from rider carry, for L-4 and anything else that owns a collider:
+
+- **A mover's position is a closed form of `Sim::tick`**, like `Schedule`, not
+  an integration. A counter drifts, and drifts differently across the ticks
+  hitstop skips; `Mover::at(t)` is the same answer forever. The leg is a whole
+  number of *ticks* rather than a speed, so the period is an integer and
+  `at(t) == at(t + period)` is a fact rather than an approximation.
+- **Ordering is the whole feature.** `mover::advance` is the last thing before
+  `rebuild_geometry`: after the controllers (so drop-through is visible), before
+  the rebuild (so a rider does not collide against last tick's rect), and before
+  `move_bodies` (so the ride and the rider's own velocity resolve together).
+  `Sim::step`'s doc comment says so, and the sweeps depend on it.
+- **Carry adds to position, and leaving inherits nothing.** Velocity carry leaks
+  the platform's momentum into the jump arc; a body with upward velocity is not
+  a passenger, so a jump off a platform is the same jump either way.
+- **Crush has no clean answer and does not need one.** A body wedged between an
+  advancing platform and a wall has nowhere legal to be. The depenetration
+  fallback keeps it from tunnelling and from staying stuck, and
+  `tests/levels.rs` refuses to ship a map whose platform path dead-ends into
+  geometry, which is the only way an author reaches that state on purpose.
 
 ## M8 — Content: new maps
 
@@ -336,7 +356,7 @@ serves, not after.
 | M4 Items | inventory in the snapshot, pickup/equip events |
 | M5 Dialogue | choice selection in tapes, dialogue events |
 | M6 Quests | quest flags as snapshot globals |
-| M7 Map features | property tests for dynamic geometry and rider carry |
+| ~~M7 Map features~~ | ~~property tests for dynamic geometry and rider carry~~ (six sweeps in `tests/physics_diagnostics.rs`) |
 | M8 Content | `tests/data.rs` cross-reference validation, per-map smoke tapes |
 
 ## Known drift in PLAN.md

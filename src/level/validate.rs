@@ -97,7 +97,6 @@ impl LevelData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::components::Avatar;
 
     fn level(solids: Vec<Aabb>, one_way: Vec<Aabb>) -> LevelData {
         let mut level = LevelData::empty(20, 10, 32.0);
@@ -106,8 +105,14 @@ mod tests {
         level
     }
 
+    /// The player's real box, from `assets/data/stats.ron`. These tests are
+    /// about whether the shipped player fits through shipped geometry, so the
+    /// box has to be the shipped one.
     fn body() -> Vec2 {
-        Vec2::new(Avatar::WIDTH, Avatar::HEIGHT)
+        crate::assets::StatTable::shipped()
+            .get("player")
+            .expect("`player` has a stat block")
+            .size()
     }
 
     #[test]

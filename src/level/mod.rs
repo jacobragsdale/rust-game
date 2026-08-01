@@ -51,6 +51,31 @@ pub struct FireSpawn {
     pub phase: u32,
 }
 
+/// A moving platform the map places: where its box travels, how big it is, and
+/// how fast.
+///
+/// Apart from [`EntitySpawn`] for the reason [`FireSpawn`] is: that list is
+/// addressed by spawn index, so a platform dropped into it would renumber every
+/// NPC after it in every tape running on the map. A platform is also not a
+/// `kind` anything looks art up for — it is geometry with a path, and
+/// [`crate::systems::mover::spawn_movers`] is all it needs.
+#[derive(Clone, Copy, Debug)]
+pub struct MoverSpawn {
+    /// Top-left of the platform's box at one end of its path, world pixels.
+    pub from: Vec2,
+    /// Top-left at the other end.
+    pub to: Vec2,
+    pub size: Vec2,
+    /// Travel speed in px/s. Rounded to a whole number of ticks per leg when
+    /// the entity is built — see [`crate::systems::mover::leg_ticks`].
+    pub speed: f32,
+    /// A one-way platform can be jumped through from below and dropped through
+    /// with `down`, moving or not.
+    pub one_way: bool,
+    /// Offset into the cycle, so two platforms can be out of step.
+    pub phase: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct LevelData {
     /// Name of the tileset definition (`assets/data/tilesets/{name}.ron`).
@@ -72,16 +97,28 @@ pub struct LevelData {
     /// they are not static: each becomes an entity that owns its collider and
     /// hands it to the geometry only while lit.
     pub fires: Vec<FireSpawn>,
+    /// Moving platforms, which are solids that are somewhere new every tick.
+    /// Not in `solids` for the same reason fires are not in `hazards`.
+    pub movers: Vec<MoverSpawn>,
     pub player_spawn: Vec2,
     #[allow(dead_code)]
     pub entities: Vec<EntitySpawn>,
 }
 
 impl LevelData {
+    /// Load a map, in whichever format it is written.
+    ///
+    /// Both loaders need the player's collider box, and neither can ask an
+    /// entity for it: a map's spawn point is resolved while the map is being
+    /// read, which is long before anything is spawned. So the box is looked up
+    /// here, from the same `assets/data/stats.ron` every other number comes
+    /// from, and threaded down — rather than living as a `const` mirror of the
+    /// table that has to be kept true by hand (ticket H-3b).
     pub fn load(path: &Path, assets: &mut Assets) -> anyhow::Result<LevelData> {
+        let player = assets.stats()?.get("player")?.size();
         match path.extension().and_then(|e| e.to_str()) {
-            Some("ron") => ascii::load(path, assets),
-            Some("tmx") => tiled::load(path),
+            Some("ron") => ascii::load(path, assets, player),
+            Some("tmx") => tiled::load(path, player),
             other => anyhow::bail!("unsupported map format: {other:?} ({})", path.display()),
         }
     }
@@ -102,6 +139,7 @@ impl LevelData {
             one_way: vec![],
             hazards: vec![],
             fires: vec![],
+            movers: vec![],
             player_spawn: Vec2::ZERO,
             entities: vec![],
         }

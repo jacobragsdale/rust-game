@@ -34,7 +34,7 @@ use crate::level::LevelData;
 use crate::physics::{Aabb, Geometry};
 use crate::sim::rng::Rng;
 use crate::systems::input::PlayerInput;
-use crate::systems::{animation, avatar, body, combat, npc, spell};
+use crate::systems::{animation, avatar, body, combat, mover, npc, spell};
 
 pub use event::GameEvent;
 pub use probe::{NpcProbe, Probe};
@@ -209,9 +209,10 @@ impl Sim {
             )
             .expect("level entities were validated on load");
         }
-        // Fires last, so adding one to a map cannot renumber the NPCs that
-        // tapes and traces address by spawn index.
+        // Fires and platforms last, so adding one to a map cannot renumber the
+        // NPCs that tapes and traces address by spawn index.
         crate::systems::hazard::spawn_fires(&mut world, &level);
+        crate::systems::mover::spawn_movers(&mut world, &level);
 
         let mut sim = Sim {
             world,
@@ -260,6 +261,17 @@ impl Sim {
     /// unchanging world; `avatar::control` and `npc::think` probe the geometry
     /// as it stood when they ran, which is the previous rebuild.
     ///
+    /// **[`mover::advance`] is the last thing before that rebuild**, and its
+    /// position in this list is a decision, not an accident. Moving platforms
+    /// have to be somewhere new *before* the geometry is rebuilt, or a rider
+    /// would collide against last tick's rect and sink; they have to carry
+    /// their riders *before* `move_bodies`, so that a ride and the rider's own
+    /// velocity are resolved by one pass; and they have to run *after*
+    /// `avatar::control`, so that pressing down to drop through a one-way
+    /// platform is visible here as `Body::ignore_one_way` on the tick it was
+    /// pressed. The reasoning in full is in [`crate::systems::mover`]; the
+    /// tests that fail if this line moves are named there.
+    ///
     /// The rebuild covers hazards as well as solids, which is why
     /// `avatar::after_move` is handed the geometry rather than the level: a
     /// spike and a lit fire are one set of boxes by the time anything dies to
@@ -301,6 +313,10 @@ impl Sim {
             &mut self.events,
         );
         npc::think(&mut self.world, &self.geometry, &mut self.events);
+
+        // Last decision of the tick: platforms go where this tick puts them and
+        // take their riders with them. Ordered here deliberately — see above.
+        mover::advance(&mut self.world, self.tick);
 
         // The one point in the tick where the world's geometry changes.
         body::rebuild_geometry(&mut self.geometry, &self.world);

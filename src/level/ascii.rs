@@ -8,6 +8,10 @@
 //!   `.` / ` ` empty    `P` player spawn        `K` knight (entity)
 //!   `F` fire (a hazard on the default cycle; author the timing with a
 //!       `Fire(cell: (x, y), period: …, duty: …, phase: …)` entry instead)
+//!
+//! Geometry that moves has no grid character, because a character can say where
+//! something is but not where it goes. A moving platform is a
+//! `Platform(from: (x, y), to: (x, y), …)` entry in the entity list.
 
 use std::fs;
 use std::path::Path;
@@ -16,9 +20,8 @@ use anyhow::Context as _;
 use ggez::glam::Vec2;
 use serde::Deserialize;
 
-use crate::assets::{Assets, AutotileRules};
-use crate::ecs::components::Avatar;
-use crate::level::{merge_runs, EntitySpawn, FireSpawn, LevelData};
+use crate::assets::{Assets, AutotileRules, StatTable};
+use crate::level::{merge_runs, EntitySpawn, FireSpawn, LevelData, MoverSpawn};
 
 /// Spelled `Level(...)` in the map files.
 #[derive(Debug, Deserialize)]
@@ -52,6 +55,23 @@ enum EntityDef {
         #[serde(default)]
         phase: u32,
     },
+    /// A platform shuttling between two cells. `from` and `to` are the cell
+    /// its box's top-left sits in at either end of the path; the box is
+    /// `tiles` tiles wide, and as thick as a one-way strip or a whole tile
+    /// depending on `one_way`. Everything but the two ends has a default, so
+    /// `Platform(from: (4, 8), to: (12, 8))` is a complete platform.
+    Platform {
+        from: (u32, u32),
+        to: (u32, u32),
+        #[serde(default = "default_platform_tiles")]
+        tiles: u32,
+        #[serde(default = "default_platform_speed")]
+        speed: f32,
+        #[serde(default)]
+        one_way: bool,
+        #[serde(default)]
+        phase: u32,
+    },
 }
 
 fn default_fire_period() -> u32 {
@@ -62,13 +82,28 @@ fn default_fire_duty() -> u32 {
     crate::systems::hazard::FIRE_DUTY
 }
 
-pub fn load(path: &Path, assets: &mut Assets) -> anyhow::Result<LevelData> {
+/// Three tiles: wide enough to stand on comfortably and to land on from a
+/// jump, narrow enough to read as a platform rather than as moving floor.
+fn default_platform_tiles() -> u32 {
+    3
+}
+
+/// 60 px/s — under half a walk. A platform is a ride, not a race, and a slow
+/// one is legible: you can watch it, decide, and step on.
+fn default_platform_speed() -> f32 {
+    60.0
+}
+
+/// Load an ASCII map. `player` is the player's collider box, which the spawn
+/// resolver needs and which no entity exists yet to supply — see
+/// [`crate::level::LevelData::load`].
+pub fn load(path: &Path, assets: &mut Assets, player: Vec2) -> anyhow::Result<LevelData> {
     let text =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let def: LevelDef =
         ron::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))?;
     let tileset = assets.tileset(&def.tileset)?;
-    build(def, tileset.tile_size as f32, &tileset.rules)
+    build(def, tileset.tile_size as f32, &tileset.rules, player)
         .with_context(|| format!("invalid map {}", path.display()))
 }
 
@@ -91,13 +126,20 @@ const FIXTURE_RULES: AutotileRules = AutotileRules {
 
 /// Build a level from an ASCII grid with placeholder tile art. See
 /// [`crate::level::LevelData::from_grid`].
+///
+/// The player's box comes from the shipped stat table rather than from a
+/// parameter: a fixture grid has no asset cache to thread one through, and the
+/// spawn point of a fixture has to be the spawn point the real game would
+/// compute or the fixture is testing a different player. This is the same call
+/// `Sim::fixture` makes for the attack and stat tables, for the same reason.
 pub fn from_grid(grid: &[&str]) -> anyhow::Result<LevelData> {
     let def = LevelDef {
         tileset: "fixture".to_string(),
         grid: grid.iter().map(|row| row.to_string()).collect(),
         entities: Vec::new(),
     };
-    build(def, FIXTURE_TILE_SIZE, &FIXTURE_RULES)
+    let player = StatTable::shipped().get("player")?.size();
+    build(def, FIXTURE_TILE_SIZE, &FIXTURE_RULES, player)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -108,7 +150,12 @@ enum Cell {
     Hazard,
 }
 
-fn build(def: LevelDef, tile_size: f32, rules: &AutotileRules) -> anyhow::Result<LevelData> {
+fn build(
+    def: LevelDef,
+    tile_size: f32,
+    rules: &AutotileRules,
+    player: Vec2,
+) -> anyhow::Result<LevelData> {
     let height = def.grid.len() as u32;
     anyhow::ensure!(height > 0, "map grid is empty");
     let width = def.grid.iter().map(|r| r.chars().count()).max().unwrap() as u32;
@@ -117,6 +164,7 @@ fn build(def: LevelDef, tile_size: f32, rules: &AutotileRules) -> anyhow::Result
     let mut player_spawn = None;
     let mut entities = Vec::new();
     let mut fires = Vec::new();
+    let mut movers = Vec::new();
 
     for (y, row) in def.grid.iter().enumerate() {
         for (x, ch) in row.chars().enumerate() {
@@ -129,13 +177,7 @@ fn build(def: LevelDef, tile_size: f32, rules: &AutotileRules) -> anyhow::Result
                 '.' | ' ' => {}
                 'P' => {
                     anyhow::ensure!(player_spawn.is_none(), "multiple player spawns");
-                    player_spawn = Some(cell_floor_pos(
-                        x32,
-                        y32,
-                        tile_size,
-                        Avatar::WIDTH,
-                        Avatar::HEIGHT,
-                    ));
+                    player_spawn = Some(cell_floor_pos(x32, y32, tile_size, player.x, player.y));
                 }
                 'K' => entities.push(EntitySpawn {
                     kind: "knight".to_string(),
@@ -175,6 +217,37 @@ fn build(def: LevelDef, tile_size: f32, rules: &AutotileRules) -> anyhow::Result
                 duty: *duty,
                 phase: *phase,
             }),
+            EntityDef::Platform {
+                from,
+                to,
+                tiles,
+                speed,
+                one_way,
+                phase,
+            } => {
+                anyhow::ensure!(*tiles > 0, "a platform must be at least one tile wide");
+                anyhow::ensure!(*speed > 0.0, "a platform's speed must be positive");
+                let corner =
+                    |c: &(u32, u32)| Vec2::new(c.0 as f32 * tile_size, c.1 as f32 * tile_size);
+                movers.push(MoverSpawn {
+                    from: corner(from),
+                    to: corner(to),
+                    // A one-way platform presents the same thin strip a `=`
+                    // cell carves, so the collision is in the same band whether
+                    // it moves or not; a solid one fills its cell.
+                    size: Vec2::new(
+                        *tiles as f32 * tile_size,
+                        if *one_way {
+                            crate::level::ONE_WAY_THICKNESS
+                        } else {
+                            tile_size
+                        },
+                    ),
+                    speed: *speed,
+                    one_way: *one_way,
+                    phase: *phase,
+                });
+            }
         }
     }
 
@@ -252,6 +325,7 @@ fn build(def: LevelDef, tile_size: f32, rules: &AutotileRules) -> anyhow::Result
             tile_size / 2.0,
         ),
         fires,
+        movers,
         player_spawn,
         entities,
     })
@@ -284,13 +358,22 @@ mod tests {
         }
     }
 
+    /// The player's real box, from `assets/data/stats.ron` — the same one
+    /// `LevelData::load` threads in.
+    fn player() -> Vec2 {
+        StatTable::shipped()
+            .get("player")
+            .expect("`player` has a stat block")
+            .size()
+    }
+
     fn parse(grid: &[&str]) -> LevelData {
         let def = LevelDef {
             tileset: "test".to_string(),
             grid: grid.iter().map(|s| s.to_string()).collect(),
             entities: vec![],
         };
-        build(def, 32.0, &rules()).unwrap()
+        build(def, 32.0, &rules(), player()).unwrap()
     }
 
     #[test]
@@ -362,7 +445,7 @@ mod tests {
         // horizontally centered in cell 1, feet on the bottom of row 0
         assert_eq!(
             level.player_spawn,
-            Vec2::new(32.0 + (32.0 - Avatar::WIDTH) / 2.0, 32.0 - Avatar::HEIGHT)
+            Vec2::new(32.0 + (32.0 - player().x) / 2.0, 32.0 - player().y)
         );
     }
 
@@ -381,7 +464,7 @@ mod tests {
                 phase: 45,
             }],
         };
-        let level = build(def, 32.0, &rules()).unwrap();
+        let level = build(def, 32.0, &rules(), player()).unwrap();
 
         assert_eq!(level.fires.len(), 2);
         assert_eq!(level.fires[0].cell, Vec2::new(64.0, 0.0));
@@ -425,7 +508,7 @@ mod tests {
             )"#,
         )
         .expect("the short form parses");
-        let level = build(level, 32.0, &rules()).unwrap();
+        let level = build(level, 32.0, &rules(), player()).unwrap();
 
         let fire = level.fires[0];
         assert_eq!(fire.period, crate::systems::hazard::FIRE_PERIOD);
@@ -443,6 +526,65 @@ mod tests {
         assert_eq!(level.entities[0].kind, "knight");
     }
 
+    /// Cells in, pixels out — and a solid platform fills its cell while a
+    /// one-way one is the same thin strip a `=` carves, so the collision band
+    /// does not depend on whether a platform happens to move.
+    #[test]
+    fn a_platform_is_authored_in_cells_and_lands_in_pixels() {
+        let level: LevelDef = ron::from_str(
+            r#"Level(
+                tileset: "test",
+                grid: ["P.........", ".........."],
+                entities: [
+                    Platform(from: (2, 0), to: (7, 0), tiles: 2, speed: 80.0, phase: 15),
+                    Platform(from: (4, 0), to: (4, 0), one_way: true),
+                ],
+            )"#,
+        )
+        .expect("the platform form parses");
+        let level = build(level, 32.0, &rules(), player()).unwrap();
+
+        assert_eq!(level.movers.len(), 2);
+        let moving = level.movers[0];
+        assert_eq!(moving.from, Vec2::new(64.0, 0.0));
+        assert_eq!(moving.to, Vec2::new(224.0, 0.0));
+        assert_eq!(
+            moving.size,
+            Vec2::new(64.0, 32.0),
+            "two tiles, a tile thick"
+        );
+        assert_eq!(moving.speed, 80.0);
+        assert_eq!(moving.phase, 15);
+        assert!(!moving.one_way);
+
+        let thin = level.movers[1];
+        assert!(thin.one_way);
+        assert_eq!(thin.size.y, crate::level::ONE_WAY_THICKNESS);
+        assert_eq!(thin.size.x, 3.0 * 32.0, "three tiles by default");
+        assert_eq!(thin.speed, 60.0, "and the house speed");
+
+        // A platform is geometry, not an NPC: it must stay out of the list
+        // that `knight.0` and friends are counted from.
+        assert!(level.entities.is_empty());
+    }
+
+    #[test]
+    fn a_degenerate_platform_is_rejected_rather_than_shipped() {
+        for entity in [
+            "Platform(from: (1, 0), to: (5, 0), tiles: 0)",
+            "Platform(from: (1, 0), to: (5, 0), speed: 0.0)",
+        ] {
+            let def: LevelDef = ron::from_str(&format!(
+                r#"Level(tileset: "test", grid: ["P....", "....."], entities: [{entity}])"#
+            ))
+            .expect("parses");
+            assert!(
+                build(def, 32.0, &rules(), player()).is_err(),
+                "{entity} should not have been accepted"
+            );
+        }
+    }
+
     #[test]
     fn unknown_characters_are_rejected() {
         let def = LevelDef {
@@ -450,7 +592,7 @@ mod tests {
             grid: vec!["P?#".to_string()],
             entities: vec![],
         };
-        assert!(build(def, 32.0, &rules()).is_err());
+        assert!(build(def, 32.0, &rules(), player()).is_err());
     }
 
     /// End-to-end: the shipped map + tileset + player clips must all parse.
@@ -461,7 +603,7 @@ mod tests {
         let mut assets = crate::assets::Assets::new();
         let map_path = assets.base_dir().join("maps/castle.ron");
 
-        let level = load(&map_path, &mut assets).unwrap();
+        let level = load(&map_path, &mut assets, player()).unwrap();
         assert!(!level.solids.is_empty());
         assert!(!level.one_way.is_empty());
         assert!(!level.hazards.is_empty());
@@ -480,6 +622,6 @@ mod tests {
             grid: vec!["###".to_string()],
             entities: vec![],
         };
-        assert!(build(def, 32.0, &rules()).is_err());
+        assert!(build(def, 32.0, &rules(), player()).is_err());
     }
 }
