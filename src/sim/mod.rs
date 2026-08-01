@@ -792,7 +792,7 @@ impl Sim {
     /// villager for ten seconds is six hundred ticks, and six hundred identical
     /// events is not a trace. Walking from one NPC to another announces the
     /// second, because the entity offered changed.
-    fn update_prompt(&mut self) {
+    pub(crate) fn update_prompt(&mut self) {
         let found = dialogue::nearest_interactable(&self.world);
         let changed = found.as_ref().map(|p| p.entity) != self.prompt.as_ref().map(|p| p.entity);
         if changed {
@@ -808,6 +808,15 @@ impl Sim {
     /// What happened during the most recent [`Sim::step`].
     pub fn events(&self) -> &[GameEvent] {
         &self.events
+    }
+
+    /// Drop anything queued outside a tick.
+    ///
+    /// Only [`crate::save::restore`] needs this: it brings the prompt up to
+    /// date after moving the player, and the events that fall out of that
+    /// belong to no tick, because nothing has been stepped.
+    pub(crate) fn clear_events(&mut self) {
+        self.events.clear();
     }
 
     /// NPC entities in spawn order, which is map order.

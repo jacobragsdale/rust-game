@@ -698,6 +698,18 @@ pub fn restore(assets: &mut Assets, save: &SaveState) -> anyhow::Result<Sim> {
     // from.
     inventory::derive_stats(&mut sim.world, &sim.items);
 
+    // And the interact prompt, for the same reason the geometry was rebuilt
+    // above: `Sim::new` computed it from the *spawn* point, and the player has
+    // since been moved. Without this, the first `Interact` press after a load
+    // acts on whatever happened to be standing near the spawn, and the first
+    // `update_prompt` of the run emits or swallows an `InteractPrompted` that
+    // does not describe anything that happened.
+    //
+    // The events it would push belong to no tick — nothing has been stepped —
+    // so they are dropped rather than left for the first frame to report.
+    sim.update_prompt();
+    sim.clear_events();
+
     Ok(sim)
 }
 
@@ -924,6 +936,7 @@ impl SaveStore for MemoryStore {
 mod tests {
     use super::*;
     use crate::sim::rng::DEFAULT_SEED;
+    use crate::systems::input::PlayerInput;
 
     fn sim() -> Sim {
         Sim::load(&mut Assets::new(), "maps/testbed.ron").expect("the testbed map loads")
@@ -1140,6 +1153,52 @@ mod tests {
             .map(|_| Rng::new(state.rng.seed).next_u64())
             .collect();
         assert_ne!(actual, restarted);
+    }
+
+    /// The prompt is computed from where the player *is*, and a load moves
+    /// them after the map has been built.
+    ///
+    /// `Sim::new` resolves it at the spawn point, so without a refresh at the
+    /// end of `restore` the first `Interact` press of a loaded run acts on
+    /// whatever happened to be standing near the spawn — and the first
+    /// `update_prompt` of the run emits or swallows an `InteractPrompted`
+    /// describing a walk that never happened. Both directions are checked
+    /// here, because saving *out* of reach is the case a spawn-side prompt
+    /// gets wrong in the more surprising way.
+    #[test]
+    fn the_interact_prompt_follows_the_player_across_a_load() {
+        let village = |ticks: u32, x: f32| -> Sim {
+            let mut sim =
+                Sim::load(&mut Assets::new(), "maps/testbed_village.ron").expect("village loads");
+            for _ in 0..ticks {
+                sim.step(PlayerInput::default());
+            }
+            let entity = player_entity(&sim.world).expect("the village places a player");
+            sim.world.get::<&mut Position>(entity).unwrap().0.x = x;
+            sim
+        };
+
+        // Saved standing next to the villager: the prompt is there on load,
+        // before a single tick has run.
+        let near = village(30, 470.0);
+        let loaded = Sim::load_save(&mut Assets::new(), &near.save().unwrap()).unwrap();
+        assert!(
+            loaded.prompt().is_some(),
+            "a load beside an NPC should offer the prompt immediately"
+        );
+        assert!(
+            loaded.events().is_empty(),
+            "and the events that fall out of resolving it belong to no tick"
+        );
+
+        // Saved far away: the prompt must not be inherited from the spawn
+        // point, which on this map is within reach of nothing.
+        let far = village(30, 70.0);
+        let loaded = Sim::load_save(&mut Assets::new(), &far.save().unwrap()).unwrap();
+        assert!(
+            loaded.prompt().is_none(),
+            "a load away from every NPC should offer nothing"
+        );
     }
 
     #[test]
