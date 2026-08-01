@@ -24,10 +24,15 @@ gameplay events with `expect` assertions, golden traces checked on every
 `cargo test`, inline ASCII fixtures, property sweeps over the collision system,
 and an F1 debug overlay. See [tapes/README.md](tapes/README.md).
 
-Also done: M1 and M2 below — movement split into a shared `Body` any entity can
-have, and a knight that spawns from map data and patrols using it.
+Also done: **M1 through M7 below**, plus the engineering half of M8 — the `Body`
+split, NPCs, the full melee kit and the shock spell, items and a modal inventory,
+interaction and dialogue, quest flags with save/load, and live map geometry
+(fire, moving platforms, swinging hazards). Cross-cutting: CI, and a root
+`CLAUDE.md` indexing the invariants.
 
-Not done: anything where two entities affect each other.
+Not done: M8's remaining content — the "advanced world" and the story — and the
+polish list (audio, particles, transitions). `TICKETS.md` carries the per-ticket
+status.
 
 ## The organizing principle
 
@@ -117,9 +122,10 @@ Notes for what comes next:
   the cell, so a jumping knight will visibly slide against a position that
   comes from physics. Harmless while it only walks; deal with it in M3.
 
-## M3 — Combat
+## M3 — Combat ✅ done
 
-**Size:** large. **Depends on:** M1, M2. **In progress.**
+**Size:** large. **Depends on:** M1, M2. All four sub-milestones below shipped;
+M3c closed it.
 
 **M3a ✅ done** — you can kill the knight. Attack as a latched action input,
 `Health` with i-frames and hitstun, hitbox timing and balance in
@@ -329,11 +335,11 @@ replays both sims into identical traces with the flags in the frame, so a stage
 that failed to survive a save shows up as the tick the two runs diverged —
 twenty-seven tapes and twenty-seven golden traces in all.
 
-## M7 — Live map features
+## M7 — Live map features ✅ done
 
 **Size:** medium. **Depends on:** M1. **Parallelizable** — independent of the
-combat/dialogue chain, so it can slot in wherever there is appetite.
-**Done:** entity colliders, the broadphase, fire, moving platforms and swinging
+combat/dialogue chain, so it slotted in where there was appetite.
+Entity colliders, the broadphase, fire, moving platforms and swinging
 hazards have all landed.
 
 Fire (a hazard that toggles on a cycle), moving platforms, and swinging
@@ -405,32 +411,48 @@ and it pays back the first time a map references a deleted NPC.
 Every new map also wants a smoke tape — spawn is on solid ground, the level is
 traversable, nothing is unreachable.
 
+Shipped so far: `tests/data.rs` (N-1), which cross-references entity kinds, clip
+sets, stat blocks, sheet cells, images, attack ids and chains, spell clips, item
+ids, loot tables and dialogue graph connectivity and reachability; the village
+hub (N-2) with `tapes/village_smoke.tape`; and the dungeon (N-3) with
+`tapes/dungeon_run.tape`, a full traversal that claims the level is completable
+and its hazards survivable with correct play. The "advanced world" and the story
+are the part still open, which is why this milestone stays `ongoing` rather than
+closing.
+
 ---
 
 ## Cross-cutting
 
 Work that does not belong to one milestone.
 
-**Renderer.** Currently one `player_image` and a hardcoded avatar query. NPCs
-need per-entity sprite sheets, which means `Sprite` carries a sheet handle, the
-scene keeps an image cache, and draw order becomes explicit z-layers. Needed by
-M2, so do it there; just do not be surprised when it also needs doing for
-items, projectiles, and UI.
+**Renderer.** ✅ mostly done in M2. `Sprite` carries a clip set that names its
+own sheet, and `AdventureScene` uploads every distinct sheet the world
+references once at level load, keyed by name — which is also why a projectile's
+art is a clip on its *caster's* set rather than a PNG named in `spells.ron`: a
+bolt does not exist yet when the textures go up. Still outstanding: explicit
+z-layers for draw order, and item art (inventory rows are coloured quads keyed
+off the item's kind today).
 
-**Save system.** PLAN.md specifies rusqlite. Needed by M6, useful from M4.
-Whatever it stores has to be reconstructible into a `Sim`, which is a good
-forcing function for keeping game state out of scenes.
+**Save system.** ✅ done in Q-3/Q-3b. PLAN.md specifies rusqlite; what shipped
+is a serde `SaveState` behind a `SaveStore` trait with a RON file backend, and
+the deviation is argued at the top of `src/save.rs`. The requirement that
+actually mattered — whatever it stores has to be reconstructible into a `Sim` —
+is unchanged, and it did prove a good forcing function for keeping game state
+out of scenes.
 
-**CI and formatting.** No CI today. `cargo test` plus `clippy -D warnings` plus
-`fmt --check` in a GitHub action. The repo is not currently rustfmt-clean
-(pre-existing drift in `physics.rs`, `debug.rs`, `probe.rs`, `tests/`,
-`bin/sim.rs`), so that wants one mechanical formatting commit of its own rather
-than being smuggled into a feature diff.
+**CI and formatting.** ✅ done in X-1. `.github/workflows/ci.yml` runs
+`cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings` and
+`cargo test` on push and PR — the same three commands a developer runs locally.
+The repo is rustfmt-clean; the mechanical formatting commit happened first and
+on its own, as planned.
 
-**CLAUDE.md.** A lot of hard-won design intent lives only in doc comments — the
-strict-overlap reasoning in `physics.rs`, the `JumpLatch` rationale in
-`input.rs`, the frozen-fixture rule for testbed maps. A root CLAUDE.md pointing
-at the invariants would save rediscovering them every session.
+**CLAUDE.md.** ✅ done in X-2. A root `CLAUDE.md` indexes the invariants and
+points at where each one's reasoning already lives — the strict-overlap comment
+on `Aabb::overlaps` in `physics.rs`, the `InputLatch` rationale in `input.rs`,
+the frozen-fixture rule for testbed maps, the tick's one geometry-rebuild point.
+It is a map, not a manual: it defers to
+`.claude/skills/supergame-dev/SKILL.md` for workflow and does not restate it.
 
 ## Harness capability by milestone
 
@@ -441,12 +463,12 @@ serves, not after.
 | --- | --- |
 | ~~M1 Body split~~ | ~~none — the traces already cover it~~ (held: zero diffs) |
 | ~~M2 NPCs~~ | ~~snapshot `Probe`, path assertions, ordering guard~~ (RNG moved to M3) |
-| M3 Combat | combat events, action-set inputs (attack/cast) in tapes |
+| ~~M3 Combat~~ | ~~combat events, action-set inputs (attack/cast) in tapes~~ (H-1's `ACTIONS` table now feeds the keyboard reader, the tape parser and `tapes/README.md` from one list; H-2's seeded `Sim::rng`) |
 | ~~M4 Items~~ | ~~inventory in the snapshot, pickup/equip events~~ (`item.<id>.count`, `mode`, six item events) |
 | ~~M5 Dialogue~~ | ~~choice selection in tapes, dialogue events~~ (no parser work needed — `interact`/`up`/`down`/`confirm` were already actions; `prompt`, `dialogue_node`, `dialogue_choices`, `dialogue_selection` and five events) |
 | ~~M6 Quests~~ | ~~quest flags as snapshot globals~~ (`quest.<name>.<field>` paths, a `flags` key omitted when empty, and the same map in `SaveState`) |
 | ~~M7 Map features~~ | ~~property tests for dynamic geometry and rider carry~~ (six sweeps in `tests/physics_diagnostics.rs`) |
-| M8 Content | `tests/data.rs` cross-reference validation, per-map smoke tapes |
+| ~~M8 Content~~ | ~~`tests/data.rs` cross-reference validation, per-map smoke tapes~~ (18 cross-reference tests; `castle_spawn`, `village_smoke`, `dungeon_run`) |
 
 ## Known drift in PLAN.md
 
@@ -466,6 +488,30 @@ ways. Its designs are still good; its status claims are not.
 - Its event queues were removed in `e876092` and are back in a different form:
   `GameEvent` exists for verification, and is the natural substrate for the
   "events over direct calls" rule it asks for.
+- **It specifies rusqlite for saves.** Q-3 deliberately shipped a serde
+  `SaveState` behind a `SaveStore` trait with a RON file backend instead: the
+  requirement that matters is "reconstructible into a `Sim`", and a file keeps
+  save tests headless, fast and diffable in a commit with no C build dependency.
+  A rusqlite backend is one more `impl SaveStore` and nothing above that line
+  changes. `src/save.rs` makes the argument, and `MemoryStore` exists partly to
+  keep the seam honest.
+- **It has `Equipment` as `HashMap<Slot, ItemId>`.** It is a `BTreeMap`, and
+  that is load-bearing rather than a preference: deriving stats walks it and
+  sums modifiers, so hash order would reach a float and make a golden trace
+  depend on hash seeding. `Sim::flags` is a `BTreeMap` for the same reason.
+- **Its Phase 3 gives the knight a "death anim, despawn".** Nothing despawns an
+  NPC here: they are addressed by spawn index in tapes and traces, so a corpse
+  is marked dead and frozen instead. Projectiles and pickups *are* despawned,
+  and `src/systems/spell.rs` and `src/systems/inventory.rs` say why they are
+  different.
+- **Its `NpcDef` per file under `data/npcs/` never happened.** Per-kind numbers
+  are one `assets/data/stats.ron` table keyed by kind, with `ecs/spawn.rs`'s
+  `KINDS` as the registry — one file to open when tuning, and `tests/data.rs`
+  cross-references it against the clip sets and the maps.
+- Its generic `Cooldowns` component (rule 5) was not needed: the timers that
+  exist are typed fields on `Attacking`, `Casting` and `Health`, which the probe
+  can name individually. `Casting::cooldown`'s doc names the day that changes —
+  the second entry in `spells.ron`.
 
 ## Open questions
 

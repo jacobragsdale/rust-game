@@ -293,7 +293,7 @@ that is data. Tuning without a recompile is the other half of the win.
 
 ## H-3b — retire the last five `Avatar` consts
 
-**Size:** S. **Depends on:** H-3, L-1. **Status:** todo.
+**Size:** S. **Depends on:** H-3, L-1. **Status:** done.
 
 ### Context
 

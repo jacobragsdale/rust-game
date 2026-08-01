@@ -47,6 +47,6 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      # Replays all 15 input tapes against their golden traces, among the rest.
+      # Replays all 29 input tapes against their golden traces, among the rest.
       - name: Test
         run: cargo test

@@ -13,26 +13,39 @@ does not mean the game still behaves the same.
 ## Orient before writing code
 
 1. **`ROADMAP.md`** — what to build next, in what order, and what each
-   milestone must be true before it starts. It supersedes PLAN.md's phase list.
-2. **`PLAN.md`** — the designs: item/dialogue/spell RON schemas, story, and
+   milestone must be true before it starts. It supersedes PLAN.md's phase list,
+   and its "Known drift" section records where PLAN.md and the code disagree.
+2. **`TICKETS.md`** — the roadmap broken into pickup-able work, each with
+   acceptance criteria, its named tape, and a **Status**.
+3. **`PLAN.md`** — the designs: item/dialogue/spell RON schemas, story, and
    architecture rules. Its status claims are stale; its designs are not.
-3. **`tapes/README.md`** — the tape and trace language you will be writing in.
+4. **`tapes/README.md`** — the tape and trace language you will be writing in.
+5. **`CLAUDE.md`** — the invariants, each pointing at the doc comment that
+   argues it.
 
 ## The tick
 
-`Sim::step` runs fixed 60 Hz phases in this order. A new system goes into the
-phase it belongs to, not onto the end.
+`Sim::step` dispatches on the sim's `Mode`; `Sim::step_playing` runs fixed 60 Hz
+phases in this order. A new system goes into the phase it belongs to, not onto
+the end. Both doc comments in `src/sim/mod.rs` are the authority.
 
 | Phase | What belongs here |
 | --- | --- |
-| `combat::tick_timers`, `advance_attacks` | count down i-frames, hitstun, swing progress |
+| mode entry (`Inventory`, `Interact`), then hitstop | opening a screen or a conversation freezes the tick it happens on, and returns |
+| `combat::tick_timers`, `advance_attacks`, `spell::advance_casts` | count down i-frames, hitstun, swing/cast progress; a cast that reaches its release tick spawns its bolt here, before anything moves |
+| `hazard::tick_schedules`, `pendulum::advance` | geometry that owns itself deciding *where* — or whether — its collider is this tick |
 | `avatar::control` | read input, decide the player's velocity and body knobs |
 | `npc::think` | AI decides an NPC's velocity |
+| `mover::advance` | **last** decision of the tick: platforms move and carry their riders. The slot is load-bearing in three directions — see `src/systems/mover.rs` |
 | `body::rebuild_geometry` | **the one point per tick where collision geometry changes** — entity-owned colliders are read at the positions the controllers just decided |
 | `body::move_bodies` | gravity, integration, collision — **every** body, one pass |
 | `avatar::after_move` | react to where the body ended up: landing, bounds, death |
-| `combat::resolve`, `settle_dead` | test hitboxes at final positions, apply damage |
+| `combat::resolve`, `spell::resolve_projectiles`, `inventory::collect_pickups`, `update_prompt`, `settle_dead`, `drop_loot` | tested at final positions: hitboxes, bolts, walking over a drop, what is in reach, and the loot a kill leaves |
 | `animation::select_*`, `advance` | pick a clip, advance frames |
+
+Then, **outside the dispatch and in every mode**, `inventory::derive_stats`
+recomputes `base + sum(modifiers)`, and the tick counter advances — through
+hitstop and through a modal screen alike.
 
 Controllers only ever set a velocity and a few `Body` knobs (`gravity`,
 `fall_cap`, `ignore_one_way`, `frozen`). They never integrate or collide.
@@ -48,7 +61,7 @@ handed, and reordering it moves the game.
 
 | Tool | Use it for |
 | --- | --- |
-| `cargo test` | everything; 21 tapes and 21 golden traces replay here |
+| `cargo test` | everything; 29 tapes and 29 golden traces replay here |
 | `cargo run --bin sim -- --tape tapes/x.tape` | one tape, with an event timeline |
 | `... --trace out.jsonl` | tick-by-tick JSONL for inspection |
 | `... --map maps/x.ron --geometry` | a map's collision rects, to write assertions against |
@@ -58,18 +71,24 @@ handed, and reordering it moves the game.
 
 **Authoring a map.** ASCII grids in `assets/maps/*.ron`: `#` solid, `=` one-way
 platform, `^` spikes, `F` fire, `P` player spawn, `K` knight, `.` empty.
-Geometry that *moves* has no character and goes in the entity list instead —
-`Platform(from:, to:, …)`, `Swing(anchor:, length:, amplitude:, period:, …)`,
-and `Fire(cell:, period:, duty:, phase:)` for a fire off the house cycle —
-because a character can say where a thing is but not where it goes. Tile art is
-chosen by autotiling, so maps never contain tile indices. `tests/levels.rs`
-checks every shipped map for unreachable platforms, spawns inside geometry, and
-platform paths or swing arcs that run into the level.
+Anything with no character goes in the entity list instead — `Npc(kind:,
+cell:)` for a villager, `Door(cell:, to:)`, and, because a character can say
+where a thing is but not where it goes, `Platform(from:, to:, …)`,
+`Swing(anchor:, length:, amplitude:, period:, …)` and `Fire(cell:, period:,
+duty:, phase:)` for a fire off the house cycle. `src/level/ascii.rs` documents
+every field and its default. Tile art is chosen by autotiling, so maps never
+contain tile indices. `tests/levels.rs` checks every shipped map for
+unreachable platforms, spawns inside geometry, and platform paths or swing arcs
+that run into the level.
 
-**Writing a tape.** Keys are `left right down jump attack wait`, combinable with
-`+`. `assert` samples state (`assert hp == 5`, `assert knight.0.dead`,
-`assert clip == die`); `expect` counts events cumulatively
-(`expect knight.damaged == 3`). NPCs are `<kind>.<index>` in spawn order.
+**Writing a tape.** Keys are the 11 actions in `ACTIONS` (`src/systems/input.rs`)
+— `left right up down jump attack cast interact inventory confirm cancel`, plus
+`wait` — combinable with `+`, and the table in `tapes/README.md` is generated
+from that list and checked against it. `assert` samples state (`assert hp == 5`,
+`assert knight.0.dead`, `assert clip == die`, `assert mode == inventory`,
+`assert item.minor_potion.count == 2`, `assert quest.helm.stage == 1`); `expect`
+counts events cumulatively (`expect knight.damaged == 3`). NPCs are
+`<kind>.<index>` in spawn order.
 
 **Assert outcomes, not timings, for anything involving two entities.** Hit
 timing falls out of knockback, chase speed, i-frames, cooldown and hitstop at
@@ -84,11 +103,12 @@ has been off by 10-to-1.
 ## Trace discipline
 
 Golden traces are what catch a refactor that quietly changed the game — proven:
-bumping `JUMP_SPEED` by one left every tape assertion passing and failed 7 of 11
-traces.
+bumping the player's jump speed by one (then an `Avatar` const, now
+`stats.ron`) left every tape assertion passing and failed 7 of the 11 traces
+that existed at the time.
 
 **Never re-record a trace you have not accounted for.** Adding a probe field
-rewrites all 21 baselines, which looks identical to a physics change. Run:
+rewrites all 29 baselines, which looks identical to a physics change. Run:
 
 ```bash
 uv run .claude/skills/supergame-dev/scripts/trace_diff.py --ignore <new fields>
@@ -107,12 +127,18 @@ art produces byte-identical traces. Check that with `sheet`, by eye.
 
 ## Invariants
 
+The repo's `CLAUDE.md` is the index of these, with a file reference for the
+reasoning behind each. The short forms:
+
 - **Gameplay logic lives in `Sim`, never in `scenes/`.** Anything in a scene is
   untestable by definition. This is most tempting for dialogue and inventory,
-  which feel like UI and are simulation.
+  which feel like UI and are simulation — both are `Mode`s on `Sim`, with the
+  scene drawing and deciding nothing.
 - **Never despawn an NPC.** They are addressed by spawn index in traces and
   tapes; removing one renumbers every later `knight.<n>` and silently repoints
-  assertions. Mark dead, freeze, stop colliding.
+  assertions. Mark dead, freeze, stop colliding. Projectiles and pickups are
+  the two documented exceptions — nothing addresses one, so nothing can be
+  renumbered by one leaving.
 - **`Body::frozen` stops movement dead; `Health::hitstun` only suppresses the
   controller.** Knockback needs the second — a hit takes away steering, not
   momentum.
@@ -121,8 +147,14 @@ art produces byte-identical traces. Check that with `sheet`, by eye.
   Never rely on raw query order where the order is observable.
 - **Fixture maps under `assets/maps/testbed*.ron` are frozen** — tapes encode
   their exact pixels. Add to them; do not move what exists.
-- **Balance and content go in RON**, code holds mechanics. Attack timing and
-  damage in `assets/data/attacks.ron`; frames in the clip sets.
+- **Balance and content go in RON**, code holds mechanics. Attacks in
+  `assets/data/attacks.ron`, spells in `spells.ron`, every kind's movement and
+  combat numbers in `stats.ron`, items in `items/*.ron`; frames in the clip
+  sets. H-3b finished the job — `src/ecs/components.rs` holds no balance
+  constant at all now, so there is no mirror left to drift.
+- **Determinism**: `Sim::rng` is the only randomness, and `BTreeMap` over
+  `HashMap` anywhere iteration order can reach a float sum or a serialized
+  output (`Equipment`, `Sim::flags`).
 
 ## Gotchas that have already cost time
 
@@ -141,21 +173,29 @@ art produces byte-identical traces. Check that with `sheet`, by eye.
   specific, boot into a map that shows it:
   `SUPERGAME_SCENE=adventure SUPERGAME_MAP=maps/testbed_arena.ron SUPERGAME_DEBUG=1 cargo run`
   Controls, for telling Jacob how to try it: arrows or WASD, jump on
-  `Up`/`W`/`Space`, attack on `J`/`X`, `P` pause, `M` menu, `F1` overlay,
+  `Up`/`W`/`Space`, attack on `J`/`X`, cast on `K`, talk on `E`, bag on `I`
+  (`Enter` confirms, `Backspace` backs out), `P` pause, `M` menu, `F1` overlay,
   `Esc` quit. Down+jump while running slides; down alone on a platform drops
-  through; attack again mid-swing continues the combo.
-- **The repo is not rustfmt-clean.** Format only files you created; a repo-wide
-  `cargo fmt` buries the real diff.
+  through; attack again mid-swing continues the combo; down+attack in the air
+  is the plunge.
+- **The repo is rustfmt-clean and CI enforces it** (`.github/workflows/ci.yml`
+  runs `cargo fmt --all --check`). Run `cargo fmt --all` before committing;
+  there is no longer any pre-existing drift for it to bury.
 
 ## Before saying it is done
 
-- [ ] `cargo test` green, and `cargo clippy --all-targets` adds no new warnings
-      (one pre-existing `Assets`/`Default` warning is expected)
+- [ ] the three commands CI runs are clean: `cargo fmt --all --check`,
+      `cargo clippy --all-targets -- -D warnings`, `cargo test`
 - [ ] every trace difference accounted for via `trace_diff.py`, then re-recorded
 - [ ] a tape covers the new behaviour, and it asserts something that would fail
       if the feature were removed
+- [ ] anything that owns a collider moves it in the *decide* phase, so
+      `rebuild_geometry` picks it up the same tick
+- [ ] anything modal lives in `Sim` behind a `Mode`, never in a scene, so a tape
+      can drive it
 - [ ] anything visual checked on screen, or with `sheet` for animation data
-- [ ] `ROADMAP.md` updated if a milestone moved
+- [ ] `ROADMAP.md` updated if a milestone moved, and the ticket's **Status** in
+      `TICKETS.md` with it
 
 Commits and pushes go through the **git-ops** skill.
 
