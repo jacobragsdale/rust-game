@@ -94,7 +94,10 @@ mod tests {
         let mut latch = InputLatch::default();
         latch.key_down(Key::Space);
         // ...however many frames render before the next fixed tick.
-        assert!(std::mem::take(&mut latch.jump), "the press is still there when a tick runs");
+        assert!(
+            std::mem::take(&mut latch.jump),
+            "the press is still there when a tick runs"
+        );
         assert!(!std::mem::take(&mut latch.jump), "and only fires once");
     }
 
@@ -128,6 +131,9 @@ mod tests {
         let mut latch = InputLatch::default();
         latch.key_down(Key::Up);
         latch.clear();
-        assert!(!std::mem::take(&mut latch.jump), "a press meant for a menu is not a jump");
+        assert!(
+            !std::mem::take(&mut latch.jump),
+            "a press meant for a menu is not a jump"
+        );
     }
 }

@@ -245,7 +245,10 @@ mod overlap_tests {
 
         let contact = resolve_move(&mut pos, &mut vel, prev, size, &wall);
 
-        assert!(!contact.grounded, "a flush wall slide must not find a ledge");
+        assert!(
+            !contact.grounded,
+            "a flush wall slide must not find a ledge"
+        );
         assert_eq!(pos, Vec2::new(32.0, 34.0), "and must not be displaced");
         assert_eq!(vel.y, 240.0, "and must keep falling");
     }

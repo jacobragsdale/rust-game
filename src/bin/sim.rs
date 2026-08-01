@@ -70,8 +70,7 @@ fn parse_args() -> anyhow::Result<Option<Args>> {
 
     while let Some(flag) = argv.next() {
         let mut value = || -> anyhow::Result<String> {
-            argv.next()
-                .with_context(|| format!("{flag} needs a value"))
+            argv.next().with_context(|| format!("{flag} needs a value"))
         };
         match flag.as_str() {
             "--map" => args.map = Some(value()?),
@@ -126,8 +125,8 @@ fn run() -> anyhow::Result<bool> {
         .unwrap_or_else(|| DEFAULT_MAP.to_string());
 
     let mut assets = Assets::new();
-    let mut sim = Sim::load(&mut assets, &map)
-        .with_context(|| format!("failed to load map `{map}`"))?;
+    let mut sim =
+        Sim::load(&mut assets, &map).with_context(|| format!("failed to load map `{map}`"))?;
 
     if !args.quiet {
         println!(

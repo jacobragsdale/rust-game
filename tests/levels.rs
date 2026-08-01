@@ -32,8 +32,7 @@ fn body() -> Vec2 {
 fn every_map_parses() {
     let mut assets = Assets::new();
     for path in map_paths() {
-        LevelData::load(&path, &mut assets)
-            .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+        LevelData::load(&path, &mut assets).unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
     }
 }
 

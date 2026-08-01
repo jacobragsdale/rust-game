@@ -29,7 +29,11 @@ fn tape_paths() -> Vec<PathBuf> {
 #[test]
 fn every_tape_passes() {
     let paths = tape_paths();
-    assert!(!paths.is_empty(), "no tapes found in {}", tapes_dir().display());
+    assert!(
+        !paths.is_empty(),
+        "no tapes found in {}",
+        tapes_dir().display()
+    );
 
     let mut failures: Vec<String> = Vec::new();
 

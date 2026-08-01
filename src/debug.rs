@@ -13,9 +13,7 @@
 //! Toggle with F1, or force it on at boot with `SUPERGAME_DEBUG=1`.
 
 use ggez::glam::Vec2;
-use ggez::graphics::{
-    Canvas, Color, DrawMode, DrawParam, Mesh, MeshBuilder, Quad, Rect, Text,
-};
+use ggez::graphics::{Canvas, Color, DrawMode, DrawParam, Mesh, MeshBuilder, Quad, Rect, Text};
 use ggez::{Context, GameResult};
 
 use crate::ecs::components::{AnimationState, Avatar, Body, Position, Size, Sprite, Velocity};
@@ -136,12 +134,7 @@ impl DebugOverlay {
             )>()
             .iter()
         {
-            let collider = Rect::new(
-                pos.0.x - offset.x,
-                pos.0.y - offset.y,
-                size.0.x,
-                size.0.y,
-            );
+            let collider = Rect::new(pos.0.x - offset.x, pos.0.y - offset.y, size.0.x, size.0.y);
             mb.rectangle(DrawMode::stroke(STROKE), collider, COLLIDER)?;
 
             // The frame box is per clip now, so the outline has to follow the
@@ -196,8 +189,16 @@ impl DebugOverlay {
                 } else {
                     "airborne "
                 },
-                if avatar.wall_sliding { "wallslide " } else { "" },
-                if body.on_one_way_only() { "oneway " } else { "" },
+                if avatar.wall_sliding {
+                    "wallslide "
+                } else {
+                    ""
+                },
+                if body.on_one_way_only() {
+                    "oneway "
+                } else {
+                    ""
+                },
                 if avatar.dead() { "DEAD" } else { "" },
             ));
         }

@@ -17,8 +17,8 @@ use hecs::World;
 
 use crate::assets::ClipSet;
 use crate::ecs::components::{
-    AnimationState, Attacking, Avatar, Body, Health, Hostile, Kind, Patrol, Position, Size,
-    Sprite, Team, Velocity,
+    AnimationState, Attacking, Avatar, Body, Health, Hostile, Kind, Patrol, Position, Size, Sprite,
+    Team, Velocity,
 };
 use crate::level::EntitySpawn;
 

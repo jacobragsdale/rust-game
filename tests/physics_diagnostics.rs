@@ -212,7 +212,12 @@ fn resolution_never_leaves_a_body_inside_a_solid() {
         stuck.is_empty(),
         "{} resolutions left the body inside a solid, e.g.:\n  {}",
         stuck.len(),
-        stuck.iter().take(5).cloned().collect::<Vec<_>>().join("\n  ")
+        stuck
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
     );
 }
 
@@ -259,7 +264,12 @@ fn resolution_is_independent_of_solid_order() {
 fn resolution_is_left_right_symmetric() {
     /// Mirror the world about x = 0, keeping rects anchored at their top-left.
     fn mirror(solid: &SolidRect) -> SolidRect {
-        let r = Aabb::new(-solid.rect.right(), solid.rect.y, solid.rect.w, solid.rect.h);
+        let r = Aabb::new(
+            -solid.rect.right(),
+            solid.rect.y,
+            solid.rect.w,
+            solid.rect.h,
+        );
         if solid.one_way {
             SolidRect::one_way(r)
         } else {
@@ -330,7 +340,10 @@ fn a_resting_body_never_drifts() {
     for tick in 0..600 {
         vel.y = (vel.y + Avatar::GRAVITY * TICK).min(Avatar::MAX_FALL);
         let contact = step(&mut pos, &mut vel, &solids);
-        assert!(contact.grounded, "lost contact with the floor at tick {tick}");
+        assert!(
+            contact.grounded,
+            "lost contact with the floor at tick {tick}"
+        );
         assert_eq!(pos, settled, "body drifted at tick {tick}");
     }
 }
@@ -444,7 +457,12 @@ fn a_body_inside_a_solid_is_pushed_out() {
         escaped.is_empty(),
         "{} starts never escaped the solid, e.g.:\n  {}",
         escaped.len(),
-        escaped.iter().take(5).cloned().collect::<Vec<_>>().join("\n  ")
+        escaped
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
     );
 }
 

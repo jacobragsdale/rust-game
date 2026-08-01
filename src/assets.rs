@@ -248,6 +248,12 @@ pub struct Assets {
     attacks: Option<Arc<AttackTable>>,
 }
 
+impl Default for Assets {
+    fn default() -> Self {
+        Assets::new()
+    }
+}
+
 impl Assets {
     pub fn new() -> Self {
         // Prefer ./assets (running from the repo root), fall back to the

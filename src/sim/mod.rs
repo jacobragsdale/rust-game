@@ -23,10 +23,9 @@ use anyhow::Context as _;
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::assets::{AttackTable, Assets, Clip, ClipSet};
+use crate::assets::{Assets, AttackTable, Clip, ClipSet};
 use crate::ecs::components::{
-    AnimationState, Attacking, Avatar, Body, Health, Kind, Patrol, Position, Size, Sprite,
-    Velocity,
+    AnimationState, Attacking, Avatar, Body, Health, Kind, Patrol, Position, Size, Sprite, Velocity,
 };
 use crate::ecs::spawn;
 use crate::level::LevelData;
@@ -207,7 +206,11 @@ impl Sim {
         // connects where the bodies actually ended the tick.
         combat::resolve(&mut self.world, &self.attacks, &mut self.events);
         combat::settle_dead(&mut self.world);
-        if self.events.iter().any(|e| matches!(e, GameEvent::Damaged { .. })) {
+        if self
+            .events
+            .iter()
+            .any(|e| matches!(e, GameEvent::Damaged { .. }))
+        {
             self.hitstop = HITSTOP_TICKS;
         }
 
@@ -294,9 +297,15 @@ impl Sim {
 
     /// Snapshot the player's state for tracing and assertions.
     pub fn probe(&self) -> Probe {
-        let mut query = self
-            .world
-            .query::<(&Avatar, &Body, &Health, &Attacking, &Position, &Velocity, &AnimationState)>();
+        let mut query = self.world.query::<(
+            &Avatar,
+            &Body,
+            &Health,
+            &Attacking,
+            &Position,
+            &Velocity,
+            &AnimationState,
+        )>();
         let (_, (avatar, body, health, attacking, pos, vel, anim)) =
             query.iter().next().expect("sim has no avatar to probe");
         Probe::new(
@@ -418,7 +427,11 @@ mod tests {
         let mut level = LevelData::empty(20, 10, 32.0);
         level.solids = vec![Aabb::new(0.0, 256.0, 400.0, 64.0)];
         level.player_spawn = Vec2::new(100.0, 256.0 - Avatar::HEIGHT);
-        Sim::new(level, &fixture_clip_sets(), Assets::new().attacks().unwrap())
+        Sim::new(
+            level,
+            &fixture_clip_sets(),
+            Assets::new().attacks().unwrap(),
+        )
     }
 
     const JUMP: PlayerInput = PlayerInput {

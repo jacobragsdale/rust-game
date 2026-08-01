@@ -32,8 +32,8 @@ impl App {
         // skipping the menu. SUPERGAME_MAP picks which one — a testbed map is
         // often the only way to get a specific thing on screen to look at.
         if std::env::var("SUPERGAME_SCENE").as_deref() == Ok("adventure") {
-            let map = std::env::var("SUPERGAME_MAP")
-                .unwrap_or_else(|_| "maps/castle.ron".to_string());
+            let map =
+                std::env::var("SUPERGAME_MAP").unwrap_or_else(|_| "maps/castle.ron".to_string());
             match crate::scenes::adventure::AdventureScene::new(ctx, &mut resources, &map) {
                 Ok(scene) => scenes.push(Box::new(scene)),
                 Err(err) => eprintln!("failed to boot into adventure: {err:#}"),
