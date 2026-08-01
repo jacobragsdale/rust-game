@@ -17,6 +17,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::assets::Slot;
+use crate::sim::Mode;
+
 /// Event names addressable by tape `expect` directives. Kept beside
 /// [`GameEvent::kind`] so the two cannot drift apart — a test enforces it.
 const EVENT_NAMES: &[&str] = &[
@@ -32,6 +35,12 @@ const EVENT_NAMES: &[&str] = &[
     "slid",
     "spell_cast",
     "cast_failed",
+    "mode_changed",
+    "picked_up",
+    "inventory_full",
+    "item_used",
+    "equipped",
+    "unequipped",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,11 +118,59 @@ pub enum GameEvent {
         spell: String,
         reason: CastFailure,
     },
+    /// The simulation entered or left a modal state. Emitted on the tick the
+    /// world freezes and the tick it unfreezes, so a trace says exactly which
+    /// ticks were spent in a menu rather than leaving a stretch of identical
+    /// frames for a reader to interpret.
+    ModeChanged {
+        from: Mode,
+        to: Mode,
+    },
+    /// Something was walked over and went into the bag.
+    PickedUp {
+        item: String,
+        count: u32,
+    },
+    /// There was no room. Covers both directions of the same problem: an item
+    /// left on the floor because the bag is full, and a piece of equipment
+    /// that could not be taken off because there was nowhere to put it.
+    ///
+    /// Not decoration, for the reason [`GameEvent::CastFailed`] is not: without
+    /// it, "the pickup does not work" and "your bag is full" are the same
+    /// absence in a trace. It fires once per approach rather than once per
+    /// tick of standing on the thing.
+    InventoryFull {
+        item: String,
+    },
+    /// A consumable was spent.
+    ItemUsed {
+        item: String,
+    },
+    Equipped {
+        item: String,
+        slot: Slot,
+    },
+    Unequipped {
+        item: String,
+        slot: Slot,
+    },
 }
 
 /// Events carrying a discriminating name that `expect` can filter on:
 /// `knight.damaged`, `player_slash3.attacked`, `shock.spell_cast`.
-const SUBJECT_EVENTS: &[&str] = &["died", "damaged", "attacked", "spell_cast", "cast_failed"];
+const SUBJECT_EVENTS: &[&str] = &[
+    "died",
+    "damaged",
+    "attacked",
+    "spell_cast",
+    "cast_failed",
+    "mode_changed",
+    "picked_up",
+    "inventory_full",
+    "item_used",
+    "equipped",
+    "unequipped",
+];
 
 impl GameEvent {
     /// The name this event can be filtered by: the victim for damage and
@@ -123,6 +180,14 @@ impl GameEvent {
             GameEvent::Died { who, .. } | GameEvent::Damaged { who, .. } => Some(who),
             GameEvent::Attacked { attack } => Some(attack),
             GameEvent::SpellCast { spell } | GameEvent::CastFailed { spell, .. } => Some(spell),
+            // The mode entered, so `expect inventory.mode_changed == 1` counts
+            // openings and not openings-and-closings.
+            GameEvent::ModeChanged { to, .. } => Some(to.name()),
+            GameEvent::PickedUp { item, .. }
+            | GameEvent::InventoryFull { item }
+            | GameEvent::ItemUsed { item }
+            | GameEvent::Equipped { item, .. }
+            | GameEvent::Unequipped { item, .. } => Some(item),
             _ => None,
         }
     }
@@ -151,6 +216,12 @@ impl GameEvent {
             GameEvent::Damaged { .. } => "damaged",
             GameEvent::SpellCast { .. } => "spell_cast",
             GameEvent::CastFailed { .. } => "cast_failed",
+            GameEvent::ModeChanged { .. } => "mode_changed",
+            GameEvent::PickedUp { .. } => "picked_up",
+            GameEvent::InventoryFull { .. } => "inventory_full",
+            GameEvent::ItemUsed { .. } => "item_used",
+            GameEvent::Equipped { .. } => "equipped",
+            GameEvent::Unequipped { .. } => "unequipped",
         }
     }
 
@@ -244,6 +315,28 @@ mod tests {
             GameEvent::CastFailed {
                 spell: "shock".to_string(),
                 reason: CastFailure::NoMana,
+            },
+            GameEvent::ModeChanged {
+                from: Mode::Playing,
+                to: Mode::Inventory,
+            },
+            GameEvent::PickedUp {
+                item: "minor_potion".to_string(),
+                count: 1,
+            },
+            GameEvent::InventoryFull {
+                item: "iron_sword".to_string(),
+            },
+            GameEvent::ItemUsed {
+                item: "minor_potion".to_string(),
+            },
+            GameEvent::Equipped {
+                item: "knight_helm".to_string(),
+                slot: Slot::Head,
+            },
+            GameEvent::Unequipped {
+                item: "knight_helm".to_string(),
+                slot: Slot::Head,
             },
         ]
     }

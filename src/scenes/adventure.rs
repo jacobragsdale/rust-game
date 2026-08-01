@@ -19,10 +19,10 @@ use ggez::{Context, GameResult};
 use crate::assets::TilesetDef;
 use crate::debug::DebugOverlay;
 use crate::ecs::components::{
-    AnimationState, Avatar, Collider, Fire, Health, Mover, Patrol, Position, Size, Sprite,
+    AnimationState, Avatar, Collider, Fire, Health, Mover, Patrol, Pickup, Position, Size, Sprite,
 };
-use crate::scenes::{pause::PauseScene, Resources, Scene, Transition};
-use crate::sim::Sim;
+use crate::scenes::{inventory, pause::PauseScene, Resources, Scene, Transition};
+use crate::sim::{Mode, Sim};
 use crate::systems::{camera::Camera, input};
 
 pub const INTERNAL_WIDTH: f32 = 640.0;
@@ -256,6 +256,44 @@ impl AdventureScene {
         Ok(())
     }
 
+    /// Draw the items lying on the floor.
+    ///
+    /// Coloured quads rather than sprites, because item art does not exist
+    /// yet: a pickup carries no `Sprite`, so it is invisible to `draw_sprites`
+    /// entirely, and this fills the gap from the item's kind. The palette is
+    /// [`inventory::tint`]'s, shared with the bag — a red square on the ground
+    /// and a red square in the inventory have to be the same potion.
+    ///
+    /// Drawn from the collider the pickup is actually collected on, so art
+    /// that disagreed with the reach would be visible rather than hidden.
+    fn draw_pickups(&self, ctx: &mut Context, canvas: &mut Canvas) -> GameResult {
+        let offset = self.camera.offset();
+        let mut any = false;
+        let mut mb = MeshBuilder::new();
+
+        for (_, (pos, size, pickup)) in self.sim.world.query::<(&Position, &Size, &Pickup)>().iter()
+        {
+            let at = (pos.0 - offset).floor();
+            mb.rectangle(
+                graphics::DrawMode::fill(),
+                graphics::Rect::new(at.x - 1.0, at.y - 1.0, size.0.x + 2.0, size.0.y + 2.0),
+                Color::from_rgb(18, 16, 26),
+            )?;
+            mb.rectangle(
+                graphics::DrawMode::fill(),
+                graphics::Rect::new(at.x, at.y, size.0.x, size.0.y),
+                inventory::tint(&self.sim.items, &pickup.item),
+            )?;
+            any = true;
+        }
+
+        if any {
+            let mesh = Mesh::from_data(ctx, mb.build());
+            canvas.draw(&mesh, DrawParam::default());
+        }
+        Ok(())
+    }
+
     /// Draw every sprite in the world, whatever sheet it comes from.
     ///
     /// Entities no longer share one atlas — the player is one image of 50x37
@@ -345,8 +383,19 @@ impl Scene for AdventureScene {
         canvas.draw(&self.tile_batch, DrawParam::default());
         self.draw_hazards(ctx, &mut canvas)?;
         self.draw_movers(ctx, &mut canvas)?;
+        self.draw_pickups(ctx, &mut canvas)?;
         self.draw_sprites(&mut canvas);
         crate::hud::draw(&mut canvas, &self.sim, self.camera.offset());
+        // The overlay follows the sim's mode rather than the scene stack: the
+        // mode is the one place "the inventory is open" is recorded, and a
+        // stack entry beside it would be a second one that could disagree.
+        if self.sim.mode() == Mode::Inventory {
+            inventory::draw(
+                &mut canvas,
+                &self.sim,
+                Vec2::new(INTERNAL_WIDTH, INTERNAL_HEIGHT),
+            );
+        }
         self.debug.draw(
             ctx,
             &mut canvas,

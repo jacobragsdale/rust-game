@@ -1,0 +1,23 @@
+// Worn equipment: everything whose whole effect is a list of stat modifiers.
+//
+// Modifiers are additive terms of `base + sum(modifiers)`, recomputed from the
+// stat block every tick — never applied to a component and never undone by
+// hand. That is the rule PLAN.md sets and the reason unequipping cannot leave
+// drift behind: there is nothing to undo.
+//
+// Health is clamped, not raised, when the maximum changes: putting the helm on
+// at 3/5 leaves you at 3/7, and taking it off at 7/7 leaves you at 5/5.
+[
+    ItemDef(
+        id: "knight_helm",
+        name: "Knight Helm",
+        sprite: "items/helm",
+        kind: Equipment(
+            slot: Head,
+            // Two points is 40% more health than the player starts with, which
+            // is deliberately a lot: the first piece of equipment in the game
+            // has to be unmistakably worth wearing.
+            modifiers: [MaxHealth(2)],
+        ),
+    ),
+]

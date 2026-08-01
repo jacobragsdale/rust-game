@@ -18,7 +18,7 @@ use std::path::Path;
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
-use crate::sim::probe::NpcProbe;
+use crate::sim::probe::{ItemProbe, NpcProbe};
 use crate::sim::{GameEvent, Probe};
 
 /// One tick's worth of trace: what was true, and what happened.
@@ -35,6 +35,12 @@ pub struct Frame {
     /// with no NPCs is unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub npcs: Vec<NpcProbe>,
+    /// Everything carried or worn. Nested and omitted when empty, for the same
+    /// two reasons `npcs` is: a bag is a list rather than a column, and a run
+    /// that never picks anything up serializes exactly as it did before items
+    /// existed — so adding this churned no baseline by itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<ItemProbe>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<GameEvent>,
     /// The random seed this run used, recorded on the first frame so a trace
@@ -58,6 +64,7 @@ impl Frame {
         match ProbePath::parse(path)? {
             ProbePath::Player(name) => self.probe.field(name),
             ProbePath::Npc { kind, index, name } => self.npc(kind, index)?.field(name),
+            ProbePath::Item { id, name } => self.item(id).field(name),
         }
     }
 
@@ -66,6 +73,7 @@ impl Frame {
         match ProbePath::parse(path)? {
             ProbePath::Player(name) => self.probe.flag(name),
             ProbePath::Npc { kind, index, name } => self.npc(kind, index)?.flag(name),
+            ProbePath::Item { id, name } => self.item(id).flag(name),
         }
     }
 
@@ -74,12 +82,30 @@ impl Frame {
         match ProbePath::parse(path)? {
             ProbePath::Player(name) => self.probe.text(name),
             ProbePath::Npc { kind, index, name } => self.npc(kind, index)?.text(name),
+            // Nothing about an item is text: the id is in the path already.
+            ProbePath::Item { .. } => None,
         }
     }
 
     /// The `index`-th NPC of `kind`, in spawn order.
     fn npc(&self, kind: &str, index: usize) -> Option<&NpcProbe> {
         self.npcs.iter().filter(|n| n.kind == kind).nth(index)
+    }
+
+    /// What is known about `id`, which for something nobody is carrying is
+    /// "none of it".
+    ///
+    /// Deliberately not `None`: `assert item.minor_potion.count == 0` has to
+    /// mean something *before* the first potion is picked up, or a tape could
+    /// only ever assert the second half of a pickup. The price is that a
+    /// mistyped id reads as zero rather than as an error — which is why
+    /// `tests/data.rs` cross-references every id content names, and why the
+    /// tape that matters asserts the count going *up*.
+    fn item(&self, id: &str) -> std::borrow::Cow<'_, ItemProbe> {
+        match self.items.iter().find(|item| item.id == id) {
+            Some(item) => std::borrow::Cow::Borrowed(item),
+            None => std::borrow::Cow::Owned(ItemProbe::absent(id)),
+        }
     }
 }
 
@@ -91,6 +117,13 @@ pub enum ProbePath<'a> {
         index: usize,
         name: &'a str,
     },
+    /// `item.minor_potion.count`. An item is addressed by id rather than by
+    /// index, because unlike an NPC nothing about an item's position in a list
+    /// is stable — a stack is removed the moment it empties.
+    Item {
+        id: &'a str,
+        name: &'a str,
+    },
 }
 
 impl<'a> ProbePath<'a> {
@@ -99,6 +132,11 @@ impl<'a> ProbePath<'a> {
         match parts.as_slice() {
             [name] => Some(ProbePath::Player(name)),
             ["player", name] => Some(ProbePath::Player(name)),
+            // Before the NPC arm, which is the same shape. Unambiguous because
+            // the NPC form's middle segment is a number and this one's is an
+            // id — but written first so that is a fact about this file rather
+            // than about `usize::from_str`.
+            ["item", id, name] => Some(ProbePath::Item { id, name }),
             [kind, index, name] => Some(ProbePath::Npc {
                 kind,
                 index: index.parse().ok()?,
@@ -115,6 +153,7 @@ impl<'a> ProbePath<'a> {
         match self {
             ProbePath::Player(name) => Probe::field_names().contains(name),
             ProbePath::Npc { name, .. } => NpcProbe::field_names().contains(name),
+            ProbePath::Item { name, .. } => ItemProbe::field_names().contains(name),
         }
     }
 
@@ -122,6 +161,7 @@ impl<'a> ProbePath<'a> {
         match self {
             ProbePath::Player(name) => Probe::flag_names().contains(name),
             ProbePath::Npc { name, .. } => NpcProbe::flag_names().contains(name),
+            ProbePath::Item { name, .. } => ItemProbe::flag_names().contains(name),
         }
     }
 
@@ -130,6 +170,7 @@ impl<'a> ProbePath<'a> {
         match self {
             ProbePath::Player(name) => Probe::text_names().contains(name),
             ProbePath::Npc { name, .. } => NpcProbe::text_names().contains(name),
+            ProbePath::Item { .. } => false,
         }
     }
 
@@ -138,6 +179,7 @@ impl<'a> ProbePath<'a> {
         match self {
             ProbePath::Player(_) => Probe::known_names(),
             ProbePath::Npc { .. } => NpcProbe::known_names(),
+            ProbePath::Item { .. } => ItemProbe::known_names(),
         }
     }
 }
@@ -152,10 +194,17 @@ impl Trace {
         Trace::default()
     }
 
-    pub fn push(&mut self, probe: Probe, npcs: Vec<NpcProbe>, events: &[GameEvent]) {
+    pub fn push(
+        &mut self,
+        probe: Probe,
+        npcs: Vec<NpcProbe>,
+        items: Vec<ItemProbe>,
+        events: &[GameEvent],
+    ) {
         self.push_frame(Frame {
             probe,
             npcs,
+            items,
             events: events.to_vec(),
             seed: None,
         });
@@ -249,6 +298,7 @@ mod tests {
         let stats = StatTable::shipped().get("player").unwrap();
         Probe::new(
             tick,
+            crate::sim::Mode::Playing,
             &Avatar::new(stats.avatar()),
             &Body::new(Vec2::ZERO, stats.gravity, stats.max_fall),
             &Health::new(stats.max_health, stats.iframe_ticks),
@@ -259,14 +309,17 @@ mod tests {
             None,
             None,
             0,
+            0,
+            0,
+            &crate::systems::inventory::Screen::default(),
         )
     }
 
     #[test]
     fn writes_one_json_object_per_tick() {
         let mut trace = Trace::new();
-        trace.push(probe(0), Vec::new(), &[]);
-        trace.push(probe(1), Vec::new(), &[]);
+        trace.push(probe(0), Vec::new(), Vec::new(), &[]);
+        trace.push(probe(1), Vec::new(), Vec::new(), &[]);
 
         let text = trace.to_jsonl();
         let lines: Vec<&str> = text.lines().collect();
@@ -284,6 +337,7 @@ mod tests {
         let mut trace = Trace::new();
         trace.push(
             probe(3),
+            Vec::new(),
             Vec::new(),
             &[GameEvent::Died {
                 who: "player".to_string(),
@@ -303,7 +357,7 @@ mod tests {
     #[test]
     fn eventless_frames_carry_no_events_key() {
         let mut trace = Trace::new();
-        trace.push(probe(0), Vec::new(), &[]);
+        trace.push(probe(0), Vec::new(), Vec::new(), &[]);
         assert!(!trace.to_jsonl().contains("events"));
     }
 
@@ -311,8 +365,8 @@ mod tests {
     #[test]
     fn jsonl_round_trips() {
         let mut trace = Trace::new();
-        trace.push(probe(7), Vec::new(), &[GameEvent::Jumped]);
-        trace.push(probe(8), Vec::new(), &[]);
+        trace.push(probe(7), Vec::new(), Vec::new(), &[GameEvent::Jumped]);
+        trace.push(probe(8), Vec::new(), Vec::new(), &[]);
 
         let parsed = Trace::parse(&trace.to_jsonl()).unwrap();
         assert_eq!(parsed.frames(), trace.frames());
@@ -340,6 +394,18 @@ mod tests {
         Frame {
             probe: probe(0),
             npcs: vec![npc("knight", 10.0, 1.0), npc("knight", 20.0, -1.0)],
+            items: vec![
+                ItemProbe {
+                    id: "minor_potion".to_string(),
+                    count: 2,
+                    equipped: false,
+                },
+                ItemProbe {
+                    id: "knight_helm".to_string(),
+                    count: 0,
+                    equipped: true,
+                },
+            ],
             events: Vec::new(),
             seed: None,
         }
@@ -350,7 +416,7 @@ mod tests {
     #[test]
     fn a_default_seeded_run_carries_no_seed_key() {
         let mut trace = Trace::new();
-        trace.push(probe(0), Vec::new(), &[]);
+        trace.push(probe(0), Vec::new(), Vec::new(), &[]);
         assert!(!trace.to_jsonl().contains("seed"));
     }
 
@@ -360,6 +426,7 @@ mod tests {
         trace.push_frame(Frame {
             probe: probe(0),
             npcs: Vec::new(),
+            items: Vec::new(),
             events: Vec::new(),
             seed: Some(4242),
         });
@@ -386,6 +453,47 @@ mod tests {
         assert_eq!(frame.field("knight.1.x"), Some(20.0));
         assert_eq!(frame.flag("knight.0.facing_right"), Some(true));
         assert_eq!(frame.flag("knight.1.facing_right"), Some(false));
+    }
+
+    /// The bag is addressed by id, and an item nobody has reads as zero — so a
+    /// tape can assert both sides of a pickup rather than only the one after
+    /// it.
+    #[test]
+    fn items_resolve_by_id_and_absence_reads_as_zero() {
+        let frame = frame_with_npcs();
+        assert_eq!(frame.field("item.minor_potion.count"), Some(2.0));
+        assert_eq!(frame.flag("item.minor_potion.equipped"), Some(false));
+
+        assert_eq!(
+            frame.field("item.knight_helm.count"),
+            Some(0.0),
+            "worn, so no longer in the bag"
+        );
+        assert_eq!(frame.flag("item.knight_helm.equipped"), Some(true));
+
+        assert_eq!(frame.field("item.nothing_like_it.count"), Some(0.0));
+        assert_eq!(frame.flag("item.nothing_like_it.equipped"), Some(false));
+    }
+
+    /// `item.<id>.<field>` and `<kind>.<index>.<field>` are the same shape, and
+    /// an item id is not an index. The item arm wins.
+    #[test]
+    fn an_item_path_is_not_mistaken_for_an_npc_one() {
+        assert!(matches!(
+            ProbePath::parse("item.minor_potion.count"),
+            Some(ProbePath::Item { .. })
+        ));
+        assert!(matches!(
+            ProbePath::parse("knight.0.hp"),
+            Some(ProbePath::Npc { .. })
+        ));
+        assert!(ProbePath::parse("item.minor_potion.count")
+            .unwrap()
+            .is_field());
+        assert!(ProbePath::parse("item.minor_potion.equipped")
+            .unwrap()
+            .is_flag());
+        assert!(!ProbePath::parse("item.minor_potion.hp").unwrap().is_field());
     }
 
     #[test]
@@ -415,7 +523,7 @@ mod tests {
     #[test]
     fn a_corrupt_line_is_reported_with_its_number() {
         let mut good = Trace::new();
-        good.push(probe(0), Vec::new(), &[]);
+        good.push(probe(0), Vec::new(), Vec::new(), &[]);
 
         let text = format!("{}not json\n", good.to_jsonl());
         let err = Trace::parse(&text).unwrap_err();

@@ -15,7 +15,7 @@ use hecs::World;
 
 use crate::assets::AttackTable;
 use crate::ecs::components::{
-    Attacking, Avatar, Body, Health, Kind, Patrol, Position, Size, Team, Velocity,
+    Attacking, Avatar, Body, DerivedStats, Health, Kind, Patrol, Position, Size, Team, Velocity,
 };
 use crate::physics::Aabb;
 use crate::sim::event::{DeathCause, GameEvent};
@@ -135,8 +135,24 @@ pub fn resolve(world: &mut World, attacks: &AttackTable, events: &mut Vec<GameEv
             attacking.hit.push(target);
         }
 
-        apply_hit(world, target, def.damage, impulse, def.hitstun, events);
+        let damage = melee_damage(world, attacker, def.damage);
+        apply_hit(world, target, damage, impulse, def.hitstun, events);
     }
+}
+
+/// What a swing is actually worth: the attack's own damage plus whatever the
+/// attacker's derived stats add to every melee hit.
+///
+/// The bonus is a *derived stat* rather than something equipment writes into
+/// the attack table, which is what makes taking a sword off restore the
+/// numbers exactly — there is no subtraction anywhere, only a block that stops
+/// being computed with the sword in it. Clamped at zero, so a negative modifier
+/// is a weak hit rather than a heal.
+fn melee_damage(world: &World, attacker: hecs::Entity, base: i32) -> i32 {
+    let bonus = world
+        .get::<&DerivedStats>(attacker)
+        .map_or(0, |stats| stats.0.damage_bonus);
+    (base + bonus).max(0)
 }
 
 /// Take `damage` off `target`, throw it, stun it, and say so.

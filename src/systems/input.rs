@@ -347,6 +347,16 @@ impl PlayerInput {
         self.pressed.contains(action)
     }
 
+    /// Everything held this tick, as a set.
+    ///
+    /// For readers that need to take the difference between two ticks
+    /// themselves: a menu wants one step per press out of a direction that is
+    /// level-triggered because movement needs it held. [`crate::sim::Sim`] is
+    /// the only caller, and does it once for every mode.
+    pub const fn held_set(self) -> ActionSet {
+        self.held
+    }
+
     pub fn set_held(&mut self, action: Action, on: bool) {
         self.held.set(action, on);
     }

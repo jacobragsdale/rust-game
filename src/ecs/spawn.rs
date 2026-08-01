@@ -17,10 +17,20 @@ use hecs::World;
 
 use crate::assets::{ClipSet, SpellDef, SpellEffect, StatBlock};
 use crate::ecs::components::{
-    AnimationState, Attacking, Avatar, Body, Casting, Health, Hostile, Kind, Lifetime, Mana,
-    Patrol, Position, Projectile, Size, Sprite, Stats, Team, Velocity,
+    AnimationState, Attacking, Avatar, Body, Casting, DerivedStats, Equipment, Health, Hostile,
+    Inventory, Kind, Lifetime, Loot, Mana, Patrol, Pickup, Position, Projectile, Size, Sprite,
+    Stats, Team, Velocity,
 };
 use crate::level::EntitySpawn;
+
+/// The box an item occupies while it is lying on the floor.
+///
+/// One size for everything on purpose: a potion and a helm are both "a thing
+/// you walk over", and giving each item its own footprint would make whether
+/// you picked something up depend on art nobody has drawn yet. It is a number
+/// in code rather than in RON because it is the shape of an interaction, not
+/// balance — no tuning pass ever wants to make helmets harder to stand on.
+pub const PICKUP_SIZE: Vec2 = Vec2::new(12.0, 12.0);
 
 /// Every entity kind a map may place. `Sim` loads a clip set and a stat block
 /// per name, so a new kind needs `assets/data/animations/{kind}.ron` to exist
@@ -50,8 +60,14 @@ pub fn player(
         Sprite { clips, offset },
         AnimationState::new("idle"),
         Stats(stats.clone()),
+        // Every entity carries the derived block, even one that can never wear
+        // anything: a read site should never have to ask whether this is the
+        // kind of thing that has equipment. With nothing on it shares the base
+        // `Arc`, so it costs a pointer.
+        DerivedStats(stats.clone()),
     ));
     give_mana(world, entity, &stats);
+    give_bag(world, entity, &stats);
     entity
 }
 
@@ -74,6 +90,69 @@ fn give_mana(world: &mut World, entity: hecs::Entity, stats: &StatBlock) {
             ),
         )
         .expect("the entity was just spawned");
+}
+
+/// Give an entity a bag and somewhere to keep what it is wearing, if its kind
+/// carries anything at all.
+///
+/// Conditional for the same reason [`give_mana`] is: a kind with no bag should
+/// not be dragged into a different archetype for two components it will never
+/// read. `inventory_slots: 0` is what says so, and it is a stat rather than a
+/// constant here because how much you can carry is balance.
+fn give_bag(world: &mut World, entity: hecs::Entity, stats: &StatBlock) {
+    if stats.inventory_slots == 0 {
+        return;
+    }
+    world
+        .insert(
+            entity,
+            (
+                Inventory::new(stats.inventory_slots as usize),
+                Equipment::default(),
+            ),
+        )
+        .expect("the entity was just spawned");
+}
+
+/// Give an entity a loot table, if its kind leaves anything behind.
+fn give_loot(world: &mut World, entity: hecs::Entity, stats: &StatBlock) {
+    if stats.loot.is_empty() {
+        return;
+    }
+    world
+        .insert_one(entity, Loot::new(stats.loot.clone()))
+        .expect("the entity was just spawned");
+}
+
+/// Put an item on the floor at `origin` (the top-left of its box).
+///
+/// A plain body with no controller, which is exactly the case `move_bodies`
+/// was generalized for: it falls, it lands, it sits there. No `Sprite`, because
+/// item art does not exist yet and the scene draws a coloured quad from the
+/// item's kind — the `ItemDef` still names its sprite, so nothing authored
+/// today has to be rewritten when the art arrives.
+///
+/// `gravity` and `max_fall` come from whatever dropped it, so a drop falls the
+/// way its owner did rather than needing numbers of its own.
+pub fn pickup(
+    world: &mut World,
+    item: &str,
+    count: u32,
+    origin: Vec2,
+    gravity: f32,
+    max_fall: f32,
+) -> hecs::Entity {
+    world.spawn((
+        Pickup {
+            item: item.to_string(),
+            count,
+            refused: false,
+        },
+        Position(origin),
+        Velocity(Vec2::ZERO),
+        Size(PICKUP_SIZE),
+        Body::new(origin, gravity, max_fall),
+    ))
 }
 
 /// Launch a spell's projectile from `origin` (the top-left of its box),
@@ -170,10 +249,15 @@ pub fn entity(
                 Sprite { clips, offset },
                 AnimationState::new("idle"),
                 Stats(stats.clone()),
+                DerivedStats(stats.clone()),
             ));
             // A knight has no pool, so this does nothing today. It is here so
             // that a caster NPC is a stat block and not a code change.
             give_mana(world, entity, &stats);
+            // Likewise the bag: an enemy that could be pickpocketed, or that
+            // carried what it drops, is a stat block away.
+            give_bag(world, entity, &stats);
+            give_loot(world, entity, &stats);
             Ok(entity)
         }
         other => anyhow::bail!(

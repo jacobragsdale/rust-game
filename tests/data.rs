@@ -28,7 +28,7 @@ use anyhow::Context as _;
 use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::Deserialize;
 
-use supergame::assets::{Assets, AttackTable, StatTable};
+use supergame::assets::{Assets, AttackTable, ItemKind, ItemTable, StatTable};
 use supergame::ecs::spawn::KINDS;
 use supergame::level::LevelData;
 
@@ -392,7 +392,30 @@ fn attack_entry_points() -> Vec<(String, String)> {
         }
     }
 
+    // A weapon's `combo` is a second way into the attack table, and it is the
+    // one a content author reaches for when adding a sword that swings
+    // differently. Whoever can equip a weapon can perform its combo, and today
+    // that is the player — when an NPC can wear things, this is where that is
+    // said. Without it a typo in a weapon's combo would be a sword whose first
+    // swing does nothing, with every other check in this file passing.
+    let items = item_table();
+    for id in items.ids() {
+        let Some(ItemKind::Weapon { combo, .. }) = items.get(id).map(|def| &def.kind) else {
+            continue;
+        };
+        for attack in combo {
+            entries.push((PLAYER_SET.to_string(), attack.clone()));
+        }
+    }
+
     entries
+}
+
+/// The shipped item table, read the way the game reads it.
+fn item_table() -> std::sync::Arc<ItemTable> {
+    Assets::new()
+        .items()
+        .unwrap_or_else(|e| panic!("{}: {e:#}", rel(&assets_root().join("data/items"))))
 }
 
 fn stat_table() -> StatTable {
@@ -711,7 +734,12 @@ fn every_item_id_referenced_by_content_exists() {
             &std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("failed to read {}: {e}", rel(&path))),
         );
-        for ctor in ["HasItem(", "GiveItem(", "TakeItem("] {
+        // Constructor arguments (dialogue effects and conditions), plus the
+        // `item:` field a loot table names its drops with. Both are found
+        // textually rather than by deserializing, for the reason above: the
+        // enums either side of this grow, and a closed mirror of them in a
+        // test would reject the whole file the first time a variant landed.
+        for ctor in ["HasItem(", "GiveItem(", "TakeItem(", "item:"] {
             for id in quoted_after(&text, ctor) {
                 references.insert((path.clone(), id));
             }
@@ -746,6 +774,94 @@ fn every_item_id_referenced_by_content_exists() {
             )
         })
         .collect();
+
+    report(&problems);
+}
+
+/// The other direction from [`every_item_id_referenced_by_content_exists`], and
+/// stronger where it applies: a loot table is a *typed* reference, so it can be
+/// checked through the same `StatTable` and `ItemTable` the game loads rather
+/// than by scanning text. A knight whose table names an item nobody defines
+/// drops nothing, forever, with no error anywhere.
+#[test]
+fn every_item_a_loot_table_names_exists() {
+    let Some(items_dir) = optional_content("data/items") else {
+        skipping("loot table checks", "data/items", "ticket I-2");
+        return;
+    };
+    let _ = items_dir;
+
+    let stats = stat_table();
+    let items = item_table();
+    let stats_path = assets_root().join("data/stats.ron");
+    let known = items.ids().join(", ");
+    let mut problems: Vec<String> = Vec::new();
+
+    for kind in animated_kinds() {
+        let Ok(block) = stats.get(kind) else {
+            continue; // reported by `every_kind_has_a_stat_block`
+        };
+        for drop in &block.loot {
+            if items.get(&drop.item).is_none() {
+                problems.push(format!(
+                    "{}: `{kind}` drops item `{}`, which no file in assets/data/items \
+                     defines (defined: {known})",
+                    rel(&stats_path),
+                    drop.item,
+                ));
+            }
+            if !(0.0..=1.0).contains(&drop.chance) {
+                problems.push(format!(
+                    "{}: `{kind}` drops `{}` with chance {}, which is not a probability",
+                    rel(&stats_path),
+                    drop.item,
+                    drop.chance,
+                ));
+            }
+        }
+    }
+
+    report(&problems);
+}
+
+/// A weapon's `combo` is a list of attack ids, so it is a reference like any
+/// other. The clip and chain checks above already cover the ids themselves
+/// through [`attack_entry_points`]; this is the direct message, naming the
+/// weapon rather than "the player".
+#[test]
+fn every_attack_a_weapon_names_exists() {
+    let Some(dir) = optional_content("data/items") else {
+        skipping("weapon combo checks", "data/items", "ticket I-2");
+        return;
+    };
+
+    let items = item_table();
+    let attacks = attack_table();
+    let mut problems: Vec<String> = Vec::new();
+
+    for id in items.ids() {
+        let Some(ItemKind::Weapon { combo, .. }) = items.get(id).map(|def| &def.kind) else {
+            continue;
+        };
+        if combo.is_empty() {
+            problems.push(format!(
+                "{}: weapon `{id}` has an empty combo, so equipping it would leave the \
+                 player with no opening attack at all",
+                rel(&dir),
+            ));
+        }
+        for attack in combo {
+            if attacks.get(attack).is_none() {
+                problems.push(format!(
+                    "{}: weapon `{id}` swings attack `{attack}`, which {} does not define \
+                     (defined: {})",
+                    rel(&dir),
+                    rel(&assets_root().join("data/attacks.ron")),
+                    sorted_ids(&attacks).join(", "),
+                ));
+            }
+        }
+    }
 
     report(&problems);
 }

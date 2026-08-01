@@ -12,7 +12,7 @@ use anyhow::Context as _;
 use ggez::glam::Vec2;
 use ggez::graphics::{Image, ImageFormat, Rect};
 use ggez::Context;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A named animation: frames are (col, row) cells on a uniform grid.
 ///
@@ -351,6 +351,196 @@ impl SpellTable {
     }
 }
 
+/// One item, under the id every other file names it by. See
+/// `assets/data/items/*.ron`. Spelled `ItemDef(...)` in the RON files.
+///
+/// Ids are the currency of every system after this one — a loot table, a
+/// dialogue effect, a quest reward — which is why `tests/data.rs` insists they
+/// are unique and that every reference resolves.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "ItemDef")]
+pub struct ItemDef {
+    pub id: String,
+    /// What the inventory screen calls it.
+    pub name: String,
+    /// Image name under `assets/graphics/`, without extension.
+    ///
+    /// May name art that does not exist yet: a pickup on the floor and a row
+    /// in the bag both fall back to a coloured quad, so content authored today
+    /// does not have to be rewritten the day the art arrives. This is also why
+    /// `tests/data.rs` checks `sheet:` and `image:` for existence but not
+    /// `sprite:`.
+    pub sprite: String,
+    pub kind: ItemKind,
+}
+
+impl ItemDef {
+    /// Which equipment slot this occupies, or `None` for something that is
+    /// only ever consumed. A weapon's slot is implied by its kind; anything
+    /// else says which one it wants.
+    pub fn slot(&self) -> Option<Slot> {
+        match &self.kind {
+            ItemKind::Weapon { .. } => Some(Slot::Weapon),
+            ItemKind::Equipment { slot, .. } => Some(*slot),
+            ItemKind::Consumable { .. } => None,
+        }
+    }
+
+    /// Can this be drunk, eaten or otherwise spent?
+    pub fn is_consumable(&self) -> bool {
+        matches!(self.kind, ItemKind::Consumable { .. })
+    }
+}
+
+/// What an item *is*, which decides what `Confirm` does to it in the bag.
+#[derive(Clone, Debug, Deserialize)]
+pub enum ItemKind {
+    /// Held in [`Slot::Weapon`]. `damage` is added to every melee hit on top
+    /// of the attack's own, and `combo` replaces the bare-handed chain's
+    /// opener — the rest of the chain is still `chain` in `attacks.ron`, so a
+    /// weapon that reuses the standard swings names them and nothing else
+    /// changes.
+    Weapon {
+        damage: i32,
+        combo: Vec<String>,
+        /// Swing rate multiplier. **Not read yet**: attack timing is the
+        /// attack table's, and making a weapon swing faster means either its
+        /// own entries in `attacks.ron` (which `combo` already expresses) or a
+        /// multiplier threaded through `AttackDef` — a decision M4 does not
+        /// need to make. It is in the schema because PLAN.md puts it there and
+        /// because adding a field to shipped content later is the expensive
+        /// direction.
+        speed: f32,
+    },
+    /// Spent from the bag for an immediate effect.
+    Consumable { effects: Vec<ItemEffect> },
+    /// Worn in a slot, contributing [`StatModifier`]s for as long as it is.
+    Equipment {
+        slot: Slot,
+        modifiers: Vec<StatModifier>,
+    },
+}
+
+/// Where a piece of equipment is worn.
+///
+/// `Ord` is not decoration: [`crate::ecs::components::Equipment`] keys a
+/// `BTreeMap` on this so that summing modifiers walks the slots in a fixed
+/// order. A `HashMap` would sum the same floats in an order that varies run to
+/// run, and float addition is not associative — which is exactly the kind of
+/// invisible nondeterminism a golden trace exists to catch and nobody enjoys
+/// hunting.
+#[derive(
+    Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
+)]
+pub enum Slot {
+    #[default]
+    Head,
+    Body,
+    Weapon,
+    Trinket,
+}
+
+impl Slot {
+    /// Every slot, in the order the equipment pane lists them.
+    pub const ALL: [Slot; 4] = [Slot::Head, Slot::Body, Slot::Weapon, Slot::Trinket];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Slot::Head => "Head",
+            Slot::Body => "Body",
+            Slot::Weapon => "Weapon",
+            Slot::Trinket => "Trinket",
+        }
+    }
+}
+
+/// What using a consumable does. An enum from the start for the reason
+/// [`SpellEffect`] is one: the second variant should cost nothing to add.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+pub enum ItemEffect {
+    /// Restore health, clamped to the maximum.
+    Heal(i32),
+    /// Restore mana, clamped to the pool.
+    RestoreMana(i32),
+}
+
+/// One term of `base + sum(modifiers)`.
+///
+/// Deliberately additive and deliberately dumb. A modifier that multiplied, or
+/// that depended on what else was equipped, would make the order equipment was
+/// put on in observable — and the whole point of recomputing from the base
+/// every tick is that it cannot be.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+pub enum StatModifier {
+    MaxHealth(i32),
+    MaxMana(i32),
+    RunSpeed(f32),
+    /// Added to every melee hit, exactly as a weapon's own `damage` is.
+    Damage(i32),
+}
+
+/// One line of a loot table: what may drop, how many, and how often.
+///
+/// Rolled against [`crate::sim::rng::Rng`] and nothing else — see
+/// [`crate::systems::inventory::drop_loot`] for why the order of the roll is
+/// part of the contract.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "LootDrop")]
+pub struct LootDrop {
+    /// An id from `assets/data/items/`.
+    pub item: String,
+    pub count: u32,
+    /// Probability in `[0, 1]`. `1.0` always drops and `0.0` never does.
+    pub chance: f32,
+}
+
+/// Every item in the game, by id. Assembled from every `.ron` file under
+/// `assets/data/items/`, each of which holds one `ItemDef(...)` or a list of
+/// them.
+///
+/// A directory rather than one file because items are the content type that
+/// grows without bound, and a thousand-line `items.ron` is a merge conflict
+/// waiting to happen. Ids are global regardless of which file they live in, so
+/// a file is an organizing convenience and never part of an item's identity.
+#[derive(Clone, Debug, Default)]
+pub struct ItemTable(HashMap<String, ItemDef>);
+
+impl ItemTable {
+    pub fn get(&self, id: &str) -> Option<&ItemDef> {
+        self.0.get(id)
+    }
+
+    /// Every item id, sorted, for error messages.
+    pub fn ids(&self) -> Vec<&str> {
+        let mut ids: Vec<&str> = self.0.keys().map(String::as_str).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// What to call an item on screen, falling back to the id so that content
+    /// naming something the table does not define is visible rather than
+    /// blank.
+    pub fn label<'a>(&'a self, id: &'a str) -> &'a str {
+        self.get(id).map_or(id, |def| def.name.as_str())
+    }
+
+    /// The shipped table, the counterpart of [`StatTable::shipped`] and
+    /// [`SpellTable::shipped`], read once per process.
+    ///
+    /// Panics if it does not load: items are content, and a table that does
+    /// not parse is a broken build rather than something to degrade around.
+    pub fn shipped() -> Arc<ItemTable> {
+        static SHIPPED: OnceLock<Arc<ItemTable>> = OnceLock::new();
+        SHIPPED
+            .get_or_init(|| {
+                Assets::new()
+                    .items()
+                    .expect("assets/data/items should load")
+            })
+            .clone()
+    }
+}
+
 /// Everything one kind of entity is made of, numerically. See
 /// `assets/data/stats.ron`. Spelled `StatBlock(...)` in the RON file.
 ///
@@ -383,6 +573,24 @@ pub struct StatBlock {
     /// The attack this kind opens with, from `assets/data/attacks.ron`. The
     /// rest of a combo is data: each attack names its own successor.
     pub attack: String,
+    /// Flat damage added to every melee hit this kind lands, on top of the
+    /// attack's own.
+    ///
+    /// Zero bare-handed. A weapon's `damage` is a modifier on this, which is
+    /// what makes "the sword hits harder" a derived stat rather than a second
+    /// damage path — and therefore something that unequipping undoes exactly.
+    pub damage_bonus: i32,
+    /// How many distinct stacks this kind can carry.
+    ///
+    /// Zero is a kind with no bag at all, and is what [`crate::ecs::spawn`]
+    /// reads to decide whether to give it an
+    /// [`crate::ecs::components::Inventory`] — the same arrangement `max_mana`
+    /// has. Capacity is a stat because it is balance: a bigger bag is a reward,
+    /// and a reward should not be a recompile.
+    pub inventory_slots: u32,
+    /// What this kind leaves behind when it dies, rolled once against
+    /// [`crate::sim::rng::Rng`] on the tick of death.
+    pub loot: Vec<LootDrop>,
     /// Size of the mana pool. Zero means a kind that never casts, and is what
     /// [`crate::ecs::spawn`] reads to decide whether to give it a
     /// [`crate::ecs::components::Mana`] at all — no pool, no component, no
@@ -630,6 +838,7 @@ pub struct Assets {
     attacks: Option<Arc<AttackTable>>,
     spells: Option<Arc<SpellTable>>,
     stats: Option<Arc<StatTable>>,
+    items: Option<Arc<ItemTable>>,
 }
 
 impl Default for Assets {
@@ -656,6 +865,7 @@ impl Assets {
             attacks: None,
             spells: None,
             stats: None,
+            items: None,
         }
     }
 
@@ -756,6 +966,58 @@ impl Assets {
         let table: StatTable = load_ron(&self.base.join("data/stats.ron"))?;
         let table = Arc::new(table);
         self.stats = Some(table.clone());
+        Ok(table)
+    }
+
+    /// Load every `.ron` file under `assets/data/items/` into one table.
+    ///
+    /// Files are read in sorted order so that a duplicate id always blames the
+    /// same pair of files, whatever order the filesystem hands them back in. A
+    /// file may hold a single `ItemDef(...)` or a list of them; both shapes
+    /// appear in PLAN.md and neither is worth forcing content into.
+    pub fn items(&mut self) -> anyhow::Result<Arc<ItemTable>> {
+        if let Some(table) = &self.items {
+            return Ok(table.clone());
+        }
+
+        let dir = self.base.join("data/items");
+        let entries = fs::read_dir(&dir)
+            .with_context(|| format!("failed to read items directory {}", dir.display()))?;
+        let mut paths: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.extension().is_some_and(|e| e == "ron"))
+            .collect();
+        paths.sort();
+
+        let mut items: HashMap<String, ItemDef> = HashMap::new();
+        let mut sources: HashMap<String, PathBuf> = HashMap::new();
+        for path in paths {
+            let defs: Vec<ItemDef> = match load_ron::<Vec<ItemDef>>(&path) {
+                Ok(defs) => defs,
+                // A single definition is the other legal shape; report the
+                // list error if it is neither, since that is the one content
+                // is more likely to have been aiming at.
+                Err(list_error) => match load_ron::<ItemDef>(&path) {
+                    Ok(def) => vec![def],
+                    Err(_) => return Err(list_error),
+                },
+            };
+            for def in defs {
+                if let Some(first) = sources.insert(def.id.clone(), path.clone()) {
+                    anyhow::bail!(
+                        "item id `{}` is defined in both {} and {} — ids are how every \
+                         other file names an item, so they have to be unique",
+                        def.id,
+                        first.display(),
+                        path.display(),
+                    );
+                }
+                items.insert(def.id.clone(), def);
+            }
+        }
+
+        let table = Arc::new(ItemTable(items));
+        self.items = Some(table.clone());
         Ok(table)
     }
 

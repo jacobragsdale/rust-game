@@ -23,21 +23,24 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use ggez::glam::Vec2;
 use hecs::World;
+use serde::{Deserialize, Serialize};
 
-use crate::assets::{Assets, AttackTable, Clip, ClipSet, SpellEffect, SpellTable, StatTable};
+use crate::assets::{
+    Assets, AttackTable, Clip, ClipSet, ItemTable, SpellEffect, SpellTable, StatTable,
+};
 use crate::ecs::components::{
-    AnimationState, Attacking, Avatar, Body, Casting, Health, Kind, Mana, Patrol, Position, Size,
-    Sprite, Velocity,
+    AnimationState, Attacking, Avatar, Body, Casting, Equipment, Health, Inventory, Kind, Mana,
+    Patrol, Position, Size, Sprite, Velocity,
 };
 use crate::ecs::spawn;
 use crate::level::LevelData;
 use crate::physics::{Aabb, Geometry};
 use crate::sim::rng::Rng;
-use crate::systems::input::PlayerInput;
-use crate::systems::{animation, avatar, body, combat, mover, npc, spell};
+use crate::systems::input::{Action, ActionSet, PlayerInput};
+use crate::systems::{animation, avatar, body, combat, inventory, mover, npc, spell};
 
 pub use event::GameEvent;
-pub use probe::{NpcProbe, Probe};
+pub use probe::{ItemProbe, NpcProbe, Probe};
 pub use rng::DEFAULT_SEED;
 
 /// The simulation runs on a fixed timestep so that behavior is identical at
@@ -49,6 +52,50 @@ pub const TICK: f32 = 1.0 / TICKS_PER_SECOND as f32;
 /// How long the world freezes when a hit lands. Four ticks is about 65 ms —
 /// long enough to register as impact, short enough not to read as a hitch.
 const HITSTOP_TICKS: u32 = 4;
+
+/// What the simulation is currently doing.
+///
+/// A modal mode pauses the world but is still *simulation*: drinking a potion
+/// with the inventory open changes health, which changes whether the next fight
+/// is survivable. That is why the mode lives on [`Sim`] and why the systems a
+/// mode runs are systems — a screen whose state lived in `scenes/` could not be
+/// driven by a tape, and the two largest features left on the roadmap
+/// (inventory and dialogue) are both this shape.
+///
+/// [`Mode::Dialogue`] is here unused so that M5 does not have to reopen the
+/// dispatch to add it.
+///
+/// Pause is deliberately **not** a mode. Pausing stops the sim being stepped at
+/// all; nothing about it is simulation, and it stays where it is, in
+/// [`crate::scenes::pause`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    /// The world runs.
+    #[default]
+    Playing,
+    /// The inventory screen is open and the world is frozen.
+    Inventory,
+    /// A conversation is running and the world is frozen. Nothing enters this
+    /// yet; ticket D-2 does.
+    Dialogue,
+}
+
+impl Mode {
+    /// How a tape spells it: `assert mode == inventory`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::Playing => "playing",
+            Mode::Inventory => "inventory",
+            Mode::Dialogue => "dialogue",
+        }
+    }
+
+    /// Whether the world is frozen in this mode.
+    pub fn is_modal(self) -> bool {
+        !matches!(self, Mode::Playing)
+    }
+}
 
 pub struct Sim {
     pub world: World,
@@ -65,6 +112,8 @@ pub struct Sim {
     /// block for its kind as a `Stats` component; this is kept so that
     /// anything spawned later in the run can be given one too.
     pub stats: Arc<StatTable>,
+    /// Every item in the game, shared by every bag, loot table and pickup.
+    pub items: Arc<ItemTable>,
     /// The simulation's only source of randomness, seeded per run.
     ///
     /// Anything random — a loot roll, a crit, a spell's spread — draws from
@@ -74,6 +123,25 @@ pub struct Sim {
     pub rng: Rng,
     /// Ticks elapsed since the sim was created.
     pub tick: u64,
+    /// What the simulation is doing: running the world, or holding it still
+    /// while a modal screen is up. Private, because every transition emits a
+    /// [`GameEvent::ModeChanged`] and a mode set behind the event's back would
+    /// be a stretch of trace nobody could explain.
+    mode: Mode,
+    /// The inventory screen's own state: which pane has focus and where the
+    /// selection is. On `Sim` rather than in a scene because using a potion is
+    /// simulation — see [`Mode`].
+    screen: inventory::Screen,
+    /// What was held last tick.
+    ///
+    /// Directions are level-triggered, because movement needs them held down;
+    /// a menu needs one step per press. The difference between two ticks is
+    /// taken here, once, so that any mode reading a direction as a one-shot
+    /// reads the same answer. This is not a second
+    /// [`crate::systems::input::InputLatch`] — that one is about presses being
+    /// lost between rendered frames and simulation ticks, and it is upstream of
+    /// everything here.
+    prev_held: ActionSet,
     /// Ticks of impact freeze remaining. A hit stops the whole world for a
     /// few frames, which is the cheapest way to make a sword feel like it
     /// weighs something — the blow reads as landing rather than as a number
@@ -109,9 +177,11 @@ impl Sim {
 
         let attacks = assets.attacks()?;
         let stats = assets.stats()?;
-        // Loaded through the cache here so a broken `spells.ron` fails map
-        // loading with a message, rather than panicking inside `Sim::new`.
+        // Loaded through the cache here so a broken `spells.ron` or item file
+        // fails map loading with a message, rather than panicking inside
+        // `Sim::new`.
         assets.spells()?;
+        assets.items()?;
         Ok(Self::new(
             level,
             &clip_sets,
@@ -164,12 +234,13 @@ impl Sim {
     /// reproducible from what is written down: a tape's `seed` directive, or
     /// [`rng::DEFAULT_SEED`] when nothing says otherwise.
     ///
-    /// The spell table is deliberately *not* a parameter. Attacks and stats
-    /// are, for historical reasons — they were threaded through every caller
-    /// before there was anywhere else to put them — but there is exactly one
-    /// spell table in the game, with no per-map and no per-run variation, so
-    /// it is read from [`SpellTable::shipped`] here. Give it a parameter the
-    /// day something genuinely needs a different one.
+    /// The spell and item tables are deliberately *not* parameters. Attacks
+    /// and stats are, for historical reasons — they were threaded through
+    /// every caller before there was anywhere else to put them — but there is
+    /// exactly one of each of the other two in the game, with no per-map and
+    /// no per-run variation, so they are read from [`SpellTable::shipped`] and
+    /// [`ItemTable::shipped`] here. Give either a parameter the day something
+    /// genuinely needs a different one.
     pub fn new(
         level: LevelData,
         clip_sets: &HashMap<String, Arc<ClipSet>>,
@@ -221,8 +292,12 @@ impl Sim {
             attacks,
             spells: SpellTable::shipped(),
             stats,
+            items: ItemTable::shipped(),
             rng: Rng::new(seed),
             tick: 0,
+            mode: Mode::Playing,
+            screen: inventory::Screen::default(),
+            prev_held: ActionSet::EMPTY,
             hitstop: 0,
             events: Vec::new(),
         };
@@ -244,7 +319,103 @@ impl Sim {
         self.rng = Rng::new(seed);
     }
 
-    /// Advance one fixed tick.
+    /// What the simulation is currently doing.
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// The inventory screen's state, for [`crate::scenes::inventory`] to draw
+    /// and for nothing to decide with.
+    pub fn screen(&self) -> &inventory::Screen {
+        &self.screen
+    }
+
+    /// Advance one fixed tick, dispatching on the mode.
+    ///
+    /// `Playing` runs the world, in the phases documented on
+    /// [`Sim::step_playing`]. A modal mode runs only that mode's own state
+    /// machine and leaves the world untouched — no controllers, no movement,
+    /// no combat, no animation, and not even the hitstop counter, which
+    /// resumes exactly where it was. "Frozen" here means every field of the
+    /// probe except `tick` and `mode`, and
+    /// `a_modal_mode_freezes_every_probe_field_but_the_tick` is the test that
+    /// says so.
+    ///
+    /// **The tick counter advances in every mode**, exactly as it does during
+    /// hitstop, so a trace stays aligned with wall-clock time and time spent in
+    /// a menu is visible as the run of identical frames it is.
+    pub fn step(&mut self, input: PlayerInput) {
+        self.events.clear();
+
+        // Level-triggered actions are held; a menu wants one step per press.
+        // Taken once, here, so every mode reads the same answer.
+        let newly_held = input.held_set().newly_set(self.prev_held);
+
+        match self.mode {
+            Mode::Playing => self.step_playing(input),
+            Mode::Inventory => {
+                if inventory::step_screen(
+                    &mut self.world,
+                    &self.items,
+                    &mut self.screen,
+                    input,
+                    newly_held,
+                    &mut self.events,
+                ) {
+                    self.set_mode(Mode::Playing);
+                }
+            }
+            // Nothing enters this yet (D-2 does). `cancel` is honoured anyway,
+            // so a mode set by hand in a test is never a dead end.
+            Mode::Dialogue => {
+                if input.pressed(Action::Cancel) {
+                    self.set_mode(Mode::Playing);
+                }
+            }
+        }
+
+        // `base + sum(modifiers)`, brought up to date once per tick in every
+        // mode.
+        //
+        // Outside the dispatch on purpose, and *after* it. This is not the
+        // world advancing — it recomputes a view of state that already
+        // changed, and with nothing equipped it does not even allocate — so a
+        // frozen world stays frozen through it. It has to run in the modal
+        // modes because the inventory screen is the one place equipment ever
+        // changes, and it has to run after them because otherwise the tick you
+        // put a helm on would end with the old maximum health still showing.
+        // Running at the end also means the controllers at the top of the next
+        // tick read a block that is already correct, which is the ordering
+        // every read site assumes.
+        inventory::derive_stats(&mut self.world, &self.items);
+
+        self.prev_held = input.held_set();
+        self.tick += 1;
+
+        #[cfg(debug_assertions)]
+        self.check_invariants();
+    }
+
+    /// Enter a mode, announcing it.
+    ///
+    /// Private, and the only way the mode changes: a transition that did not
+    /// emit its event would leave a stretch of frozen frames in a trace with
+    /// nothing to explain them.
+    fn set_mode(&mut self, to: Mode) {
+        if self.mode == to {
+            return;
+        }
+        let from = self.mode;
+        self.mode = to;
+        if to == Mode::Inventory {
+            // The bag can shrink while the screen is shut, so the remembered
+            // selection is pulled back inside it rather than trusted.
+            inventory::clamp_selection(&self.world, &mut self.screen);
+        }
+        self.events.push(GameEvent::ModeChanged { from, to });
+    }
+
+    /// One tick of the world.
     ///
     /// Decide, move, react — in that order, and with movement as one pass over
     /// every body. New systems slot into the phase they belong to rather than
@@ -276,15 +447,21 @@ impl Sim {
     /// `avatar::after_move` is handed the geometry rather than the level: a
     /// spike and a lit fire are one set of boxes by the time anything dies to
     /// either.
-    pub fn step(&mut self, input: PlayerInput) {
-        self.events.clear();
+    fn step_playing(&mut self, input: PlayerInput) {
+        // Opening a modal screen is decided before anything moves, so the tick
+        // it happens on is already a frozen one. That is what makes a detour
+        // through the inventory cost the world exactly nothing: the same
+        // number of ticks are spent running it either way.
+        if input.pressed(Action::Inventory) {
+            self.set_mode(Mode::Inventory);
+            return;
+        }
 
         // Impact freeze: hold everything for a few ticks after a hit lands.
         // The tick counter still advances, so traces and tapes stay aligned
         // with wall-clock time and a frozen frame is visible as one.
         if self.hitstop > 0 {
             self.hitstop -= 1;
-            self.tick += 1;
             return;
         }
 
@@ -337,7 +514,14 @@ impl Sim {
         // Both are done before `settle_dead`, so whatever either of them
         // killed stops moving on the tick it died.
         spell::resolve_projectiles(&mut self.world, &self.geometry, &mut self.events);
+        // Beside them, and tested at final positions for the same reason:
+        // walking over something is contact, and contact is decided once
+        // everything has stopped moving.
+        inventory::collect_pickups(&mut self.world, &mut self.events);
         combat::settle_dead(&mut self.world);
+        // On the tick the corpse died, so a kill and its drops are one frame
+        // of the trace rather than two.
+        inventory::drop_loot(&mut self.world, &mut self.rng);
         if self
             .events
             .iter()
@@ -349,10 +533,6 @@ impl Sim {
         animation::select_avatar_clip(&mut self.world, &self.attacks, &self.spells);
         animation::select_patrol_clip(&mut self.world);
         animation::advance(&mut self.world, TICK);
-        self.tick += 1;
-
-        #[cfg(debug_assertions)]
-        self.check_invariants();
     }
 
     /// What happened during the most recent [`Sim::step`].
@@ -427,6 +607,53 @@ impl Sim {
             .collect()
     }
 
+    /// Everything the player is carrying or wearing, for tracing and
+    /// assertions as `item.<id>.count` and `item.<id>.equipped`.
+    ///
+    /// Nested in the frame rather than flattened into the probe, the way
+    /// `npcs` is: a bag is a list, and a run with an empty one serializes
+    /// exactly as it did before items existed.
+    ///
+    /// Equipped items appear even once they have left the bag — otherwise
+    /// `item.knight_helm.equipped` would stop resolving at the moment it
+    /// became true.
+    pub fn item_probes(&self) -> Vec<ItemProbe> {
+        let Some(holder) = inventory::holder(&self.world) else {
+            return Vec::new();
+        };
+        let Ok(bag) = self.world.get::<&Inventory>(holder) else {
+            return Vec::new();
+        };
+        let gear = self.world.get::<&Equipment>(holder).ok();
+
+        // Bag order first — which is the order the screen lists it in, and the
+        // order things were picked up — then whatever is worn but no longer
+        // carried, in slot order. Both are stable; neither is hecs's.
+        let mut probes: Vec<ItemProbe> = bag
+            .slots
+            .iter()
+            .map(|stack| ItemProbe {
+                id: stack.id.clone(),
+                count: stack.count,
+                equipped: gear.as_ref().is_some_and(|gear| gear.holds(&stack.id)),
+            })
+            .collect();
+
+        if let Some(gear) = &gear {
+            for id in gear.slots.values() {
+                if probes.iter().any(|probe| &probe.id == id) {
+                    continue;
+                }
+                probes.push(ItemProbe {
+                    id: id.clone(),
+                    count: 0,
+                    equipped: true,
+                });
+            }
+        }
+        probes
+    }
+
     /// Snapshot the player's state for tracing and assertions.
     pub fn probe(&self) -> Probe {
         #[allow(clippy::type_complexity)]
@@ -440,11 +667,13 @@ impl Sim {
             &AnimationState,
             Option<&Mana>,
             Option<&Casting>,
+            Option<&Inventory>,
         )>();
-        let (_, (avatar, body, health, attacking, pos, vel, anim, mana, casting)) =
+        let (_, (avatar, body, health, attacking, pos, vel, anim, mana, casting, bag)) =
             query.iter().next().expect("sim has no avatar to probe");
         Probe::new(
             self.tick,
+            self.mode,
             avatar,
             body,
             health,
@@ -454,10 +683,14 @@ impl Sim {
             anim,
             mana,
             casting,
-            // A count, not a probe each: what a tape wants to say is "a bolt
-            // existed", and a line per projectile per tick makes a trace
-            // unreadable long before it makes it informative.
+            // Counts, not a probe each: what a tape wants to say is "a bolt
+            // existed" and "the kill dropped something", and a line per entity
+            // per tick makes a trace unreadable long before it makes it
+            // informative.
             spell::projectile_count(&self.world),
+            inventory::pickup_count(&self.world),
+            bag.map_or(0, |bag| bag.used_slots()),
+            &self.screen,
         )
     }
 
@@ -1138,6 +1371,179 @@ mod tests {
         assert!(!sim.probe().attacking);
     }
 
+    // --- modes ------------------------------------------------------------
+
+    const OPEN_BAG: PlayerInput = PlayerInput::from_actions(&[Action::Inventory]);
+
+    /// A sim mid-run: on the ground, moving, with an animation part-way
+    /// through — so that "nothing changed" is a claim about something.
+    fn running_sim() -> Sim {
+        let mut sim = Sim::fixture(&[
+            "....................",
+            "..P.................",
+            "####################",
+        ]);
+        step_until(&mut sim, 30, PlayerInput::default(), |s| s.probe().grounded);
+        for _ in 0..20 {
+            sim.step(PlayerInput::holding(&[Action::Right]));
+        }
+        sim
+    }
+
+    #[test]
+    fn the_inventory_key_opens_and_closes_the_screen_and_says_so() {
+        let mut sim = running_sim();
+        assert_eq!(sim.mode(), Mode::Playing);
+
+        sim.step(OPEN_BAG);
+        assert_eq!(sim.mode(), Mode::Inventory);
+        assert_eq!(sim.probe().mode, "inventory");
+        assert_eq!(
+            sim.events(),
+            [GameEvent::ModeChanged {
+                from: Mode::Playing,
+                to: Mode::Inventory
+            }]
+        );
+
+        // Held rather than pressed: one press is one toggle, however long the
+        // key stays down.
+        for _ in 0..10 {
+            sim.step(PlayerInput::holding(&[Action::Inventory]));
+            assert_eq!(sim.mode(), Mode::Inventory);
+        }
+
+        sim.step(PlayerInput::default());
+        sim.step(OPEN_BAG);
+        assert_eq!(sim.mode(), Mode::Playing);
+        assert_eq!(
+            sim.events(),
+            [GameEvent::ModeChanged {
+                from: Mode::Inventory,
+                to: Mode::Playing
+            }]
+        );
+    }
+
+    #[test]
+    fn cancel_also_closes_the_screen() {
+        let mut sim = running_sim();
+        sim.step(OPEN_BAG);
+        sim.step(PlayerInput::from_actions(&[Action::Cancel]));
+        assert_eq!(sim.mode(), Mode::Playing);
+    }
+
+    /// The tick counter is the one thing that keeps moving, exactly as it does
+    /// through hitstop — so a trace stays aligned with wall-clock time and a
+    /// menu shows up as the run of identical frames it is.
+    #[test]
+    fn steps_advance_the_tick_counter_in_every_mode() {
+        let mut sim = running_sim();
+        let before = sim.probe().tick;
+        sim.step(OPEN_BAG);
+        for _ in 0..60 {
+            sim.step(PlayerInput::default());
+        }
+        assert_eq!(sim.probe().tick, before + 61);
+    }
+
+    /// The whole of I-1's acceptance criterion, checked exhaustively rather
+    /// than field by field: enter, step sixty ticks, leave, and every single
+    /// thing the probe can see is where it was. `tick` is exempt because it
+    /// must move; `mode` is exempt because it is the thing that moved.
+    ///
+    /// A comparison written out as a list of fields would silently stop
+    /// covering whatever the probe gained next. Serializing both and blanking
+    /// the two exempt keys cannot.
+    #[test]
+    fn a_modal_mode_freezes_every_probe_field_but_the_tick() {
+        let mut sim = running_sim();
+
+        let flatten = |sim: &Sim| {
+            let frame = trace::Frame {
+                probe: sim.probe(),
+                npcs: sim.npc_probes(),
+                items: sim.item_probes(),
+                events: Vec::new(),
+                seed: None,
+            };
+            let mut value: serde_json::Value = serde_json::to_value(&frame).unwrap();
+            let map = value.as_object_mut().unwrap();
+            map.remove("tick");
+            map.remove("mode");
+            value
+        };
+
+        let before = flatten(&sim);
+        sim.step(OPEN_BAG);
+        assert_eq!(
+            flatten(&sim),
+            before,
+            "opening the screen moved something on the tick it happened"
+        );
+
+        for tick in 0..60 {
+            sim.step(PlayerInput::default());
+            assert_eq!(
+                flatten(&sim),
+                before,
+                "the world moved on frozen tick {tick}"
+            );
+        }
+
+        sim.step(OPEN_BAG);
+        assert_eq!(sim.mode(), Mode::Playing);
+        assert_eq!(flatten(&sim), before, "leaving the screen moved something");
+    }
+
+    /// ...and the consequence that matters to a player: a detour through the
+    /// inventory does not cost the run a single tick of world time. Two sims,
+    /// one of which stops to look in its bag, and identical traces at the end.
+    #[test]
+    fn a_detour_through_the_inventory_costs_the_world_nothing() {
+        let run = PlayerInput::holding(&[Action::Right]);
+
+        let mut plain = running_sim();
+        for _ in 0..40 {
+            plain.step(run);
+        }
+
+        let mut detoured = running_sim();
+        for _ in 0..20 {
+            detoured.step(run);
+        }
+        detoured.step(OPEN_BAG);
+        for _ in 0..90 {
+            detoured.step(PlayerInput::default());
+        }
+        detoured.step(OPEN_BAG);
+        for _ in 0..20 {
+            detoured.step(run);
+        }
+
+        let (a, b) = (plain.probe(), detoured.probe());
+        assert_eq!(a.x, b.x, "the detour cost the run distance");
+        assert_eq!((a.y, a.vx, a.vy), (b.y, b.vx, b.vy));
+        assert_eq!((a.clip.as_str(), a.frame), (b.clip.as_str(), b.frame));
+        assert_ne!(a.tick, b.tick, "but the clock did keep running");
+    }
+
+    /// Nothing enters dialogue mode yet, and it must not be a trap for the
+    /// ticket that does.
+    #[test]
+    fn dialogue_mode_exists_and_can_be_left() {
+        let mut sim = running_sim();
+        sim.set_mode(Mode::Dialogue);
+        assert_eq!(sim.probe().mode, "dialogue");
+        let frozen = sim.probe().x;
+        for _ in 0..30 {
+            sim.step(PlayerInput::holding(&[Action::Right]));
+        }
+        assert_eq!(sim.probe().x, frozen, "the world is frozen in every mode");
+        sim.step(PlayerInput::from_actions(&[Action::Cancel]));
+        assert_eq!(sim.mode(), Mode::Playing);
+    }
+
     // --- randomness -----------------------------------------------------
 
     /// The property every tape and golden trace rests on: the seed is the
@@ -1159,11 +1565,14 @@ mod tests {
         assert_eq!(sim.seed(), rng::DEFAULT_SEED);
     }
 
-    /// Nothing draws from the generator yet, which is exactly why the golden
-    /// traces did not move when it was added. Once something does, delete
-    /// this — it is a statement about today, not an invariant.
+    /// Loot rolls are the first and so far only draw from the generator, and
+    /// they happen on the tick something dies. A run in which nothing dies
+    /// must therefore consume nothing — which is why adding loot moved no
+    /// golden trace but `knight_kill`'s, and why a future system that rolled
+    /// dice every tick would be a change worth arguing about rather than one
+    /// that slipped in.
     #[test]
-    fn stepping_the_sim_consumes_no_randomness() {
+    fn stepping_the_sim_consumes_no_randomness_unless_something_dies() {
         let mut sim = Sim::fixture(&["..........", "..P.......", "##########"]);
         let before = sim.rng.clone();
         for _ in 0..60 {

@@ -86,6 +86,11 @@ alone in the air is still the air attack.
 It is refused, loudly, if a swing or another cast is running, if the cooldown
 has not lapsed, or if the pool is short — see `cast_failed` below.
 
+`inventory` opens and closes the inventory screen, and `confirm` (Enter),
+`cancel` (Backspace) and the four directions drive it once it is open. See
+[Modes](#modes) — the screen is simulation, so every one of those keys is a
+real key going through the real action table, and a tape can walk the whole UI.
+
 **Edge-triggered actions fire once per press.** `jump 10` is one jump held for
 ten ticks — exactly what holding the key does — not ten jumps. Releasing and
 pressing again is what produces a second. `attack 1` is the usual way to write
@@ -104,18 +109,75 @@ to reproduce it.
 Assertions read `assert <flag>`, `assert !<flag>`, or `assert <field> <op>
 <value>` with `< <= > >= == !=`. Available names:
 
-- numeric: `x`, `y`, `vx`, `vy`, `tick`, `air_jumps`, `frame`, `hp`,
-  `iframes`, `hitstun`, `mana`, `mana_max`, `cast_cooldown`, `projectiles`
+- numeric: `x`, `y`, `vx`, `vy`, `tick`, `air_jumps`, `frame`, `hp`, `hp_max`,
+  `iframes`, `hitstun`, `mana`, `mana_max`, `cast_cooldown`, `projectiles`,
+  `pickups`, `inventory_count`, `selection`
 - boolean: `grounded`, `facing_right`, `wall_sliding`, `double_jumping`,
   `crouching`, `dead`, `on_one_way_only`, `attacking`, `casting`, `plunging`
-- text: `clip` — compared with `==` or `!=` only
+- text: `clip`, `mode`, `pane` — compared with `==` or `!=` only
 
-`projectiles` is a count of every bolt in the air anywhere in the world, not a
-probe per bolt: a line per projectile per tick makes a trace unreadable long
-before it makes it informative, and what a tape wants to say is "the bolt
-existed" and "it hit". `mana` is `0` for anything with no pool at all, which is
-the same answer an empty pool gives — and correctly so, since both mean "cannot
-cast".
+`projectiles` and `pickups` are counts of every bolt in the air and every item
+on the floor anywhere in the world, not a probe each: a line per entity per
+tick makes a trace unreadable long before it makes it informative, and what a
+tape wants to say is "the bolt existed", "it hit", "the kill dropped
+something". `mana` is `0` for anything with no pool at all, which is the same
+answer an empty pool gives — and correctly so, since both mean "cannot cast".
+
+`hp_max` is the *derived* maximum: base plus whatever is equipped. It is the
+field to watch when something is put on, because current health is clamped when
+the maximum moves and never topped up — equipment is not a heal.
+
+## Modes
+
+`mode` is what the simulation is doing: `playing`, `inventory`, or `dialogue`.
+A modal mode pauses the world and is still simulation, because using a potion
+changes health. So the inventory screen's whole state lives in `Sim`, and a
+tape can drive it:
+
+```
+inventory 1                  # open it — the world stops on this very tick
+assert mode == inventory
+assert pane == bag           # `bag` or `gear`; left/right switch
+down 1                       # one press is one step, even if the key is held
+assert selection == 1
+confirm 1                    # use a consumable, or equip anything else
+expect minor_potion.item_used == 1
+inventory 1                  # or `cancel 1`
+assert mode == playing
+```
+
+While modal, **nothing** about the world moves — not positions, not timers, not
+even the animation frame, because `animation::advance` is a world system and no
+world system runs. The tick counter does keep going, exactly as it does through
+hitstop, so a trace stays aligned with wall-clock time and the pause reads as
+the run of identical frames it is. The consequence a player feels is that a
+detour through the bag costs the run nothing at all;
+`tapes/inventory_frozen.tape` measures that against the same run with the
+detour deleted.
+
+Pause (`P`) is deliberately *not* a mode. It stops the sim being stepped at
+all, and nothing about it is simulation.
+
+## Asserting on items
+
+Items are addressed by id rather than by index, because a stack leaves the bag
+the moment it empties and nothing about its position is stable:
+
+```
+assert item.minor_potion.count == 2
+assert item.knight_helm.equipped
+assert inventory_count == 1        # occupied slots — a count of *kinds*
+```
+
+- numeric: `count` — how many are in the bag, `0` for something worn and no
+  longer carried
+- boolean: `equipped`
+
+An item nobody is carrying reads as `count == 0` rather than failing to
+resolve, so a tape can assert both sides of a pickup. The price is that a
+mistyped id also reads as zero: `tests/data.rs` is what catches a typo in
+*content*, and a tape should assert a count going **up** rather than merely
+being what it already was.
 
 ## Asserting on NPCs
 
@@ -175,18 +237,32 @@ expect wall_jumped == 1  # fired exactly once
 ```
 
 Events: `jumped`, `double_jumped`, `wall_jumped`, `landed`, `dropped_through`,
-`slid`, `died`, `respawned`, `attacked`, `damaged`, `spell_cast`, `cast_failed`.
+`slid`, `died`, `respawned`, `attacked`, `damaged`, `spell_cast`,
+`cast_failed`, `mode_changed`, `picked_up`, `inventory_full`, `item_used`,
+`equipped`, `unequipped`.
 
 Three things to know:
 
-**Narrow with `<name>.<event>`.** Five events carry a discriminating name.
+**Narrow with `<name>.<event>`.** Eleven events carry a discriminating name.
 `damaged` and `died` carry the victim, so `expect knight.damaged == 3` counts
 hits on the knight and `expect player.damaged == 4` counts hits on you.
 `attacked` carries the attack id, so `expect player_slash3.attacked >= 3` says
 the finisher actually saw use, and `expect no player_plunge.attacked` says a
 tape never plunged. `spell_cast` and `cast_failed` carry the spell id, so
-`expect shock.spell_cast == 1`. A bare `expect damaged` counts every hit on
-anything, which is rarely what you mean now that both sides bleed.
+`expect shock.spell_cast == 1`. The six item events carry the item, so
+`expect knight_helm.equipped == 1` and `expect minor_potion.item_used == 2`;
+`mode_changed` carries the mode *entered*, so `expect inventory.mode_changed`
+counts openings rather than openings and closings. A bare `expect damaged`
+counts every hit on anything, which is rarely what you mean now that both sides
+bleed — and a bare `expect no died` counts the knight's death as well as yours,
+so what you almost always want is `expect no player.died`.
+
+**`inventory_full` is the pickup's `cast_failed`.** An item you have no room
+for stays on the floor and leaves nothing in any state field, so without the
+event "the pickup is broken" and "your bag is full" are the same absence. It
+covers both directions of the same problem — a pickup refused, and a worn item
+that could not be taken off — and fires once per approach rather than once per
+tick of standing on the thing.
 
 **`cast_failed` is not decoration.** A cast that does not happen leaves nothing
 in any state field, so without this event "the key did nothing" and "you were
@@ -226,6 +302,14 @@ do not move what is already there.
 | `testbed_arena.ron` | fighting: a small walled room with a knight and nowhere to run |
 | `testbed_fire.ron` | fire: two alternating fires on a flat corridor, one to cross while it is out and one to stand in until it lights |
 | `testbed_mover.ron` | moving platforms: two ledges with a spiked pit between them and one platform ferrying across |
+
+Items have no fixture map of their own, and deliberately so: the only source of
+items in the game is a corpse, so `loot.tape` and `inventory_use.tape` both run
+on `testbed_arena.ron` and start by killing the knight there. They kill it
+differently on purpose — `loot.tape` at range, so the drops land where the
+knight fell and walking over them is actually tested, and `inventory_use.tape`
+in melee, so the knockback puts the drops underfoot and the fight costs enough
+health that the potion has something to heal.
 
 `testbed_knight.ron` keeps the player two tiles below the knight's ledge on
 purpose. Once the knight became hostile, a player standing on the same ledge

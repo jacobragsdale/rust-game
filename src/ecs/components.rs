@@ -1,10 +1,11 @@
 //! Components are plain data. Behavior lives in `crate::systems`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use ggez::glam::Vec2;
 
-use crate::assets::{AvatarStats, ClipSet, StatBlock};
+use crate::assets::{AvatarStats, ClipSet, LootDrop, Slot, StatBlock};
 use crate::physics::{Aabb, SolidRect};
 
 /// What this entity's kind is worth, numerically: the block
@@ -16,6 +17,180 @@ use crate::physics::{Aabb, SolidRect};
 /// `Send + Sync`, as a hecs component must be.
 #[derive(Clone, Debug)]
 pub struct Stats(pub Arc<StatBlock>);
+
+/// [`Stats`] plus whatever is equipped: `base + sum(modifiers)`, recomputed
+/// from scratch once per tick by [`crate::systems::inventory::derive_stats`].
+///
+/// **This is what every system reads.** [`Stats`] is the base and is never
+/// modified; this is the answer. The split is the whole of PLAN.md's rule that
+/// stats are never mutated in place, and the reason is worth restating: if
+/// equipping added 2 to a number, unequipping would have to know it was 2 —
+/// and the first time those two facts disagree (an item edited between a save
+/// and a load, an effect applied twice, a death mid-equip) the player's maximum
+/// health is permanently wrong with nothing in the code to point at. Deriving
+/// makes that unrepresentable: there is no subtraction anywhere.
+///
+/// Entities with no [`Equipment`] carry a `DerivedStats` too, sharing the same
+/// `Arc` as their base — so a read site never has to ask whether this entity is
+/// the kind that can wear things.
+#[derive(Clone, Debug)]
+pub struct DerivedStats(pub Arc<StatBlock>);
+
+/// A count of one item id. One stack occupies one slot of an [`Inventory`],
+/// however many are in it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemStack {
+    pub id: String,
+    pub count: u32,
+}
+
+/// What an entity is carrying.
+///
+/// Capacity counts *stacks*, not items, which is what makes "the bag is full"
+/// a state about kinds rather than about quantity: a thirteenth potion always
+/// fits, a thirteenth kind of thing does not. It comes from the kind's
+/// `inventory_slots` stat rather than a constant here, so a bigger bag is
+/// content.
+#[derive(Clone, Debug, Default)]
+pub struct Inventory {
+    pub slots: Vec<ItemStack>,
+    pub capacity: usize,
+}
+
+impl Inventory {
+    pub fn new(capacity: usize) -> Self {
+        Inventory {
+            slots: Vec::new(),
+            capacity,
+        }
+    }
+
+    /// How many of `id` are carried.
+    pub fn count(&self, id: &str) -> u32 {
+        self.slots
+            .iter()
+            .find(|stack| stack.id == id)
+            .map_or(0, |stack| stack.count)
+    }
+
+    /// Every stack is one slot, so this is the number of distinct kinds held.
+    pub fn used_slots(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.slots.len() >= self.capacity
+    }
+
+    /// Would `id` fit? True whenever a stack of it already exists, since that
+    /// stack simply grows.
+    pub fn has_room_for(&self, id: &str) -> bool {
+        self.slots.iter().any(|stack| stack.id == id) || !self.is_full()
+    }
+
+    /// Add `count` of `id`, stacking onto an existing entry. Returns false and
+    /// changes nothing if there is no room — the caller is expected to say so
+    /// rather than swallow it.
+    pub fn add(&mut self, id: &str, count: u32) -> bool {
+        if count == 0 {
+            return true;
+        }
+        if let Some(stack) = self.slots.iter_mut().find(|stack| stack.id == id) {
+            stack.count += count;
+            return true;
+        }
+        if self.is_full() {
+            return false;
+        }
+        self.slots.push(ItemStack {
+            id: id.to_string(),
+            count,
+        });
+        true
+    }
+
+    /// Take `count` of `id`, removing the stack when it empties. Returns false
+    /// and changes nothing if there are not that many.
+    pub fn remove(&mut self, id: &str, count: u32) -> bool {
+        let Some(index) = self.slots.iter().position(|stack| stack.id == id) else {
+            return false;
+        };
+        if self.slots[index].count < count {
+            return false;
+        }
+        self.slots[index].count -= count;
+        if self.slots[index].count == 0 {
+            self.slots.remove(index);
+        }
+        true
+    }
+}
+
+/// What an entity is wearing, by slot.
+///
+/// A `BTreeMap` rather than a `HashMap`, and that is load-bearing: deriving
+/// stats walks this and sums modifiers, so iteration order is observable in
+/// every float it produces. `HashMap` order varies between runs, which would
+/// make a golden trace depend on hash seeding — a class of bug that shows up
+/// as "the trace differs on one machine" and takes a day to find.
+#[derive(Clone, Debug, Default)]
+pub struct Equipment {
+    pub slots: BTreeMap<Slot, String>,
+}
+
+impl Equipment {
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+
+    pub fn get(&self, slot: Slot) -> Option<&str> {
+        self.slots.get(&slot).map(String::as_str)
+    }
+
+    /// Is `id` worn in any slot?
+    pub fn holds(&self, id: &str) -> bool {
+        self.slots.values().any(|worn| worn == id)
+    }
+}
+
+/// An item lying in the world, waiting to be walked over.
+///
+/// A plain entity with a [`Body`], which is what `move_bodies` was generalized
+/// for: a drop falls, lands, and sits there using exactly the code the player
+/// falls with. It has no [`Sprite`] on purpose — item art does not exist yet,
+/// so the scene draws a coloured quad from this and the item's kind, and the
+/// day `assets/graphics/items/` arrives the content that names those sprites
+/// does not have to be rewritten.
+#[derive(Clone, Debug)]
+pub struct Pickup {
+    pub item: String,
+    pub count: u32,
+    /// Whether a full bag has already been reported for this one. Without it,
+    /// standing on an item you have no room for emits an event every tick for
+    /// as long as you stand there, and a trace becomes unreadable.
+    pub refused: bool,
+}
+
+/// What an entity leaves behind when it dies.
+///
+/// The table itself is authored on the kind's stat block, not here and not in
+/// code; this is the per-entity copy plus the one bit that has to be state —
+/// whether the roll has happened. A corpse is never despawned, so without
+/// `dropped` it would drop again on every tick it spends dead.
+#[derive(Clone, Debug)]
+pub struct Loot {
+    pub drops: Vec<LootDrop>,
+    pub dropped: bool,
+}
+
+impl Loot {
+    pub fn new(drops: Vec<LootDrop>) -> Self {
+        Loot {
+            drops,
+            dropped: false,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Position(pub Vec2);

@@ -69,6 +69,7 @@ pub fn run_tape(sim: &mut Sim, tape: &Tape) -> RunOutcome {
         let frame = Frame {
             probe: sim.probe(),
             npcs: sim.npc_probes(),
+            items: sim.item_probes(),
             events: sim.events().to_vec(),
             // Only on the first line, and only when it is not the value every
             // trace already runs at — see `Frame::seed`.
@@ -103,10 +104,15 @@ pub fn run_tape(sim: &mut Sim, tape: &Tape) -> RunOutcome {
 /// Step the sim with no input, for probing a map without authoring a tape.
 pub fn run_idle(sim: &mut Sim, ticks: usize) -> Trace {
     let mut trace = Trace::new();
-    trace.push(sim.probe(), sim.npc_probes(), &[]);
+    trace.push(sim.probe(), sim.npc_probes(), sim.item_probes(), &[]);
     for _ in 0..ticks {
         sim.step(PlayerInput::default());
-        trace.push(sim.probe(), sim.npc_probes(), sim.events());
+        trace.push(
+            sim.probe(),
+            sim.npc_probes(),
+            sim.item_probes(),
+            sim.events(),
+        );
     }
     trace
 }

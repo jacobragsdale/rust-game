@@ -8,7 +8,7 @@ use hecs::World;
 
 use crate::assets::AiStats;
 use crate::ecs::components::{
-    Attacking, Body, Health, Hostile, Patrol, Position, Size, Stance, Stats, Team, Velocity,
+    Attacking, Body, DerivedStats, Health, Hostile, Patrol, Position, Size, Stance, Team, Velocity,
 };
 use crate::physics::{Aabb, SolidQuery, SolidRect};
 use crate::sim::event::GameEvent;
@@ -38,12 +38,14 @@ pub fn think<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, events: &m
             &Body,
             &Health,
             &Attacking,
-            &Stats,
+            &DerivedStats,
         )>()
         .iter()
     {
         // Sight, reach, patience and how far it peers over a ledge are all
-        // per-kind data — `assets/data/stats.ron`, the `ai` group.
+        // per-kind data — `assets/data/stats.ron`, the `ai` group — read
+        // through the derived block, so an enemy that ever wears something
+        // gets the benefit of it without a change here.
         let ai = stats.0.ai();
 
         if body.frozen || health.dead() {
@@ -286,7 +288,7 @@ mod tests {
             Velocity(Vec2::ZERO),
             Size(SIZE),
             Body::new(pos, knight.gravity, knight.max_fall),
-            Stats(knight),
+            DerivedStats(knight),
         ))
     }
 

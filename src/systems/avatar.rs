@@ -20,7 +20,7 @@ use hecs::World;
 
 use crate::assets::{AttackDef, AttackTable, SpellTable, StatBlock};
 use crate::ecs::components::{
-    Attacking, Avatar, Body, Casting, Health, Mana, Plunge, Position, Size, Stats, Velocity,
+    Attacking, Avatar, Body, Casting, DerivedStats, Health, Mana, Plunge, Position, Size, Velocity,
 };
 use crate::level::LevelData;
 use crate::physics::{self, Aabb, HazardQuery, SolidQuery};
@@ -50,15 +50,17 @@ pub fn control<Q: SolidQuery + ?Sized>(
             &mut Body,
             &mut Health,
             &mut Attacking,
-            &Stats,
+            &DerivedStats,
             Option<&mut Casting>,
             Option<&mut Mana>,
         )>()
     {
         let (mut casting, mut mana) = (casting, mana);
-        // Everything below reads its numbers from here: `stats` is the block
-        // `assets/data/stats.ron` holds for this entity's kind, and `mv` is the
-        // group of it that only something the player steers has.
+        // Everything below reads its numbers from here: `stats` is the
+        // *derived* block — the one `assets/data/stats.ron` holds for this
+        // entity's kind plus whatever it is wearing, recomputed from the base
+        // at the top of this tick — and `mv` is the group of it that only
+        // something the player steers has.
         let stats = &stats.0;
         let mv = stats.avatar();
 
@@ -415,7 +417,7 @@ pub fn after_move<H: HazardQuery + ?Sized>(
         &Size,
         &Body,
         &mut Health,
-        &Stats,
+        &DerivedStats,
     )>() {
         let mv = stats.0.avatar();
 
@@ -620,7 +622,7 @@ mod tests {
             Position(pos),
             Velocity(Vec2::ZERO),
             Size(stats.size()),
-            Stats(stats),
+            DerivedStats(stats),
         ));
     }
 

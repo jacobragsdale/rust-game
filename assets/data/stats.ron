@@ -24,6 +24,18 @@ Stats({
         // death spiral.
         iframe_ticks: 30,
         attack: "player_slash1",
+        // Bare-handed. A weapon's `damage` is added to this through the
+        // derived-stat path, so the base is what the player is worth with
+        // nothing equipped — and taking a sword off restores exactly this.
+        damage_bonus: 0,
+        // Twelve stacks. Big enough that the bag is not a puzzle, small enough
+        // that "full" is a state the game can actually reach and therefore has
+        // to handle. Stacking is per id, so this is a count of *kinds*.
+        inventory_slots: 12,
+        // The player drops nothing. Written out rather than defaulted, for the
+        // same reason `max_mana: 0` is on the knight: nothing in this file is
+        // a fallback.
+        loot: [],
         // Two casts on a full pool, and the third has to be waited for.
         max_mana: 5,
         // Thousandths of a point per tick: 12 is one point every 84 ticks, so
@@ -74,6 +86,24 @@ Stats({
         // Short enough that every link of the player's combo connects.
         iframe_ticks: 10,
         attack: "knight_slash",
+        damage_bonus: 0,
+        // No bag: a knight carries its loot table, not an inventory. Zero is
+        // what stops `spawn` giving it an `Inventory` at all.
+        inventory_slots: 0,
+        // What it leaves behind. Rolled in a fixed order against the sim's
+        // seeded generator, so the same seed produces the same drops from the
+        // same fight — see `systems::inventory::drop_loot`.
+        //
+        // The helm and the potion always drop, because M4's whole exit
+        // criterion runs through them and a testbed that only sometimes hands
+        // you the thing under test is a testbed that only sometimes tests it.
+        // The sword is the coin flip, so the fractional path is exercised by
+        // shipped content rather than only by a unit test.
+        loot: [
+            LootDrop(item: "knight_helm", count: 1, chance: 1.0),
+            LootDrop(item: "minor_potion", count: 1, chance: 1.0),
+            LootDrop(item: "iron_sword", count: 1, chance: 0.5),
+        ],
         // No pool and no spell: the knight is all sword. Written out rather
         // than defaulted, because nothing in this file is a fallback — a kind
         // that says nothing about mana would be a kind nobody had decided

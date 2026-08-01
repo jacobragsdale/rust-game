@@ -5,6 +5,7 @@ pub mod camera;
 pub mod combat;
 pub mod hazard;
 pub mod input;
+pub mod inventory;
 pub mod mover;
 pub mod npc;
 pub mod spell;

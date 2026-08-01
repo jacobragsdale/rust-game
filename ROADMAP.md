@@ -201,7 +201,7 @@ asserted by a tape, with the damage numbers coming from data files. ✅ Met:
 the melee kill, the death and respawn, the ranged kill, the resource, and the
 last of the melee kit — nineteen tapes and nineteen golden traces in all.
 
-## M4 — Items and inventory
+## M4 — Items and inventory ✅ done
 
 **Size:** medium. **Depends on:** M2 (pickups are entities), M3 (loot drops).
 
@@ -215,8 +215,26 @@ state. This is where `Sim` gets a mode enum (`Playing | Inventory | …`) and
 `step` dispatches on it. Getting this pattern established here, on the simpler
 of the two modal features, is deliberate: dialogue inherits it.
 
+Shipped as: `Mode { Playing, Inventory, Dialogue }` on `Sim` with `step`
+dispatching on it, `assets/data/items/*.ron` behind an `ItemTable`, `Inventory`
+/ `Equipment` / `DerivedStats` components, pickups as bodies that fall,
+seeded loot rolls on the tick of death, and `scenes/inventory.rs` as an overlay
+that draws and decides nothing. `Dialogue` is in the enum unused, so M5 does
+not have to reopen the dispatch.
+
+Two things worth knowing before M5 inherits this. **Derived stats are
+recomputed at the end of every tick, in every mode and outside the dispatch** —
+recomputing a view of state is not the world advancing, and the modal screen is
+the only place equipment ever changes. And **a modal tick runs no world system
+at all**, including the tick the mode is entered and the tick it is left, which
+is what makes a detour through the inventory cost the run exactly nothing.
+
 **Exit criteria:** kill the knight, loot drops, pick it up, equip it, stats
-change — asserted headlessly, no window.
+change — asserted headlessly, no window. ✅ Met: `tapes/inventory_use.tape`
+is that chain end to end in one run, with `tapes/loot.tape` covering the
+walk-over the melee kill cannot (the knockback drops the corpse underfoot) and
+`tapes/inventory_frozen.tape` measuring the freeze against the same run with
+the detour deleted — twenty-three tapes and twenty-three golden traces in all.
 
 ## M5 — Interaction and dialogue
 
@@ -353,7 +371,7 @@ serves, not after.
 | ~~M1 Body split~~ | ~~none — the traces already cover it~~ (held: zero diffs) |
 | ~~M2 NPCs~~ | ~~snapshot `Probe`, path assertions, ordering guard~~ (RNG moved to M3) |
 | M3 Combat | combat events, action-set inputs (attack/cast) in tapes |
-| M4 Items | inventory in the snapshot, pickup/equip events |
+| ~~M4 Items~~ | ~~inventory in the snapshot, pickup/equip events~~ (`item.<id>.count`, `mode`, six item events) |
 | M5 Dialogue | choice selection in tapes, dialogue events |
 | M6 Quests | quest flags as snapshot globals |
 | ~~M7 Map features~~ | ~~property tests for dynamic geometry and rider carry~~ (six sweeps in `tests/physics_diagnostics.rs`) |
@@ -386,6 +404,13 @@ ways. Its designs are still good; its status claims are not.
   timing is balanced against them.
 - **Asset licensing** for the itch.io packs (Adventurer sprite, knight pack,
   castle tiles) is still unverified. Blocking for public distribution only.
-- **Scope of the RPG layer.** PLAN.md's item/equipment system is fairly deep.
+- ~~**Scope of the RPG layer.** PLAN.md's item/equipment system is fairly deep.
   Worth deciding at M4 whether that depth is wanted or whether a lighter
-  inventory serves the game better.
+  inventory serves the game better.~~ Decided in M4: PLAN.md's schema shipped
+  as written, minus two things. There is no *drop* action — no key a player
+  would guess is free, and dropping into a frozen world raises a
+  pick-it-straight-back-up problem M4 does not need to solve. And
+  `ItemKind::Weapon`'s `speed` is authored but unread; making a weapon swing
+  faster is either its own entries in `attacks.ron` (which `combo` already
+  expresses) or a multiplier threaded through `AttackDef`, and neither was
+  needed to meet the exit criterion.

@@ -1,0 +1,21 @@
+// Consumables: spent from the bag for an immediate effect.
+//
+// Using one is simulation, not UI — it changes health, which changes whether
+// the next knight kills you — so it happens in `Sim` while the inventory
+// screen is open and the rest of the world is frozen. The screen draws; it
+// does not decide.
+//
+// `Heal` clamps to the maximum rather than overhealing, and a stack that hits
+// zero leaves the bag.
+[
+    ItemDef(
+        id: "minor_potion",
+        name: "Minor Health Potion",
+        sprite: "items/potion_red",
+        kind: Consumable(
+            // Two of the player's five points: enough to be worth stopping
+            // for, not enough to make a fight winnable by drinking through it.
+            effects: [Heal(2)],
+        ),
+    ),
+]

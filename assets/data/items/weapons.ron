@@ -1,0 +1,31 @@
+// Weapons: what goes in the `Weapon` slot.
+//
+// Code holds mechanics; this holds balance, the same split `attacks.ron` and
+// `spells.ron` are under. A weapon contributes two things and nothing else:
+//
+// - `damage` is added to every melee hit on top of the attack's own, through
+//   the derived-stat path (`base + sum(modifiers)`). It is never applied to
+//   the attack table, so taking the sword off puts the numbers back exactly.
+// - `combo` names the chain this weapon swings. Only the first entry is read
+//   today — it replaces the bare-handed opener, and the rest of the chain
+//   follows `chain` in `attacks.ron` from there. The whole list is authored
+//   anyway, because a weapon whose second and third links differ from the
+//   bare-handed ones is the obvious next weapon and should be data.
+//
+// `speed` is not read yet; see `ItemKind::Weapon` in src/assets.rs for why it
+// is in the schema regardless.
+[
+    ItemDef(
+        id: "iron_sword",
+        name: "Iron Sword",
+        sprite: "items/iron_sword",
+        kind: Weapon(
+            // One extra point a hit. The bare-handed combo does 1/1/2 across
+            // its three links, so this is a fight that is a swing shorter
+            // rather than a different fight.
+            damage: 1,
+            combo: ["player_slash1", "player_slash2", "player_slash3"],
+            speed: 1.0,
+        ),
+    ),
+]
