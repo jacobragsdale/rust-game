@@ -101,6 +101,11 @@ impl Mode {
 pub struct Sim {
     pub world: World,
     pub level: LevelData,
+    /// The map this run was loaded from, relative to the assets directory —
+    /// `None` for a sim built from an inline grid, which has no file to name.
+    /// Nothing in the tick reads it; it is here because a save has to say what
+    /// to rebuild, and the level itself does not remember where it came from.
+    pub map: Option<String>,
     /// Everything a body can collide with: the level's solids and one-way
     /// platforms, plus whatever colliders entities own this tick. Rebuilt at
     /// one point per tick — see [`Sim::step`].
@@ -215,13 +220,11 @@ impl Sim {
         assets.spells()?;
         assets.items()?;
         assets.dialogue()?;
-        Ok(Self::new(
-            level,
-            &clip_sets,
-            attacks,
-            stats,
-            rng::DEFAULT_SEED,
-        ))
+        let mut sim = Self::new(level, &clip_sets, attacks, stats, rng::DEFAULT_SEED);
+        // What to rebuild from, for a save. The level itself does not remember
+        // where it was loaded from.
+        sim.map = Some(map.to_string());
+        Ok(sim)
     }
 
     /// A sim built from an inline ASCII grid, with placeholder animation
@@ -322,6 +325,8 @@ impl Sim {
         let mut sim = Sim {
             world,
             level,
+            // Set by `Sim::load`, which is the only caller that has one.
+            map: None,
             geometry,
             attacks,
             spells: SpellTable::shipped(),
@@ -359,6 +364,23 @@ impl Sim {
     /// only learns the seed after the sim has been built from a map.
     pub fn reseed(&mut self, seed: u64) {
         self.rng = Rng::new(seed);
+    }
+
+    /// Snapshot this run into a [`crate::save::SaveState`].
+    ///
+    /// Fails only for a sim with no map file to name — [`Sim::fixture`] builds
+    /// one from an inline grid, and there would be nothing for a load to
+    /// rebuild. What a save does and does not carry is documented on
+    /// [`crate::save`].
+    pub fn save(&self) -> Result<crate::save::SaveState, crate::save::SaveError> {
+        crate::save::SaveState::capture(self)
+    }
+
+    /// Rebuild a sim from a save: load the map it names, put the map's own
+    /// entities where the map puts them, and then put the player, the tick and
+    /// the generator back where the save left them.
+    pub fn load_save(assets: &mut Assets, save: &crate::save::SaveState) -> anyhow::Result<Sim> {
+        crate::save::restore(assets, save)
     }
 
     /// What the simulation is currently doing.

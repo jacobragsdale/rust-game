@@ -13,6 +13,7 @@ pub mod ecs;
 pub mod hud;
 pub mod level;
 pub mod physics;
+pub mod save;
 pub mod scenes;
 pub mod sim;
 pub mod systems;

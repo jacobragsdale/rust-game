@@ -54,6 +54,28 @@ impl Rng {
         self.seed
     }
 
+    /// How far into its stream this generator has got.
+    ///
+    /// SplitMix64 is a counter run through a fixed mix, so the counter *is* the
+    /// position: it starts at the seed and walks by one fixed step per draw.
+    /// That is what makes a save able to record where the randomness stood in
+    /// one number — see [`crate::save`], and [`Rng::resume`] for the way back.
+    pub const fn position(&self) -> u64 {
+        self.state
+    }
+
+    /// Rebuild a generator that has already drawn: `seed` for reporting what
+    /// the run was seeded at, and `position` from [`Rng::position`].
+    ///
+    /// `Rng::resume(seed, seed)` is [`Rng::new`]: a generator at position zero
+    /// is one that has drawn nothing.
+    pub const fn resume(seed: u64, position: u64) -> Rng {
+        Rng {
+            seed,
+            state: position,
+        }
+    }
+
     /// The next 64 bits. Everything else here is built on this one function.
     pub fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(GAMMA);
