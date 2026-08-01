@@ -240,16 +240,18 @@ impl Trace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::components::{AnimationState, Attacking, Avatar, Health};
+    use crate::assets::StatTable;
+    use crate::ecs::components::{AnimationState, Attacking, Avatar, Body, Health};
     use crate::sim::event::DeathCause;
     use ggez::glam::Vec2;
 
     fn probe(tick: u64) -> Probe {
+        let stats = StatTable::shipped().get("player").unwrap();
         Probe::new(
             tick,
-            &Avatar::new(),
-            &Avatar::body(Vec2::ZERO),
-            &Health::new(Avatar::MAX_HEALTH, Health::PLAYER_IFRAMES),
+            &Avatar::new(stats.avatar()),
+            &Body::new(Vec2::ZERO, stats.gravity, stats.max_fall),
+            &Health::new(stats.max_health, stats.iframe_ticks),
             &Attacking::default(),
             Vec2::new(1.5, 2.5),
             Vec2::ZERO,

@@ -24,7 +24,7 @@ use anyhow::Context as _;
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::assets::{Assets, AttackTable, Clip, ClipSet};
+use crate::assets::{Assets, AttackTable, Clip, ClipSet, StatTable};
 use crate::ecs::components::{
     AnimationState, Attacking, Avatar, Body, Health, Kind, Patrol, Position, Size, Sprite, Velocity,
 };
@@ -58,6 +58,10 @@ pub struct Sim {
     pub geometry: Geometry,
     /// Every attack's timing and effect, shared by every attacker.
     pub attacks: Arc<AttackTable>,
+    /// Every kind's movement and combat numbers. `spawn` hands each entity the
+    /// block for its kind as a `Stats` component; this is kept so that
+    /// anything spawned later in the run can be given one too.
+    pub stats: Arc<StatTable>,
     /// The simulation's only source of randomness, seeded per run.
     ///
     /// Anything random — a loot roll, a crit, a spell's spread — draws from
@@ -101,7 +105,14 @@ impl Sim {
         }
 
         let attacks = assets.attacks()?;
-        Ok(Self::new(level, &clip_sets, attacks, rng::DEFAULT_SEED))
+        let stats = assets.stats()?;
+        Ok(Self::new(
+            level,
+            &clip_sets,
+            attacks,
+            stats,
+            rng::DEFAULT_SEED,
+        ))
     }
 
     /// A sim built from an inline ASCII grid, with placeholder animation
@@ -122,18 +133,26 @@ impl Sim {
     /// does not parse is a mistake in the test, not a condition to handle.
     pub fn fixture(grid: &[&str]) -> Self {
         let level = LevelData::from_grid(grid).expect("fixture grid should parse");
-        // Fixtures read the real attack table: combat numbers are content, and
-        // a test that invents its own would not be testing the game.
+        // Fixtures read the real attack and stat tables: movement and combat
+        // numbers are content, and a test that invents its own would not be
+        // testing the game.
         let attacks = Assets::new()
             .attacks()
             .expect("assets/data/attacks.ron should load");
-        Sim::new(level, &fixture_clip_sets(), attacks, rng::DEFAULT_SEED)
+        Sim::new(
+            level,
+            &fixture_clip_sets(),
+            attacks,
+            StatTable::shipped(),
+            rng::DEFAULT_SEED,
+        )
     }
 
     /// Build a sim from level data, a clip set per entity kind (plus
-    /// `"player"`), and the seed its randomness runs at. Panics if a kind the
-    /// level places has no clip set — callers are expected to have loaded one,
-    /// and there is nothing sensible to draw otherwise.
+    /// `"player"`), the tables everything reads its numbers from, and the seed
+    /// its randomness runs at. Panics if a kind the level places has no clip
+    /// set or no stat block — callers are expected to have loaded both, and
+    /// there is nothing sensible to spawn otherwise.
     ///
     /// The seed is a parameter rather than a constant because a run has to be
     /// reproducible from what is written down: a tape's `seed` directive, or
@@ -142,6 +161,7 @@ impl Sim {
         level: LevelData,
         clip_sets: &HashMap<String, Arc<ClipSet>>,
         attacks: Arc<AttackTable>,
+        stats: Arc<StatTable>,
         seed: u64,
     ) -> Self {
         let geometry = Geometry::from_level(&level.solids, &level.one_way);
@@ -152,9 +172,15 @@ impl Sim {
                 .unwrap_or_else(|| panic!("no clip set loaded for `{kind}`"))
                 .clone()
         };
+        let stats_for = |kind: &str| stats.get(kind).unwrap_or_else(|e| panic!("{e:#}"));
 
         let mut world = World::new();
-        spawn::player(&mut world, level.player_spawn, clips_for("player"));
+        spawn::player(
+            &mut world,
+            level.player_spawn,
+            clips_for("player"),
+            stats_for("player"),
+        );
 
         // Map order, which is the grid scanned top-left to bottom-right and
         // then the explicit entity list. Spawn order decides `npc.<n>` in
@@ -166,6 +192,7 @@ impl Sim {
                 placement,
                 level.tile_size,
                 clips_for(&placement.kind),
+                stats_for(&placement.kind),
             )
             .expect("level entities were validated on load");
         }
@@ -175,6 +202,7 @@ impl Sim {
             level,
             geometry,
             attacks,
+            stats,
             rng: Rng::new(seed),
             tick: 0,
             hitstop: 0,
@@ -467,15 +495,23 @@ mod tests {
     use crate::sim::event::DeathCause;
     use crate::systems::input::Action;
 
+    /// The player's real numbers, read from `assets/data/stats.ron`. Tests
+    /// assert against these rather than against literals, so a tuning pass
+    /// moves one file and not twenty assertions.
+    fn player_stats() -> Arc<crate::assets::StatBlock> {
+        StatTable::shipped().get("player").unwrap()
+    }
+
     /// A flat floor with a pit on the right.
     fn test_sim() -> Sim {
         let mut level = LevelData::empty(20, 10, 32.0);
         level.solids = vec![Aabb::new(0.0, 256.0, 400.0, 64.0)];
-        level.player_spawn = Vec2::new(100.0, 256.0 - Avatar::HEIGHT);
+        level.player_spawn = Vec2::new(100.0, 256.0 - player_stats().height);
         Sim::new(
             level,
             &fixture_clip_sets(),
             Assets::new().attacks().unwrap(),
+            StatTable::shipped(),
             rng::DEFAULT_SEED,
         )
     }
@@ -517,7 +553,7 @@ mod tests {
         let probe = sim.probe();
         assert!(probe.grounded);
         assert_eq!(probe.clip, "idle");
-        assert_eq!(probe.y, 256.0 - Avatar::HEIGHT);
+        assert_eq!(probe.y, 256.0 - player_stats().height);
     }
 
     #[test]
@@ -548,7 +584,7 @@ mod tests {
         let probe = sim.probe();
         assert_eq!(probe.clip, "idle");
         // spawn cell is row 1, so the floor surface is at y = 64
-        assert_eq!(probe.y, 64.0 - Avatar::HEIGHT);
+        assert_eq!(probe.y, 64.0 - player_stats().height);
         assert_eq!(
             sim.level.solids.len(),
             1,
@@ -592,7 +628,7 @@ mod tests {
         );
         assert_eq!(sim.geometry.rects().len(), statics + 1);
         assert_eq!(
-            sim.probe().x + Avatar::WIDTH,
+            sim.probe().x + player_stats().width,
             250.0,
             "ran into the wall and stopped flush against it"
         );

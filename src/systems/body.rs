@@ -83,10 +83,19 @@ pub fn move_bodies<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, dt: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::components::Avatar;
+    use crate::assets::{StatBlock, StatTable};
     use crate::physics::Aabb;
     use crate::sim::TICK;
     use ggez::glam::Vec2;
+    use std::sync::Arc;
+
+    /// The player's real weight and terminal velocity, from
+    /// `assets/data/stats.ron`: a body falls the way the game's bodies fall.
+    fn stats() -> Arc<StatBlock> {
+        StatTable::shipped()
+            .get("player")
+            .expect("`player` has a stat block")
+    }
 
     const SIZE: Vec2 = Vec2::new(20.0, 34.0);
 
@@ -97,11 +106,12 @@ mod tests {
     /// Spawn a bare body — no `Avatar`, nothing player-specific. If this works,
     /// an NPC works.
     fn spawn_body(world: &mut World, pos: Vec2) -> hecs::Entity {
+        let stats = stats();
         world.spawn((
             Position(pos),
             Velocity(Vec2::ZERO),
             Size(SIZE),
-            Body::new(pos, Avatar::GRAVITY, Avatar::MAX_FALL),
+            Body::new(pos, stats.gravity, stats.max_fall),
         ))
     }
 

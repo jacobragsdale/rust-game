@@ -276,13 +276,15 @@ impl Probe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::StatTable;
 
     fn sample() -> Probe {
+        let stats = StatTable::shipped().get("player").unwrap();
         Probe::new(
             0,
-            &Avatar::new(),
-            &Avatar::body(Vec2::ZERO),
-            &Health::new(Avatar::MAX_HEALTH, Health::PLAYER_IFRAMES),
+            &Avatar::new(stats.avatar()),
+            &Body::new(Vec2::ZERO, stats.gravity, stats.max_fall),
+            &Health::new(stats.max_health, stats.iframe_ticks),
             &Attacking::default(),
             Vec2::ZERO,
             Vec2::ZERO,

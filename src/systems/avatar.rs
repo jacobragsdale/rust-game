@@ -18,8 +18,8 @@
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::assets::{AttackDef, AttackTable};
-use crate::ecs::components::{Attacking, Avatar, Body, Health, Position, Size, Velocity};
+use crate::assets::{AttackDef, AttackTable, StatBlock};
+use crate::ecs::components::{Attacking, Avatar, Body, Health, Position, Size, Stats, Velocity};
 use crate::level::LevelData;
 use crate::physics::{self, Aabb, SolidQuery};
 use crate::sim::event::{DeathCause, GameEvent};
@@ -36,7 +36,7 @@ pub fn control<Q: SolidQuery + ?Sized>(
     dt: f32,
     events: &mut Vec<GameEvent>,
 ) {
-    for (_, (avatar, pos, vel, size, body, health, attacking)) in world.query_mut::<(
+    for (_, (avatar, pos, vel, size, body, health, attacking, stats)) in world.query_mut::<(
         &mut Avatar,
         &mut Position,
         &mut Velocity,
@@ -44,7 +44,14 @@ pub fn control<Q: SolidQuery + ?Sized>(
         &mut Body,
         &mut Health,
         &mut Attacking,
+        &Stats,
     )>() {
+        // Everything below reads its numbers from here: `stats` is the block
+        // `assets/data/stats.ron` holds for this entity's kind, and `mv` is the
+        // group of it that only something the player steers has.
+        let stats = &stats.0;
+        let mv = stats.avatar();
+
         let stunned = health.hitstun > 0;
         if avatar.dead() {
             avatar.dead_ticks -= 1;
@@ -56,6 +63,7 @@ pub fn control<Q: SolidQuery + ?Sized>(
                     body,
                     health,
                     attacking,
+                    stats,
                     level.player_spawn,
                 );
                 events.push(GameEvent::Respawned);
@@ -83,7 +91,7 @@ pub fn control<Q: SolidQuery + ?Sized>(
             avatar.coyote_ticks = avatar.coyote_ticks.saturating_add(1);
         }
         if input.jump_pressed() {
-            avatar.jump_buffer = Avatar::JUMP_BUFFER_TICKS;
+            avatar.jump_buffer = mv.jump_buffer_ticks;
         } else {
             avatar.jump_buffer = avatar.jump_buffer.saturating_sub(1);
         }
@@ -107,9 +115,9 @@ pub fn control<Q: SolidQuery + ?Sized>(
                 Some(_) => {}
                 None => {
                     let attack = if body.grounded {
-                        Avatar::ATTACK
+                        stats.attack.as_str()
                     } else {
-                        Avatar::AIR_ATTACK
+                        mv.air_attack.as_str()
                     };
                     attacking.start(attack);
                     events.push(GameEvent::Attacked {
@@ -131,10 +139,10 @@ pub fn control<Q: SolidQuery + ?Sized>(
             && avatar.slide_cooldown == 0
             && !attacking.busy()
         {
-            avatar.slide_ticks = Avatar::SLIDE_TICKS;
-            avatar.slide_cooldown = Avatar::SLIDE_TICKS + Avatar::SLIDE_COOLDOWN;
+            avatar.slide_ticks = mv.slide_ticks;
+            avatar.slide_cooldown = mv.slide_ticks + mv.slide_cooldown;
             avatar.jump_buffer = 0;
-            vel.0.x = dir * Avatar::SLIDE_SPEED;
+            vel.0.x = dir * mv.slide_speed;
             avatar.facing_right = dir > 0.0;
             events.push(GameEvent::Slid);
         }
@@ -152,17 +160,17 @@ pub fn control<Q: SolidQuery + ?Sized>(
         } else {
             dir
         } * if avatar.sliding() {
-            Avatar::SLIDE_SPEED
+            mv.slide_speed
         } else {
-            Avatar::RUN_SPEED
+            stats.run_speed
         };
         let rate = if avatar.sliding() {
             // Bleed from slide speed to run speed across the slide.
-            (Avatar::SLIDE_SPEED - Avatar::RUN_SPEED) / (Avatar::SLIDE_TICKS as f32 * dt)
+            (mv.slide_speed - stats.run_speed) / (mv.slide_ticks as f32 * dt)
         } else if dir != 0.0 {
-            Avatar::ACCEL
+            mv.accel
         } else {
-            Avatar::DECEL
+            mv.decel
         };
         vel.0.x = move_toward(vel.0.x, target, rate * dt);
         if !avatar.sliding() {
@@ -194,7 +202,7 @@ pub fn control<Q: SolidQuery + ?Sized>(
         // --- wall slide: falling while pressing into the wall being touched ---
         avatar.wall_sliding = wall_side != 0.0 && dir == wall_side && vel.0.y > 0.0;
         if avatar.wall_sliding {
-            vel.0.y = vel.0.y.min(Avatar::WALL_SLIDE_SPEED);
+            vel.0.y = vel.0.y.min(mv.wall_slide_speed);
             avatar.double_jumping = false;
         }
 
@@ -206,27 +214,27 @@ pub fn control<Q: SolidQuery + ?Sized>(
         // `on_one_way_only` distinguishes. A buffered jump press is discarded
         // so the drop is not immediately cancelled by a jump on the way out.
         if input.down() && body.grounded && body.on_one_way_only() {
-            avatar.drop_ticks = Avatar::DROP_TICKS;
+            avatar.drop_ticks = mv.drop_ticks;
             avatar.jump_buffer = 0;
             events.push(GameEvent::DroppedThrough);
         } else if avatar.jump_buffer > 0 {
-            let can_ground_jump = avatar.coyote_ticks <= Avatar::COYOTE_TICKS;
-            let can_wall_jump = avatar.wall_coyote_ticks <= Avatar::WALL_COYOTE_TICKS;
+            let can_ground_jump = avatar.coyote_ticks <= mv.coyote_ticks;
+            let can_wall_jump = avatar.wall_coyote_ticks <= mv.wall_coyote_ticks;
 
             if can_ground_jump {
-                vel.0.y = -Avatar::JUMP_SPEED;
+                vel.0.y = -mv.jump_speed;
                 launch(avatar);
                 events.push(GameEvent::Jumped);
             } else if can_wall_jump {
-                vel.0.x = -avatar.wall_dir * Avatar::WALL_JUMP_PUSH;
-                vel.0.y = -Avatar::WALL_JUMP_SPEED;
+                vel.0.x = -avatar.wall_dir * mv.wall_jump_push;
+                vel.0.y = -mv.wall_jump_speed;
                 avatar.facing_right = avatar.wall_dir < 0.0;
-                avatar.air_jumps = Avatar::MAX_AIR_JUMPS;
+                avatar.air_jumps = mv.max_air_jumps;
                 let wall_dir = avatar.wall_dir;
                 launch(avatar);
                 events.push(GameEvent::WallJumped { wall_dir });
             } else if avatar.air_jumps > 0 {
-                vel.0.y = -Avatar::DOUBLE_JUMP_SPEED;
+                vel.0.y = -mv.double_jump_speed;
                 avatar.air_jumps -= 1;
                 avatar.double_jumping = true;
                 launch(avatar);
@@ -240,13 +248,13 @@ pub fn control<Q: SolidQuery + ?Sized>(
         // makes a tap a short hop and a hold a full jump. Read after the jump
         // block, so a launch on this very tick is already accounted for.
         body.gravity = if vel.0.y < 0.0 && !input.jump_held() {
-            Avatar::GRAVITY + Avatar::LOW_JUMP_GRAVITY
+            stats.gravity + mv.low_jump_gravity
         } else {
-            Avatar::GRAVITY
+            stats.gravity
         };
         // Also read after the jump block: `launch` clears `wall_sliding`, and
         // a wall jump must not have its upward kick capped by the slide.
-        body.fall_cap = avatar.wall_sliding.then_some(Avatar::WALL_SLIDE_SPEED);
+        body.fall_cap = avatar.wall_sliding.then_some(mv.wall_slide_speed);
         body.ignore_one_way = avatar.drop_ticks > 0;
     }
 }
@@ -264,14 +272,17 @@ pub fn after_move(
 ) {
     let dir = input.dir();
 
-    for (_, (avatar, pos, vel, size, body, health)) in world.query_mut::<(
+    for (_, (avatar, pos, vel, size, body, health, stats)) in world.query_mut::<(
         &mut Avatar,
         &mut Position,
         &mut Velocity,
         &Size,
         &Body,
         &mut Health,
+        &Stats,
     )>() {
+        let mv = stats.0.avatar();
+
         // Frozen bodies did not move, so there is no new contact to read and
         // nothing new can have killed them.
         if body.frozen {
@@ -279,7 +290,7 @@ pub fn after_move(
         }
 
         if body.grounded {
-            avatar.air_jumps = Avatar::MAX_AIR_JUMPS;
+            avatar.air_jumps = mv.max_air_jumps;
             avatar.double_jumping = false;
             if body.landed {
                 events.push(GameEvent::Landed {
@@ -314,7 +325,7 @@ pub fn after_move(
         let fell_out = pos.0.y > level.pixel_height() + 100.0;
 
         if spiked || fell_out {
-            avatar.dead_ticks = Avatar::DEATH_TICKS;
+            avatar.dead_ticks = mv.death_ticks;
             health.current = 0;
             vel.0 = Vec2::ZERO;
             events.push(GameEvent::Died {
@@ -326,7 +337,7 @@ pub fn after_move(
                 },
             });
         } else if health.dead() {
-            avatar.dead_ticks = Avatar::DEATH_TICKS;
+            avatar.dead_ticks = mv.death_ticks;
             vel.0 = Vec2::ZERO;
         }
     }
@@ -354,11 +365,12 @@ fn respawn(
     body: &mut Body,
     health: &mut Health,
     attacking: &mut Attacking,
+    stats: &StatBlock,
     spawn: Vec2,
 ) {
-    *avatar = Avatar::new();
-    *body = Avatar::body(spawn);
-    *health = Health::new(Avatar::MAX_HEALTH, Health::PLAYER_IFRAMES);
+    *avatar = Avatar::new(stats.avatar());
+    *body = Body::new(spawn, stats.gravity, stats.max_fall);
+    *health = Health::new(stats.max_health, stats.iframe_ticks);
     attacking.stop();
     pos.0 = spawn;
     vel.0 = Vec2::ZERO;
@@ -379,9 +391,21 @@ fn move_toward(current: f32, target: f32, max_delta: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::assets::StatTable;
     use crate::physics::SolidRect;
     use crate::systems::input::Action;
+
+    /// The player's real numbers, from `assets/data/stats.ron`. Movement and
+    /// combat values are content, so these tests assert against the shipped
+    /// table rather than against literals of their own.
+    fn stats() -> Arc<StatBlock> {
+        StatTable::shipped()
+            .get("player")
+            .expect("`player` has a stat block")
+    }
 
     const DT: f32 = 1.0 / 60.0;
     const FLOOR_Y: f32 = 256.0;
@@ -412,7 +436,7 @@ mod tests {
     fn test_level() -> LevelData {
         let mut level = LevelData::empty(20, 10, 32.0);
         level.solids = vec![Aabb::new(0.0, FLOOR_Y, 640.0, 64.0)];
-        level.player_spawn = Vec2::new(100.0, FLOOR_Y - Avatar::HEIGHT);
+        level.player_spawn = Vec2::new(100.0, FLOOR_Y - stats().height);
         level
     }
 
@@ -422,15 +446,18 @@ mod tests {
         geo
     }
 
+    /// Exactly what `spawn::player` builds, minus the art.
     fn spawn_avatar(world: &mut World, pos: Vec2) {
+        let stats = stats();
         world.spawn((
-            Avatar::new(),
-            Avatar::body(pos),
-            Health::new(Avatar::MAX_HEALTH, Health::PLAYER_IFRAMES),
+            Avatar::new(stats.avatar()),
+            Body::new(pos, stats.gravity, stats.max_fall),
+            Health::new(stats.max_health, stats.iframe_ticks),
             Attacking::default(),
             Position(pos),
             Velocity(Vec2::ZERO),
-            Size(Vec2::new(Avatar::WIDTH, Avatar::HEIGHT)),
+            Size(stats.size()),
+            Stats(stats),
         ));
     }
 
@@ -473,7 +500,7 @@ mod tests {
         }
         let (avatar, _, vel) = state(&mut world);
         assert!(avatar.facing_right);
-        assert_eq!(vel.x, Avatar::RUN_SPEED);
+        assert_eq!(vel.x, stats().run_speed);
 
         update(&mut world, &level, &geo, JUMP, DT);
         let (_, _, vel) = state(&mut world);
@@ -518,7 +545,7 @@ mod tests {
         }
         let (avatar, _, _) = state(&mut world);
         assert!(body(&mut world).grounded);
-        assert_eq!(avatar.air_jumps, Avatar::MAX_AIR_JUMPS);
+        assert_eq!(avatar.air_jumps, stats().avatar().max_air_jumps);
     }
 
     #[test]
@@ -529,7 +556,7 @@ mod tests {
         level.solids = vec![Aabb::new(0.0, FLOOR_Y, 110.0, 64.0)];
         let geo = geometry(&level);
         let mut world = World::new();
-        spawn_avatar(&mut world, Vec2::new(85.0, FLOOR_Y - Avatar::HEIGHT));
+        spawn_avatar(&mut world, Vec2::new(85.0, FLOOR_Y - stats().height));
         settle(&mut world, &level, &geo);
 
         // walk off the ledge
@@ -550,9 +577,12 @@ mod tests {
         }
         update(&mut world, &level, &geo, JUMP, DT);
         let (avatar, _, vel) = state(&mut world);
-        assert!(vel.y < -Avatar::JUMP_SPEED * 0.8, "coyote jump fired");
+        assert!(
+            vel.y < -stats().avatar().jump_speed * 0.8,
+            "coyote jump fired"
+        );
         assert!(!avatar.double_jumping, "was a ground jump, not an air jump");
-        assert_eq!(avatar.air_jumps, Avatar::MAX_AIR_JUMPS);
+        assert_eq!(avatar.air_jumps, stats().avatar().max_air_jumps);
     }
 
     #[test]
@@ -563,7 +593,7 @@ mod tests {
         // drop from just above the floor; press jump 2 ticks before landing
         spawn_avatar(
             &mut world,
-            Vec2::new(100.0, FLOOR_Y - Avatar::HEIGHT - 12.0),
+            Vec2::new(100.0, FLOOR_Y - stats().height - 12.0),
         );
         // consume the air jump so the buffered press can only be a ground jump
         update(&mut world, &level, &geo, JUMP, DT);
@@ -576,10 +606,10 @@ mod tests {
         }
         update(&mut world, &level, &geo, JUMP, DT); // buffered press mid-fall
         let mut jumped = false;
-        for _ in 0..Avatar::JUMP_BUFFER_TICKS {
+        for _ in 0..stats().avatar().jump_buffer_ticks {
             update(&mut world, &level, &geo, HOLD_JUMP, DT);
             let (_, _, vel) = state(&mut world);
-            if vel.y < -Avatar::JUMP_SPEED * 0.8 {
+            if vel.y < -stats().avatar().jump_speed * 0.8 {
                 jumped = true;
                 break;
             }
@@ -607,7 +637,7 @@ mod tests {
                 update(&mut world, &level, &geo, input, DT);
                 peak = peak.min(state(&mut world).1.y);
             }
-            (FLOOR_Y - Avatar::HEIGHT) - peak // height gained
+            (FLOOR_Y - stats().height) - peak // height gained
         };
 
         let full = apex(true);
@@ -635,7 +665,7 @@ mod tests {
         let (avatar, _, vel) = state(&mut world);
         assert!(avatar.wall_sliding);
         assert!(
-            vel.y <= Avatar::WALL_SLIDE_SPEED + 0.01,
+            vel.y <= stats().avatar().wall_slide_speed + 0.01,
             "fall speed capped, got {}",
             vel.y
         );
@@ -673,8 +703,7 @@ mod tests {
         for _ in 0..20 {
             update(&mut world, level, geo, drift, DT);
             let (avatar, pos, vel) = state(&mut world);
-            let touching =
-                physics::touching_wall(pos, Vec2::new(Avatar::WIDTH, Avatar::HEIGHT), geo, 1.0);
+            let touching = physics::touching_wall(pos, stats().size(), geo, 1.0);
             if touching && vel.y < 0.0 {
                 assert!(!body(&mut world).grounded);
                 assert!(!avatar.wall_sliding, "not a slide: still on the way up");
@@ -700,7 +729,11 @@ mod tests {
         assert!(vel.x < 0.0, "kicked away from the wall");
         assert!(vel.y < before.y, "and upward again");
         assert!(!avatar.double_jumping, "a wall jump, not the air jump");
-        assert_eq!(avatar.air_jumps, Avatar::MAX_AIR_JUMPS, "air jump intact");
+        assert_eq!(
+            avatar.air_jumps,
+            stats().avatar().max_air_jumps,
+            "air jump intact"
+        );
     }
 
     /// The wall jump survives a few ticks off the wall, the same way the
@@ -719,10 +752,10 @@ mod tests {
         }
         let (avatar, pos, _) = state(&mut world);
         assert!(
-            !physics::touching_wall(pos, Vec2::new(Avatar::WIDTH, Avatar::HEIGHT), &geo, 1.0),
+            !physics::touching_wall(pos, stats().size(), &geo, 1.0),
             "no longer touching the wall"
         );
-        assert!(avatar.wall_coyote_ticks <= Avatar::WALL_COYOTE_TICKS);
+        assert!(avatar.wall_coyote_ticks <= stats().avatar().wall_coyote_ticks);
 
         update(&mut world, &level, &geo, JUMP, DT);
         let (avatar, _, vel) = state(&mut world);
@@ -744,7 +777,7 @@ mod tests {
         for _ in 0..3 {
             update(&mut world, &level, &geo, away, DT);
         }
-        for _ in 0..(Avatar::WALL_COYOTE_TICKS + 4) {
+        for _ in 0..(stats().avatar().wall_coyote_ticks + 4) {
             update(&mut world, &level, &geo, PlayerInput::default(), DT);
         }
         let (_, _, before) = state(&mut world);
@@ -783,7 +816,7 @@ mod tests {
             update(&mut world, &level, &geo, HOLD_JUMP, DT);
             let (avatar, _, _) = state(&mut world);
             assert!(body(&mut world).grounded, "held jump must not fire again");
-            assert_eq!(avatar.air_jumps, Avatar::MAX_AIR_JUMPS);
+            assert_eq!(avatar.air_jumps, stats().avatar().max_air_jumps);
         }
     }
 
@@ -800,7 +833,7 @@ mod tests {
 
         update(&mut world, &level, &geo, JUMP, DT);
         let (avatar, _, _) = state(&mut world);
-        assert_eq!(avatar.air_jumps, Avatar::MAX_AIR_JUMPS);
+        assert_eq!(avatar.air_jumps, stats().avatar().max_air_jumps);
         assert!(!avatar.double_jumping);
     }
 
@@ -811,7 +844,7 @@ mod tests {
         level.one_way = vec![Aabb::new(0.0, 256.0, 640.0, 8.0)]; // platform above
         let geo = geometry(&level);
         let mut world = World::new();
-        spawn_avatar(&mut world, Vec2::new(100.0, 256.0 - Avatar::HEIGHT));
+        spawn_avatar(&mut world, Vec2::new(100.0, 256.0 - stats().height));
         settle(&mut world, &level, &geo);
         assert!(body(&mut world).on_one_way_only());
 
@@ -826,7 +859,7 @@ mod tests {
         }
         let (_, pos, _) = state(&mut world);
         assert!(body(&mut world).grounded);
-        assert_eq!(pos.y, 400.0 - Avatar::HEIGHT);
+        assert_eq!(pos.y, 400.0 - stats().height);
 
         // down + jump on solid ground is just a jump
         let down_jump2 = PlayerInput::from_actions(&[Action::Down, Action::Jump]);
@@ -854,14 +887,14 @@ mod tests {
         assert_eq!(state(&mut world).1.x, x_dead);
 
         // after the freeze: back at spawn, alive, state reset
-        for _ in 0..Avatar::DEATH_TICKS {
+        for _ in 0..stats().avatar().death_ticks {
             update(&mut world, &level, &geo, PlayerInput::default(), DT);
         }
         let (avatar, pos, _) = state(&mut world);
         // (spawn overlaps spikes in this contrived level, so it re-dies —
         // but the respawn itself must have happened first)
         assert_eq!(pos, level.player_spawn);
-        assert_eq!(avatar.air_jumps, Avatar::MAX_AIR_JUMPS);
+        assert_eq!(avatar.air_jumps, stats().avatar().max_air_jumps);
     }
 
     #[test]
@@ -874,7 +907,7 @@ mod tests {
         update(&mut world, &level, &geo, PlayerInput::default(), DT);
         assert!(state(&mut world).0.dead());
 
-        for _ in 0..Avatar::DEATH_TICKS {
+        for _ in 0..stats().avatar().death_ticks {
             update(&mut world, &level, &geo, PlayerInput::default(), DT);
         }
         let (avatar, pos, vel) = state(&mut world);

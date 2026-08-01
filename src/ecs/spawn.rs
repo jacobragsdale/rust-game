@@ -15,69 +15,74 @@ use std::sync::Arc;
 use ggez::glam::Vec2;
 use hecs::World;
 
-use crate::assets::ClipSet;
+use crate::assets::{ClipSet, StatBlock};
 use crate::ecs::components::{
     AnimationState, Attacking, Avatar, Body, Health, Hostile, Kind, Patrol, Position, Size, Sprite,
-    Team, Velocity,
+    Stats, Team, Velocity,
 };
 use crate::level::EntitySpawn;
 
-/// Every entity kind a map may place. `Sim` loads a clip set per name, so a
-/// new kind needs `assets/data/animations/{kind}.ron` to exist.
+/// Every entity kind a map may place. `Sim` loads a clip set and a stat block
+/// per name, so a new kind needs `assets/data/animations/{kind}.ron` to exist
+/// and an entry in `assets/data/stats.ron`.
 pub const KINDS: &[&str] = &["knight"];
 
-/// The knight's collider. Narrower and shorter than the player's, matching a
-/// drawn body of about 26x30 px.
-pub const KNIGHT_SIZE: Vec2 = Vec2::new(22.0, 30.0);
-pub const KNIGHT_SPEED: f32 = 55.0;
-pub const KNIGHT_HEALTH: i32 = 6;
-pub const KNIGHT_ATTACK: &str = "knight_slash";
-pub const KNIGHT_GRAVITY: f32 = 1400.0;
-pub const KNIGHT_MAX_FALL: f32 = 900.0;
-
 /// Spawn the player at the level's spawn point.
-pub fn player(world: &mut World, spawn: Vec2, clips: Arc<ClipSet>) -> hecs::Entity {
+///
+/// `stats` is the `"player"` block of `assets/data/stats.ron`. Every number
+/// this entity is built from comes out of it — there are none left here.
+pub fn player(
+    world: &mut World,
+    spawn: Vec2,
+    clips: Arc<ClipSet>,
+    stats: Arc<StatBlock>,
+) -> hecs::Entity {
     let offset = art_offset(&clips);
     world.spawn((
-        Avatar::new(),
-        Avatar::body(spawn),
+        Avatar::new(stats.avatar()),
+        Body::new(spawn, stats.gravity, stats.max_fall),
         Team::Player,
-        Health::new(Avatar::MAX_HEALTH, Health::PLAYER_IFRAMES),
+        Health::new(stats.max_health, stats.iframe_ticks),
         Attacking::default(),
         Position(spawn),
         Velocity(Vec2::ZERO),
-        Size(Vec2::new(Avatar::WIDTH, Avatar::HEIGHT)),
+        Size(stats.size()),
         Sprite { clips, offset },
         AnimationState::new("idle"),
+        Stats(stats),
     ))
 }
 
 /// Spawn one map placement. `pos` is the top-left of the cell it was placed in;
 /// the entity is stood on that cell's floor, horizontally centred, the same way
 /// the player's spawn point is resolved.
+///
+/// `stats` is the block `assets/data/stats.ron` holds for `placement.kind`.
 pub fn entity(
     world: &mut World,
     placement: &EntitySpawn,
     tile_size: f32,
     clips: Arc<ClipSet>,
+    stats: Arc<StatBlock>,
 ) -> anyhow::Result<hecs::Entity> {
     match placement.kind.as_str() {
         "knight" => {
-            let pos = stand_in_cell(placement.pos, tile_size, KNIGHT_SIZE);
+            let pos = stand_in_cell(placement.pos, tile_size, stats.size());
             let offset = art_offset(&clips);
             Ok(world.spawn((
                 Kind(placement.kind.clone()),
-                Patrol::new(1.0, KNIGHT_SPEED),
-                Hostile::new(pos.x, KNIGHT_ATTACK),
+                Patrol::new(1.0, stats.run_speed),
+                Hostile::new(pos.x, &stats.attack),
                 Team::Enemy,
-                Health::new(KNIGHT_HEALTH, Health::ENEMY_IFRAMES),
+                Health::new(stats.max_health, stats.iframe_ticks),
                 Attacking::default(),
                 Position(pos),
                 Velocity(Vec2::ZERO),
-                Size(KNIGHT_SIZE),
-                Body::new(pos, KNIGHT_GRAVITY, KNIGHT_MAX_FALL),
+                Size(stats.size()),
+                Body::new(pos, stats.gravity, stats.max_fall),
                 Sprite { clips, offset },
                 AnimationState::new("idle"),
+                Stats(stats),
             )))
         }
         other => anyhow::bail!(
@@ -117,18 +122,30 @@ mod tests {
         Arc::new(crate::sim::fixture_clips())
     }
 
+    /// The real numbers, from the real file. Movement and combat values are
+    /// content; a test that invented its own would not be testing the game.
+    fn stats(kind: &str) -> Arc<StatBlock> {
+        crate::assets::StatTable::shipped()
+            .get(kind)
+            .unwrap_or_else(|e| panic!("{e:#}"))
+    }
+
     #[test]
     fn a_knight_stands_on_the_floor_of_its_cell() {
         let mut world = World::new();
-        let e = entity(&mut world, &placement("knight"), 32.0, clips()).unwrap();
+        let size = stats("knight").size();
+        let e = entity(
+            &mut world,
+            &placement("knight"),
+            32.0,
+            clips(),
+            stats("knight"),
+        )
+        .unwrap();
 
         let pos = world.get::<&Position>(e).unwrap().0;
-        assert_eq!(pos.y + KNIGHT_SIZE.y, 96.0 + 32.0, "feet on the cell floor");
-        assert_eq!(
-            pos.x + KNIGHT_SIZE.x / 2.0,
-            64.0 + 16.0,
-            "centred in the cell"
-        );
+        assert_eq!(pos.y + size.y, 96.0 + 32.0, "feet on the cell floor");
+        assert_eq!(pos.x + size.x / 2.0, 64.0 + 16.0, "centred in the cell");
     }
 
     /// A typo in a map should name itself, not spawn nothing and leave the
@@ -136,7 +153,14 @@ mod tests {
     #[test]
     fn an_unknown_kind_is_an_error_naming_the_kind() {
         let mut world = World::new();
-        let err = entity(&mut world, &placement("dragon"), 32.0, clips()).unwrap_err();
+        let err = entity(
+            &mut world,
+            &placement("dragon"),
+            32.0,
+            clips(),
+            stats("knight"),
+        )
+        .unwrap_err();
         let text = format!("{err:#}");
         assert!(text.contains("dragon"), "{text}");
         assert!(text.contains("knight"), "should list what is known: {text}");
@@ -148,8 +172,33 @@ mod tests {
     fn every_advertised_kind_spawns() {
         for kind in KINDS {
             let mut world = World::new();
-            entity(&mut world, &placement(kind), 32.0, clips())
+            entity(&mut world, &placement(kind), 32.0, clips(), stats(kind))
                 .unwrap_or_else(|e| panic!("`{kind}` is advertised but fails to spawn: {e:#}"));
         }
+    }
+
+    /// The table is the other half of `KINDS`: a kind that spawns but has no
+    /// block cannot be built at all. `tests/data.rs` checks the same edge from
+    /// the content side; this one fails without leaving the crate.
+    #[test]
+    fn every_advertised_kind_has_a_stat_block() {
+        let table = crate::assets::StatTable::shipped();
+        for kind in std::iter::once("player").chain(KINDS.iter().copied()) {
+            table
+                .get(kind)
+                .unwrap_or_else(|e| panic!("`{kind}` is spawnable but has no stats: {e:#}"));
+        }
+    }
+
+    /// An unknown kind must name itself here too, not fail with a lookup miss
+    /// somewhere downstream.
+    #[test]
+    fn an_unknown_kind_has_no_stat_block_and_says_so() {
+        let err = crate::assets::StatTable::shipped()
+            .get("dragon")
+            .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("dragon"), "{text}");
+        assert!(text.contains("knight"), "should list what is known: {text}");
     }
 }

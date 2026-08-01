@@ -195,6 +195,201 @@ impl AttackTable {
     }
 }
 
+/// Everything one kind of entity is made of, numerically. See
+/// `assets/data/stats.ron`. Spelled `StatBlock(...)` in the RON file.
+///
+/// The flat fields are what *anything* alive needs: a box, a weight, hit
+/// points, a walking pace, and something to swing. The two groups below are
+/// the parts only some kinds have — steering a player through a jump, or
+/// hunting one — and they are `Option` rather than defaulted so that a kind
+/// which forgets them fails loudly at the first read instead of quietly
+/// running on zeroes.
+///
+/// M4's equipment computes `base + sum(modifiers)`; this is the base.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "StatBlock")]
+pub struct StatBlock {
+    /// Collider width and height. The sprite is aligned to this box, not the
+    /// other way round — see [`crate::ecs::components::Sprite::draw_origin`].
+    pub width: f32,
+    pub height: f32,
+    /// Ground speed: the player's run, an NPC's patrol pace.
+    pub run_speed: f32,
+    pub gravity: f32,
+    /// Terminal velocity.
+    pub max_fall: f32,
+    pub max_health: i32,
+    /// How long invulnerability lasts after a hit. Per-kind because the two
+    /// sides want opposite things: the player's is a mercy window, an enemy's
+    /// must be shorter than the gap between combo links or only the first hit
+    /// of a combo ever lands.
+    pub iframe_ticks: u32,
+    /// The attack this kind opens with, from `assets/data/attacks.ron`. The
+    /// rest of a combo is data: each attack names its own successor.
+    pub attack: String,
+    /// Present only for a kind the player drives.
+    #[serde(default)]
+    pub avatar: Option<AvatarStats>,
+    /// Present only for a kind that walks a route and hunts.
+    #[serde(default)]
+    pub ai: Option<AiStats>,
+}
+
+/// The knobs [`crate::systems::avatar`] steers with. Spelled
+/// `AvatarStats(...)` in the RON file.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "AvatarStats")]
+pub struct AvatarStats {
+    pub accel: f32,
+    pub decel: f32,
+    /// Jump clears 3 tiles up and ~4.5 tiles across at full run speed.
+    pub jump_speed: f32,
+    pub double_jump_speed: f32,
+    /// Extra gravity while rising with the jump key released: tap = short
+    /// hop, hold = full jump.
+    pub low_jump_gravity: f32,
+    pub max_air_jumps: u8,
+    /// Jump grace after walking off a ledge (6 ticks is 100 ms at 60 Hz).
+    pub coyote_ticks: u32,
+    /// How early a jump press may land and still count.
+    pub jump_buffer_ticks: u32,
+    /// Fall speed cap while pressed against a wall.
+    pub wall_slide_speed: f32,
+    /// Horizontal kick away from the wall on a wall jump.
+    pub wall_jump_push: f32,
+    pub wall_jump_speed: f32,
+    /// Jump grace after leaving a wall. Wall contact is often a single tick —
+    /// clipping a corner, or bouncing off on the way up — and without a grace
+    /// window the wall jump only exists while a slide is held.
+    pub wall_coyote_ticks: u32,
+    /// One-way platforms are ignored for this long after down+jump.
+    pub drop_ticks: u32,
+    /// How long a slide lasts, matching the `slide` clip.
+    pub slide_ticks: u32,
+    /// Slides start faster than a run and bleed off across their length.
+    pub slide_speed: f32,
+    /// Ticks after a slide before another may start, so it is a move rather
+    /// than a faster way to walk.
+    pub slide_cooldown: u32,
+    /// Death freeze before respawning.
+    pub death_ticks: u32,
+    /// What a press in mid-air performs instead of the ground combo.
+    pub air_attack: String,
+}
+
+/// The knobs [`crate::systems::npc`] walks and hunts with. Spelled
+/// `AiStats(...)` in the RON file.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "AiStats")]
+pub struct AiStats {
+    /// How far ahead it notices the player. Sight is a box in front of it,
+    /// not a radius: walking up behind a patrolling knight should work.
+    pub sight: f32,
+    /// Vertical tolerance on that box. Roughly a body height, so a player on
+    /// the platform above is not "in front of" anything.
+    pub sight_height: f32,
+    /// Gives up once the player is this far away — wider than `sight`, so an
+    /// enemy at the edge of its vision does not flicker between states.
+    pub lose: f32,
+    /// Close enough to swing.
+    pub reach: f32,
+    /// Ticks between swings. Long enough that closing in, landing a hit and
+    /// backing out is a plan rather than a gamble.
+    pub cooldown: u32,
+    /// How close to home counts as home.
+    pub home_slack: f32,
+    /// Chasing is faster than strolling, but still much slower than the
+    /// player runs: backing off has to work.
+    pub chase_multiplier: f32,
+    /// How far ahead of the collider to look for a wall, or for missing
+    /// floor. A little under half a tile: far enough to stop before the edge,
+    /// close enough that a one-tile ledge is still walkable.
+    pub lookahead: f32,
+    /// How far below the feet counts as "there is still floor here".
+    pub floor_probe: f32,
+}
+
+impl StatBlock {
+    /// The player-steering group, which a kind the player drives must have.
+    pub fn avatar(&self) -> &AvatarStats {
+        self.avatar
+            .as_ref()
+            .expect("an entity with an `Avatar` needs an `avatar` group in assets/data/stats.ron")
+    }
+
+    /// The walking-and-hunting group, which a kind that patrols must have.
+    pub fn ai(&self) -> &AiStats {
+        self.ai
+            .as_ref()
+            .expect("an entity with a `Patrol` needs an `ai` group in assets/data/stats.ron")
+    }
+
+    /// The collider box this kind occupies.
+    pub fn size(&self) -> Vec2 {
+        Vec2::new(self.width, self.height)
+    }
+}
+
+/// Every kind's numbers, by the name a map (or `spawn`) calls it.
+/// Spelled `Stats({...})` in the RON file.
+///
+/// Blocks come out behind an `Arc` because every entity of a kind shares one:
+/// thirty knights are thirty pointers, not thirty copies of a struct with two
+/// `String`s in it. It also means a block is `Send + Sync`, which a component
+/// must be.
+#[derive(Clone, Debug, Default)]
+pub struct StatTable(HashMap<String, Arc<StatBlock>>);
+
+impl StatTable {
+    /// The block for `kind`, or an error naming it and everything that does
+    /// resolve — the same contract `spawn::entity` gives an unknown kind.
+    pub fn get(&self, kind: &str) -> anyhow::Result<Arc<StatBlock>> {
+        match self.0.get(kind) {
+            Some(block) => Ok(block.clone()),
+            None => anyhow::bail!(
+                "assets/data/stats.ron has no stat block for `{kind}` (it defines: {})",
+                self.kinds().join(", ")
+            ),
+        }
+    }
+
+    /// Every kind the table defines, sorted, for error messages.
+    pub fn kinds(&self) -> Vec<&str> {
+        let mut kinds: Vec<&str> = self.0.keys().map(String::as_str).collect();
+        kinds.sort_unstable();
+        kinds
+    }
+
+    /// The shipped table, read straight off disk.
+    ///
+    /// [`Assets::stats`] is the cached path the game itself uses; this is for
+    /// tests and for `Sim::fixture`, which have no asset cache to hand.
+    /// Combat and movement numbers are content, and a test that invents its
+    /// own is not testing the game — so this panics rather than offering a
+    /// fallback: a table that does not load is a broken build.
+    pub fn shipped() -> Arc<StatTable> {
+        Assets::new()
+            .stats()
+            .expect("assets/data/stats.ron should load")
+    }
+}
+
+impl<'de> Deserialize<'de> for StatTable {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename = "Stats")]
+        struct Raw(HashMap<String, StatBlock>);
+
+        let Raw(blocks) = Raw::deserialize(de)?;
+        Ok(StatTable(
+            blocks
+                .into_iter()
+                .map(|(kind, block)| (kind, Arc::new(block)))
+                .collect(),
+        ))
+    }
+}
+
 /// How a logical map cell maps onto tiles of the atlas, chosen by looking at
 /// a solid cell's neighbors. All values are 0-based tile indices.
 /// Spelled `Rules(...)` in the RON files.
@@ -246,6 +441,7 @@ pub struct Assets {
     clip_sets: HashMap<String, Arc<ClipSet>>,
     tilesets: HashMap<String, Rc<TilesetDef>>,
     attacks: Option<Arc<AttackTable>>,
+    stats: Option<Arc<StatTable>>,
 }
 
 impl Default for Assets {
@@ -270,6 +466,7 @@ impl Assets {
             clip_sets: HashMap::new(),
             tilesets: HashMap::new(),
             attacks: None,
+            stats: None,
         }
     }
 
@@ -348,6 +545,17 @@ impl Assets {
         let table: AttackTable = load_ron(&self.base.join("data/attacks.ron"))?;
         let table = Arc::new(table);
         self.attacks = Some(table.clone());
+        Ok(table)
+    }
+
+    /// Load `assets/data/stats.ron`. One table for the whole game.
+    pub fn stats(&mut self) -> anyhow::Result<Arc<StatTable>> {
+        if let Some(table) = &self.stats {
+            return Ok(table.clone());
+        }
+        let table: StatTable = load_ron(&self.base.join("data/stats.ron"))?;
+        let table = Arc::new(table);
+        self.stats = Some(table.clone());
         Ok(table)
     }
 

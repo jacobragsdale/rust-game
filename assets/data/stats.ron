@@ -1,0 +1,72 @@
+// Every entity kind's numbers, by the name `spawn` and the maps call it.
+//
+// Code holds mechanics; this holds balance. Nothing here is a default or a
+// fallback — `spawn` reads a block per entity and attaches it as a `Stats`
+// component, and a kind with no block fails at spawn naming itself. Tuning is
+// therefore an edit to this file and a re-run, with no recompile.
+//
+// Every value is a straight move of what used to be a `const` on `Avatar` or
+// in `spawn.rs` (ticket H-3), so the golden traces did not move. If you change
+// one, expect traces to move — that is the file doing its job.
+//
+// The flat fields are what anything alive needs. `avatar:` is the group only a
+// player-driven kind has; `ai:` is the group only a kind that walks a route and
+// hunts has. See `StatBlock` in src/assets.rs for what each one means.
+Stats({
+    "player": StatBlock(
+        width: 20.0,
+        height: 34.0,
+        run_speed: 200.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 5,
+        // Half a second: a mercy window that stops a bad moment becoming a
+        // death spiral.
+        iframe_ticks: 30,
+        attack: "player_slash1",
+        avatar: AvatarStats(
+            accel: 1500.0,
+            decel: 1800.0,
+            jump_speed: 520.0,
+            double_jump_speed: 470.0,
+            low_jump_gravity: 1800.0,
+            max_air_jumps: 1,
+            coyote_ticks: 6,
+            jump_buffer_ticks: 6,
+            wall_slide_speed: 70.0,
+            wall_jump_push: 260.0,
+            wall_jump_speed: 480.0,
+            wall_coyote_ticks: 6,
+            drop_ticks: 8,
+            slide_ticks: 20,
+            slide_speed: 300.0,
+            slide_cooldown: 20,
+            death_ticks: 36,
+            air_attack: "player_air",
+        ),
+    ),
+    // Narrower and shorter than the player, matching a drawn body of about
+    // 26x30 px.
+    "knight": StatBlock(
+        width: 22.0,
+        height: 30.0,
+        run_speed: 55.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 6,
+        // Short enough that every link of the player's combo connects.
+        iframe_ticks: 10,
+        attack: "knight_slash",
+        ai: AiStats(
+            sight: 130.0,
+            sight_height: 36.0,
+            lose: 200.0,
+            reach: 30.0,
+            cooldown: 75,
+            home_slack: 8.0,
+            chase_multiplier: 1.25,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+})

@@ -9,8 +9,7 @@ use std::path::{Path, PathBuf};
 
 use ggez::glam::Vec2;
 
-use supergame::assets::Assets;
-use supergame::ecs::components::Avatar;
+use supergame::assets::{Assets, StatBlock, StatTable};
 use supergame::level::LevelData;
 
 fn map_paths() -> Vec<PathBuf> {
@@ -24,8 +23,17 @@ fn map_paths() -> Vec<PathBuf> {
     paths
 }
 
+/// The player's real collider, from `assets/data/stats.ron`. The whole point
+/// of these checks is whether the shipped maps fit the shipped player, so the
+/// box has to be the shipped one rather than a literal copied into this file.
+fn player() -> std::sync::Arc<StatBlock> {
+    StatTable::shipped()
+        .get("player")
+        .unwrap_or_else(|e| panic!("{e:#}"))
+}
+
 fn body() -> Vec2 {
-    Vec2::new(Avatar::WIDTH, Avatar::HEIGHT)
+    player().size()
 }
 
 #[test]
@@ -77,7 +85,8 @@ fn every_spawn_point_is_clear_of_solid_geometry() {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
 
         let spawn = level.player_spawn;
-        let occupied = Aabb::new(spawn.x, spawn.y, Avatar::WIDTH, Avatar::HEIGHT);
+        let body = body();
+        let occupied = Aabb::new(spawn.x, spawn.y, body.x, body.y);
         if let Some(hit) = level.solids.iter().find(|s| occupied.overlaps(s)) {
             problems.push(format!(
                 "{name}: spawn ({:.0}, {:.0}) is inside solid {hit:?}",

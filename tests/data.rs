@@ -28,9 +28,8 @@ use anyhow::Context as _;
 use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::Deserialize;
 
-use supergame::assets::{Assets, AttackTable};
-use supergame::ecs::components::Avatar;
-use supergame::ecs::spawn::{KINDS, KNIGHT_ATTACK};
+use supergame::assets::{Assets, AttackTable, StatTable};
+use supergame::ecs::spawn::KINDS;
 use supergame::level::LevelData;
 
 /// The clip set the player draws from. `Sim::load` loads exactly this name
@@ -370,31 +369,47 @@ fn data_files() -> Vec<PathBuf> {
 // Attacks -> clips, and attacks -> attacks
 // ---------------------------------------------------------------------------
 
-/// The attack ids Rust names, and the clip set whoever uses them animates
+/// The attack ids the game names, and the clip set whoever uses them animates
 /// from. Everything else in the table is reached from here by `chain`.
 ///
-/// This is the one hand-maintained list in the file, and
-/// [`every_attack_in_the_table_is_reachable_by_something`] is what stops it
-/// going stale: a new attacker that is not added here makes that test fail.
-fn attack_entry_points() -> Vec<(&'static str, &'static str)> {
-    vec![
-        (PLAYER_SET, Avatar::ATTACK),
-        (PLAYER_SET, Avatar::AIR_ATTACK),
-        ("knight", KNIGHT_ATTACK),
-    ]
+/// Read out of `assets/data/stats.ron` rather than hand-maintained here: since
+/// H-3, a kind's opening attack (and the player's air attack) is a field on
+/// its stat block, so a new attacker arrives in this list the moment it has
+/// numbers. [`every_attack_in_the_table_is_reachable_by_something`] is what
+/// catches an attack nothing can reach from these entry points.
+fn attack_entry_points() -> Vec<(String, String)> {
+    let table = stat_table();
+    let mut entries: Vec<(String, String)> = Vec::new();
+
+    for kind in animated_kinds() {
+        let block = table
+            .get(kind)
+            .unwrap_or_else(|e| panic!("{}: {e:#}", rel(&assets_root().join("data/stats.ron"))));
+        entries.push((kind.to_string(), block.attack.clone()));
+        if let Some(avatar) = &block.avatar {
+            entries.push((kind.to_string(), avatar.air_attack.clone()));
+        }
+    }
+
+    entries
+}
+
+fn stat_table() -> StatTable {
+    let path = assets_root().join("data/stats.ron");
+    load_ron(&path).unwrap_or_else(|e| panic!("{e:#}"))
 }
 
 /// Clip set -> every attack an entity drawing from it can perform, following
 /// `chain` to its end. Ids the table does not define are kept in the result
 /// rather than dropped, so a broken chain is reported as the dangling id it
 /// is rather than silently becoming a shorter combo.
-fn reachable_attacks(table: &AttackTable) -> BTreeMap<&'static str, BTreeSet<String>> {
-    let mut reachable: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
+fn reachable_attacks(table: &AttackTable) -> BTreeMap<String, BTreeSet<String>> {
+    let mut reachable: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     for (set, entry) in attack_entry_points() {
-        let mut queue = VecDeque::from([entry.to_string()]);
+        let mut queue = VecDeque::from([entry]);
         while let Some(id) = queue.pop_front() {
-            if !reachable.entry(set).or_default().insert(id.clone()) {
+            if !reachable.entry(set.clone()).or_default().insert(id.clone()) {
                 continue;
             }
             if let Some(next) = table.get(&id).and_then(|def| def.chain.clone()) {
@@ -421,7 +436,7 @@ fn every_attack_id_named_in_code_exists_in_the_table() {
     let mut problems: Vec<String> = Vec::new();
 
     for (set, id) in attack_entry_points() {
-        if table.get(id).is_none() {
+        if table.get(&id).is_none() {
             problems.push(format!(
                 "{}: `{set}` performs attack `{id}`, which the table does not define \
                  (defined: {})",
@@ -473,7 +488,7 @@ fn every_attack_clip_exists_in_the_clip_set_of_every_entity_that_uses_it() {
 
     for (set_name, ids) in reachable_attacks(&table) {
         let set_path = assets_root().join(format!("data/animations/{set_name}.ron"));
-        let set = match assets.clip_set(set_name) {
+        let set = match assets.clip_set(&set_name) {
             Ok(set) => set,
             Err(e) => {
                 problems.push(format!("{}: does not load: {e:#}", rel(&set_path)));

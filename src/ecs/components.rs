@@ -4,8 +4,18 @@ use std::sync::Arc;
 
 use ggez::glam::Vec2;
 
-use crate::assets::ClipSet;
+use crate::assets::{AvatarStats, ClipSet, StatBlock};
 use crate::physics::{Aabb, SolidRect};
+
+/// What this entity's kind is worth, numerically: the block
+/// `assets/data/stats.ron` holds for it.
+///
+/// Every entity carries one, and every movement and combat number the
+/// simulation reads comes through it. Shared behind an `Arc` — one block per
+/// kind, however many of that kind are alive — which is also what makes it
+/// `Send + Sync`, as a hecs component must be.
+#[derive(Clone, Debug)]
+pub struct Stats(pub Arc<StatBlock>);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Position(pub Vec2);
@@ -165,7 +175,8 @@ impl Body {
 ///
 /// Only the state that is specific to *being the player* lives here. Where the
 /// body is, how fast it is going, and whether it is on the ground belong to
-/// [`Body`], which anything else in the world can have too.
+/// [`Body`], which anything else in the world can have too. How fast it runs
+/// and how high it jumps belong to [`Stats`], which is data.
 #[derive(Clone, Debug)]
 pub struct Avatar {
     pub facing_right: bool,
@@ -194,57 +205,32 @@ pub struct Avatar {
 }
 
 impl Avatar {
+    // --- the last two numbers still in code, and why -----------------------
+    //
+    // Every gameplay constant moved to `assets/data/stats.ron` (ticket H-3),
+    // read through [`Stats`]. These two could not: the level loaders
+    // (`level::ascii`, `level::tiled`) resolve a map's player spawn from the
+    // player's box *before any entity exists*, so there is no `Stats` to ask,
+    // and `tests/physics_diagnostics.rs` needs the box in a `const` context.
+    // Threading a stat table into `LevelData::load` is what deletes these.
+    //
+    // Until then they are not a second source of truth: `stats_match_the_
+    // shipped_table` below fails the build if they ever disagree with the RON.
     pub const WIDTH: f32 = 20.0;
     pub const HEIGHT: f32 = 34.0;
-    pub const RUN_SPEED: f32 = 200.0;
-    pub const ACCEL: f32 = 1500.0;
-    pub const DECEL: f32 = 1800.0;
-    /// Jump clears 3 tiles up and ~4.5 tiles across at full run speed.
-    pub const JUMP_SPEED: f32 = 520.0;
-    pub const DOUBLE_JUMP_SPEED: f32 = 470.0;
+    /// Only `tests/physics_diagnostics.rs` reads these three — it sweeps the
+    /// collision system at realistic fall and jump speeds.
     pub const GRAVITY: f32 = 1400.0;
-    /// Extra gravity while rising with the jump key released: tap = short
-    /// hop, hold = full jump.
-    pub const LOW_JUMP_GRAVITY: f32 = 1800.0;
     pub const MAX_FALL: f32 = 900.0;
-    /// Fall speed cap while pressed against a wall.
-    pub const WALL_SLIDE_SPEED: f32 = 70.0;
-    /// Horizontal kick away from the wall on a wall jump.
-    pub const WALL_JUMP_PUSH: f32 = 260.0;
-    pub const WALL_JUMP_SPEED: f32 = 480.0;
-    /// Jump grace after walking off a ledge (100 ms at 60 Hz).
-    pub const COYOTE_TICKS: u32 = 6;
-    /// Jump grace after leaving a wall. Wall contact is often a single tick —
-    /// clipping a corner, or bouncing off on the way up — and without a grace
-    /// window the wall jump only exists while a slide is held.
-    pub const WALL_COYOTE_TICKS: u32 = 6;
-    /// How early a jump press may land and still count.
-    pub const JUMP_BUFFER_TICKS: u32 = 6;
-    pub const MAX_AIR_JUMPS: u8 = 1;
-    /// One-way platforms are ignored for this long after down+jump.
-    pub const DROP_TICKS: u32 = 8;
-    /// Death freeze before respawning (0.6 s).
-    pub const DEATH_TICKS: u32 = 36;
-    pub const MAX_HEALTH: i32 = 5;
-    /// The first link of the ground combo, from `assets/data/attacks.ron`.
-    /// The rest of the chain is data: each attack names its own successor.
-    pub const ATTACK: &'static str = "player_slash1";
-    /// What a press in mid-air performs instead.
-    pub const AIR_ATTACK: &'static str = "player_air";
-    /// How long a slide lasts, matching the `slide` clip.
-    pub const SLIDE_TICKS: u32 = 20;
-    /// Slides start faster than a run and bleed off across their length.
-    pub const SLIDE_SPEED: f32 = 300.0;
-    /// Ticks after a slide before another may start, so it is a move rather
-    /// than a faster way to walk.
-    pub const SLIDE_COOLDOWN: u32 = 20;
+    pub const JUMP_SPEED: f32 = 520.0;
 
-    pub fn new() -> Self {
+    /// A fresh avatar with a full set of air jumps.
+    pub fn new(stats: &AvatarStats) -> Self {
         Avatar {
             facing_right: true,
             coyote_ticks: u32::MAX,
             jump_buffer: 0,
-            air_jumps: Self::MAX_AIR_JUMPS,
+            air_jumps: stats.max_air_jumps,
             drop_ticks: 0,
             wall_sliding: false,
             wall_dir: 0.0,
@@ -261,19 +247,8 @@ impl Avatar {
         self.slide_ticks > 0
     }
 
-    /// The body the player drives, at its spawn point.
-    pub fn body(spawn: Vec2) -> Body {
-        Body::new(spawn, Self::GRAVITY, Self::MAX_FALL)
-    }
-
     pub fn dead(&self) -> bool {
         self.dead_ticks > 0
-    }
-}
-
-impl Default for Avatar {
-    fn default() -> Self {
-        Avatar::new()
     }
 }
 
@@ -294,21 +269,12 @@ pub struct Health {
     /// to keep flying while the victim has no say in it, so this suppresses
     /// the *controller* and leaves the body integrating normally.
     pub hitstun: u32,
-    /// How long invulnerability lasts after a hit, for this entity.
-    ///
-    /// Per-entity because the two sides want opposite things. The player's is
-    /// long: a mercy window that stops a bad moment becoming a death spiral.
-    /// An enemy's must be shorter than the gap between combo links, or only
-    /// the first hit of a combo ever lands and the other two are decoration.
+    /// How long invulnerability lasts after a hit, for this entity. Copied
+    /// from the kind's `iframe_ticks` at spawn; see [`Stats`].
     pub iframe_ticks: u32,
 }
 
 impl Health {
-    /// The player's mercy window, half a second.
-    pub const PLAYER_IFRAMES: u32 = 30;
-    /// An enemy's, short enough that every link of a combo connects.
-    pub const ENEMY_IFRAMES: u32 = 10;
-
     pub fn new(max: i32, iframe_ticks: u32) -> Self {
         Health {
             current: max,
@@ -431,27 +397,6 @@ pub struct Hostile {
 }
 
 impl Hostile {
-    /// How far ahead it notices the player. Sight is a box in front of it, not
-    /// a radius: walking up behind a patrolling knight should work.
-    pub const SIGHT: f32 = 130.0;
-    /// Vertical tolerance on that box. Roughly a body height, so a player on
-    /// the platform above is not "in front of" anything.
-    pub const SIGHT_HEIGHT: f32 = 36.0;
-    /// Gives up once the player is this far away — wider than `SIGHT`, so a
-    /// knight at the edge of its vision does not flicker between states.
-    pub const LOSE: f32 = 200.0;
-    /// Close enough to swing.
-    pub const REACH: f32 = 30.0;
-    /// Ticks between swings. Long enough that closing in, landing a hit and
-    /// backing out is a plan rather than a gamble — a first enemy that wins
-    /// every exchange teaches the player nothing except to avoid it.
-    pub const COOLDOWN: u32 = 75;
-    /// How close to home counts as home.
-    pub const HOME_SLACK: f32 = 8.0;
-    /// Chasing is faster than strolling, but still much slower than the
-    /// player runs: backing off has to work.
-    pub const CHASE_MULTIPLIER: f32 = 1.25;
-
     pub fn new(home: f32, attack: &str) -> Self {
         Hostile {
             stance: Stance::Patrol,
@@ -478,13 +423,6 @@ pub struct Patrol {
 }
 
 impl Patrol {
-    /// How far ahead of the collider to look for a wall, or for missing floor.
-    /// A little under half a tile: far enough to stop before the edge, close
-    /// enough that a one-tile ledge is still walkable.
-    pub const LOOKAHEAD: f32 = 6.0;
-    /// How far below the feet counts as "there is still floor here".
-    pub const FLOOR_PROBE: f32 = 4.0;
-
     pub fn new(dir: f32, speed: f32) -> Self {
         Patrol { dir, speed }
     }
@@ -540,5 +478,26 @@ impl AnimationState {
             self.frame = 0;
             self.elapsed = 0.0;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::StatTable;
+
+    /// The handful of player numbers still spelled as `const` (see the note on
+    /// [`Avatar`]) are a convenience for code that runs before any entity
+    /// exists, not a second opinion. If the RON is tuned and these are not,
+    /// the level loader would place the player at a spawn point computed from
+    /// the wrong box — so this fails the build instead.
+    #[test]
+    fn avatar_consts_match_the_shipped_stat_table() {
+        let player = StatTable::shipped().get("player").unwrap();
+        assert_eq!(Avatar::WIDTH, player.width, "width");
+        assert_eq!(Avatar::HEIGHT, player.height, "height");
+        assert_eq!(Avatar::GRAVITY, player.gravity, "gravity");
+        assert_eq!(Avatar::MAX_FALL, player.max_fall, "max_fall");
+        assert_eq!(Avatar::JUMP_SPEED, player.avatar().jump_speed, "jump_speed");
     }
 }

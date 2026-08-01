@@ -6,8 +6,9 @@
 use ggez::glam::Vec2;
 use hecs::World;
 
+use crate::assets::AiStats;
 use crate::ecs::components::{
-    Attacking, Body, Health, Hostile, Patrol, Position, Size, Stance, Team, Velocity,
+    Attacking, Body, Health, Hostile, Patrol, Position, Size, Stance, Stats, Team, Velocity,
 };
 use crate::physics::{Aabb, SolidQuery, SolidRect};
 use crate::sim::event::GameEvent;
@@ -27,7 +28,7 @@ pub fn think<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, events: &m
 
     let mut swings: Vec<(hecs::Entity, String)> = Vec::new();
 
-    for (entity, (patrol, hostile, pos, vel, size, body, health, attacking)) in world
+    for (entity, (patrol, hostile, pos, vel, size, body, health, attacking, stats)) in world
         .query::<(
             &mut Patrol,
             Option<&mut Hostile>,
@@ -37,9 +38,14 @@ pub fn think<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, events: &m
             &Body,
             &Health,
             &Attacking,
+            &Stats,
         )>()
         .iter()
     {
+        // Sight, reach, patience and how far it peers over a ledge are all
+        // per-kind data — `assets/data/stats.ron`, the `ai` group.
+        let ai = stats.0.ai();
+
         if body.frozen || health.dead() {
             continue;
         }
@@ -49,7 +55,7 @@ pub fn think<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, events: &m
         }
 
         let Some(hostile) = hostile else {
-            walk(patrol, pos.0, size.0, vel, body, geometry, patrol.speed);
+            walk(patrol, pos.0, size.0, vel, body, geometry, ai, patrol.speed);
             continue;
         };
         hostile.cooldown = hostile.cooldown.saturating_sub(1);
@@ -61,8 +67,8 @@ pub fn think<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, events: &m
             continue;
         }
 
-        let seen = target.and_then(|t| sighted(pos.0, size.0, patrol.dir, t));
-        let reachable = target.and_then(|t| within(pos.0, size.0, t, Hostile::REACH));
+        let seen = target.and_then(|t| sighted(pos.0, size.0, patrol.dir, t, ai));
+        let reachable = target.and_then(|t| within(pos.0, size.0, t, ai.reach, ai));
 
         hostile.stance = match hostile.stance {
             Stance::Patrol | Stance::Return if seen.is_some() => Stance::Chase,
@@ -71,7 +77,7 @@ pub fn think<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, events: &m
             // there — otherwise a killed player leaves the knight swinging at
             // the spot they died on.
             Stance::Chase | Stance::Attack => {
-                match target.and_then(|t| within(pos.0, size.0, t, Hostile::LOSE)) {
+                match target.and_then(|t| within(pos.0, size.0, t, ai.lose, ai)) {
                     Some(_) => Stance::Chase,
                     None => Stance::Return,
                 }
@@ -80,18 +86,18 @@ pub fn think<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, events: &m
         };
 
         match hostile.stance {
-            Stance::Patrol => walk(patrol, pos.0, size.0, vel, body, geometry, patrol.speed),
+            Stance::Patrol => walk(patrol, pos.0, size.0, vel, body, geometry, ai, patrol.speed),
             Stance::Chase => {
                 if reachable.is_some() && hostile.cooldown == 0 {
                     hostile.stance = Stance::Attack;
-                    hostile.cooldown = Hostile::COOLDOWN;
+                    hostile.cooldown = ai.cooldown;
                     vel.0.x = 0.0;
                     swings.push((entity, hostile.attack.clone()));
                 } else if let Some(toward) = seen.or(reachable) {
                     // Face and close, but still refuse to walk off a ledge.
                     patrol.dir = toward;
-                    let speed = patrol.speed * Hostile::CHASE_MULTIPLIER;
-                    if body.grounded && !floor_ahead(pos.0, size.0, toward, geometry) {
+                    let speed = patrol.speed * ai.chase_multiplier;
+                    if body.grounded && !floor_ahead(pos.0, size.0, toward, geometry, ai) {
                         vel.0.x = 0.0;
                     } else {
                         vel.0.x = toward * speed;
@@ -103,12 +109,12 @@ pub fn think<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, events: &m
             Stance::Attack => vel.0.x = 0.0,
             Stance::Return => {
                 let toward = (hostile.home - pos.0.x).signum();
-                if (hostile.home - pos.0.x).abs() <= Hostile::HOME_SLACK {
+                if (hostile.home - pos.0.x).abs() <= ai.home_slack {
                     hostile.stance = Stance::Patrol;
                     vel.0.x = 0.0;
                 } else {
                     patrol.dir = toward;
-                    walk(patrol, pos.0, size.0, vel, body, geometry, patrol.speed);
+                    walk(patrol, pos.0, size.0, vel, body, geometry, ai, patrol.speed);
                 }
             }
         }
@@ -128,6 +134,7 @@ pub fn think<Q: SolidQuery + ?Sized>(world: &mut World, geometry: &Q, events: &m
 /// keeps a walker on its ledge instead of marching off it — and it has to be a
 /// look-ahead probe rather than a reaction to falling, because by the time the
 /// body is airborne it is already too late to not have walked off.
+#[allow(clippy::too_many_arguments)]
 fn walk<Q: SolidQuery + ?Sized>(
     patrol: &mut Patrol,
     pos: Vec2,
@@ -135,13 +142,14 @@ fn walk<Q: SolidQuery + ?Sized>(
     vel: &mut Velocity,
     body: &Body,
     geometry: &Q,
+    ai: &AiStats,
     speed: f32,
 ) {
     // Airborne walkers keep their horizontal speed and do not steer: turning
     // mid-air would let one walk off a ledge and immediately scuttle back on.
     if body.grounded
-        && (wall_ahead(pos, size, patrol.dir, geometry)
-            || !floor_ahead(pos, size, patrol.dir, geometry))
+        && (wall_ahead(pos, size, patrol.dir, geometry, ai)
+            || !floor_ahead(pos, size, patrol.dir, geometry, ai))
     {
         patrol.dir = -patrol.dir;
     }
@@ -163,24 +171,24 @@ fn player_position(world: &World) -> Option<(Vec2, Vec2)> {
 /// In *front* rather than in a radius, so that walking up behind a patrolling
 /// knight goes unnoticed — which is the difference between an enemy and a
 /// proximity trigger.
-fn sighted(pos: Vec2, size: Vec2, facing: f32, target: (Vec2, Vec2)) -> Option<f32> {
+fn sighted(pos: Vec2, size: Vec2, facing: f32, target: (Vec2, Vec2), ai: &AiStats) -> Option<f32> {
     let (their_pos, their_size) = target;
     let dy = (their_pos.y + their_size.y / 2.0) - (pos.y + size.y / 2.0);
-    if dy.abs() > Hostile::SIGHT_HEIGHT {
+    if dy.abs() > ai.sight_height {
         return None;
     }
     let dx = (their_pos.x + their_size.x / 2.0) - (pos.x + size.x / 2.0);
-    if dx.abs() > Hostile::SIGHT || dx.signum() != facing.signum() {
+    if dx.abs() > ai.sight || dx.signum() != facing.signum() {
         return None;
     }
     Some(dx.signum())
 }
 
 /// Direction to the player if they are within `range` in any direction.
-fn within(pos: Vec2, size: Vec2, target: (Vec2, Vec2), range: f32) -> Option<f32> {
+fn within(pos: Vec2, size: Vec2, target: (Vec2, Vec2), range: f32, ai: &AiStats) -> Option<f32> {
     let (their_pos, their_size) = target;
     let dy = (their_pos.y + their_size.y / 2.0) - (pos.y + size.y / 2.0);
-    if dy.abs() > Hostile::SIGHT_HEIGHT {
+    if dy.abs() > ai.sight_height {
         return None;
     }
     // Gap between the two colliders, not between their centres, so reach does
@@ -198,27 +206,39 @@ fn within(pos: Vec2, size: Vec2, target: (Vec2, Vec2), range: f32) -> Option<f32
 }
 
 /// Is there a solid directly in front of the body, at body height?
-fn wall_ahead<Q: SolidQuery + ?Sized>(pos: Vec2, size: Vec2, dir: f32, geometry: &Q) -> bool {
+fn wall_ahead<Q: SolidQuery + ?Sized>(
+    pos: Vec2,
+    size: Vec2,
+    dir: f32,
+    geometry: &Q,
+    ai: &AiStats,
+) -> bool {
     let x = if dir > 0.0 {
         pos.x + size.x
     } else {
-        pos.x - Patrol::LOOKAHEAD
+        pos.x - ai.lookahead
     };
     // Inset vertically so the floor being stood on is not read as a wall.
-    let probe = Aabb::new(x, pos.y + 2.0, Patrol::LOOKAHEAD, size.y - 4.0);
+    let probe = Aabb::new(x, pos.y + 2.0, ai.lookahead, size.y - 4.0);
     probed(geometry, probe).any(|s| !s.one_way && probe.overlaps(&s.rect))
 }
 
 /// Is there anything to stand on just beyond the leading edge?
-fn floor_ahead<Q: SolidQuery + ?Sized>(pos: Vec2, size: Vec2, dir: f32, geometry: &Q) -> bool {
+fn floor_ahead<Q: SolidQuery + ?Sized>(
+    pos: Vec2,
+    size: Vec2,
+    dir: f32,
+    geometry: &Q,
+    ai: &AiStats,
+) -> bool {
     let x = if dir > 0.0 {
         pos.x + size.x
     } else {
-        pos.x - Patrol::LOOKAHEAD
+        pos.x - ai.lookahead
     };
     // One-way platforms count: they hold a body up from above, which is all
     // that matters for deciding whether the next step lands on something.
-    let probe = Aabb::new(x, pos.y + size.y, Patrol::LOOKAHEAD, Patrol::FLOOR_PROBE);
+    let probe = Aabb::new(x, pos.y + size.y, ai.lookahead, ai.floor_probe);
     probed(geometry, probe).any(|s| probe.overlaps(&s.rect))
 }
 
@@ -231,43 +251,61 @@ fn probed<Q: SolidQuery + ?Sized>(geometry: &Q, probe: Aabb) -> impl Iterator<It
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
-    use crate::ecs::components::Avatar;
+    use crate::assets::{StatBlock, StatTable};
     use crate::sim::{Sim, TICK};
     use crate::systems::body;
     use crate::systems::input::PlayerInput;
 
+    /// A deliberately un-knightly body and pace: the AI must be driven by the
+    /// stat block and the geometry it is handed, not by the knight's numbers
+    /// being baked into it.
     const SIZE: Vec2 = Vec2::new(20.0, 30.0);
     const SPEED: f32 = 60.0;
 
+    /// The real numbers for a kind, from `assets/data/stats.ron`. Sight,
+    /// reach and patience are content; a test that invented its own would not
+    /// be testing the game.
+    fn stats(kind: &str) -> Arc<StatBlock> {
+        StatTable::shipped()
+            .get(kind)
+            .unwrap_or_else(|e| panic!("{e:#}"))
+    }
+
     /// A plain walker: paces, and does not care about the player.
     fn spawn(world: &mut World, pos: Vec2, dir: f32) -> hecs::Entity {
+        let knight = stats("knight");
         world.spawn((
             Patrol::new(dir, SPEED),
             Team::Enemy,
-            Health::new(3, Health::ENEMY_IFRAMES),
+            Health::new(3, knight.iframe_ticks),
             Attacking::default(),
             Position(pos),
             Velocity(Vec2::ZERO),
             Size(SIZE),
-            Body::new(pos, Avatar::GRAVITY, Avatar::MAX_FALL),
+            Body::new(pos, knight.gravity, knight.max_fall),
+            Stats(knight),
         ))
     }
 
     /// A walker that will come after you.
     fn spawn_hostile(world: &mut World, pos: Vec2, dir: f32) -> hecs::Entity {
         let entity = spawn(world, pos, dir);
+        let knight = stats("knight");
         world
-            .insert_one(entity, Hostile::new(pos.x, "knight_slash"))
+            .insert_one(entity, Hostile::new(pos.x, &knight.attack))
             .unwrap();
         entity
     }
 
     /// A stand-in player for the AI to notice.
     fn spawn_target(world: &mut World, pos: Vec2) -> hecs::Entity {
+        let player = stats("player");
         world.spawn((
             Team::Player,
-            Health::new(5, Health::PLAYER_IFRAMES),
+            Health::new(player.max_health, player.iframe_ticks),
             Position(pos),
             Velocity(Vec2::ZERO),
             Size(SIZE),
@@ -507,7 +545,7 @@ mod tests {
         assert_eq!(stance_of(&world, knight), Stance::Patrol, "settled back");
         let back = world.get::<&Position>(knight).unwrap().0.x;
         assert!(
-            (back - home).abs() <= Hostile::HOME_SLACK + 2.0,
+            (back - home).abs() <= stats("knight").ai().home_slack + 2.0,
             "came home to {home}, ended at {back}"
         );
     }

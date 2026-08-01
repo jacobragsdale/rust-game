@@ -207,11 +207,23 @@ fn facing_right(world: &World, entity: hecs::Entity) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{AttackDef, AttackTable};
+    use crate::assets::{AttackDef, AttackTable, StatTable};
     use crate::ecs::components::Kind;
     use std::collections::HashMap;
 
     const SIZE: Vec2 = Vec2::new(20.0, 30.0);
+
+    /// How long a kind is invulnerable after a hit, from
+    /// `assets/data/stats.ron`. The player's window and an enemy's are
+    /// deliberately different lengths, and these tests turn on that
+    /// difference — so they read the shipped numbers rather than pick their
+    /// own.
+    fn iframes(kind: &str) -> u32 {
+        StatTable::shipped()
+            .get(kind)
+            .unwrap_or_else(|e| panic!("{e:#}"))
+            .iframe_ticks
+    }
 
     fn table() -> AttackTable {
         let mut map = HashMap::new();
@@ -234,7 +246,8 @@ mod tests {
     }
 
     fn attacker(world: &mut World, x: f32, facing_right: bool) -> hecs::Entity {
-        let mut avatar = Avatar::new();
+        let stats = StatTable::shipped().get("player").unwrap();
+        let mut avatar = Avatar::new(stats.avatar());
         avatar.facing_right = facing_right;
         world.spawn((
             avatar,
@@ -243,13 +256,13 @@ mod tests {
             Position(Vec2::new(x, 100.0)),
             Velocity(Vec2::ZERO),
             Size(SIZE),
-            Health::new(5, Health::PLAYER_IFRAMES),
+            Health::new(5, iframes("player")),
             Body::new(Vec2::new(x, 100.0), 0.0, 900.0),
         ))
     }
 
     fn victim(world: &mut World, x: f32, hp: i32) -> hecs::Entity {
-        victim_with(world, x, hp, Health::PLAYER_IFRAMES)
+        victim_with(world, x, hp, iframes("player"))
     }
 
     fn victim_with(world: &mut World, x: f32, hp: i32, iframes: u32) -> hecs::Entity {
@@ -332,7 +345,7 @@ mod tests {
     fn a_short_i_frame_window_lets_a_follow_up_land() {
         let mut world = World::new();
         let a = attacker(&mut world, 100.0, true);
-        let v = victim_with(&mut world, 122.0, 10, Health::ENEMY_IFRAMES);
+        let v = victim_with(&mut world, 122.0, 10, iframes("knight"));
 
         world.get::<&mut Attacking>(a).unwrap().start("swing");
         run(&mut world, 10);
@@ -361,7 +374,7 @@ mod tests {
         assert_eq!(hp(&world, v), 8, "still invulnerable");
 
         // and once it expires, the next one lands
-        run(&mut world, Health::PLAYER_IFRAMES);
+        run(&mut world, iframes("player"));
         world.get::<&mut Attacking>(a).unwrap().start("swing");
         run(&mut world, 10);
         assert_eq!(hp(&world, v), 6);
@@ -392,7 +405,7 @@ mod tests {
             Position(Vec2::new(122.0, 100.0)),
             Velocity(Vec2::ZERO),
             Size(SIZE),
-            Health::new(10, Health::ENEMY_IFRAMES),
+            Health::new(10, iframes("knight")),
             Body::new(Vec2::new(122.0, 100.0), 0.0, 900.0),
         ));
         world.get::<&mut Attacking>(a).unwrap().start("swing");
@@ -411,7 +424,7 @@ mod tests {
         for _ in 0..3 {
             world.get::<&mut Attacking>(a).unwrap().start("swing");
             events.extend(run(&mut world, 10));
-            events.extend(run(&mut world, Health::PLAYER_IFRAMES));
+            events.extend(run(&mut world, iframes("player")));
         }
 
         assert!(
