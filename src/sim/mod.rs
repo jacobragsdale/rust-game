@@ -132,6 +132,24 @@ pub struct Sim {
     pub rng: Rng,
     /// Ticks elapsed since the sim was created.
     pub tick: u64,
+    /// The tick this world's geometry is current for: the last one whose
+    /// *decide* phase actually ran, and so the tick every fire, platform and
+    /// swinging hazard is standing at.
+    ///
+    /// Almost always `tick - 1` — the decide phase of tick *t* places all three
+    /// and the counter advances afterwards. [`Sim::hitstop`] is what makes it a
+    /// separate number: [`Sim::step_playing`] returns before anything decides
+    /// while a freeze runs, so the clock moves through it and the world does
+    /// not, and the two end the freeze [`HITSTOP_TICKS`] apart until the next
+    /// live tick closes the gap in one step.
+    ///
+    /// Kept rather than derived, because it cannot be derived. A `hitstop` that
+    /// has counted down to 0 tells exactly the same story for "the freeze
+    /// ended, nothing has run yet" as for "nothing has been hit in a hundred
+    /// ticks", and those two need opposite answers — four ticks behind the
+    /// clock, and one. A load that guessed would hand a rider four ticks of
+    /// platform travel in a single tick; see [`Sim::resume_at`].
+    decided_tick: u64,
     /// What the simulation is doing: running the world, or holding it still
     /// while a modal screen is up. Private, because every transition emits a
     /// [`GameEvent::ModeChanged`] and a mode set behind the event's back would
@@ -340,6 +358,10 @@ impl Sim {
             dialogues: DialogueTable::shipped(),
             rng: Rng::new(seed),
             tick: 0,
+            // The spawn helpers above placed every fire, platform and ball
+            // where tick 0 says it is, so that is the tick this world is
+            // current for before a single step.
+            decided_tick: 0,
             mode: Mode::Playing,
             screen: inventory::Screen::default(),
             conversation: None,
@@ -369,6 +391,50 @@ impl Sim {
     /// only learns the seed after the sim has been built from a map.
     pub fn reseed(&mut self, seed: u64) {
         self.rng = Rng::new(seed);
+    }
+
+    /// Ticks of impact freeze left to run. Zero for a world that is moving.
+    ///
+    /// Read by [`crate::save`], which has to carry it: four ticks of freeze
+    /// dropped from a save do not cost four ticks of animation, they leave the
+    /// reloaded run permanently four ticks ahead of the one it was saved from.
+    pub fn hitstop(&self) -> u32 {
+        self.hitstop
+    }
+
+    /// The tick this world's geometry is current for — see the field.
+    pub fn decided_tick(&self) -> u64 {
+        self.decided_tick
+    }
+
+    /// Put the clock back where a save left it — and, with it, everything that
+    /// is a pure function of the clock.
+    ///
+    /// [`Sim::new`] builds a world at tick 0: platforms at `Mover::at(0)`,
+    /// balls at `Pendulum::at(0)`, fires lit or out according to tick 0, and
+    /// the [`Geometry`] built from all three. Setting [`Sim::tick`] afterwards
+    /// left every one of them describing a run that was not happening. For a
+    /// fire or a ball that is a stale box in the geometry the next tick's
+    /// controllers probe, which the tick after overwrites; for a platform it is
+    /// not cosmetic at all, because [`mover::advance`] reads the difference
+    /// between where the platform *is* and where the tick says it should be and
+    /// hands that difference to its riders — see [`mover::place`]. So the clock
+    /// and the world it drives move together, here and nowhere else.
+    ///
+    /// Three numbers rather than one, because the clock is genuinely three
+    /// things. `tick` is where the run is; `hitstop` is how much of it is still
+    /// frozen; `decided_tick` is where the *world* is, which a freeze makes a
+    /// different number from the first and which no arithmetic on the other two
+    /// can recover — see [`Sim::decided_tick`].
+    pub(crate) fn resume_at(&mut self, tick: u64, hitstop: u32, decided_tick: u64) {
+        self.tick = tick;
+        self.hitstop = hitstop;
+        self.decided_tick = decided_tick;
+
+        crate::systems::hazard::tick_schedules(&mut self.world, decided_tick);
+        crate::systems::pendulum::advance(&mut self.world, decided_tick);
+        mover::place(&mut self.world, decided_tick);
+        body::rebuild_geometry(&mut self.geometry, &self.world);
     }
 
     /// Snapshot this run into a [`crate::save::SaveState`].
@@ -634,6 +700,12 @@ impl Sim {
             self.hitstop -= 1;
             return;
         }
+
+        // Past every early return, so the world genuinely runs from here: this
+        // is the tick its geometry will be current for once the decide phase
+        // below has placed everything. Recorded rather than worked out later —
+        // see the field.
+        self.decided_tick = self.tick;
 
         // Combat timers first, so a controller asking "am I stunned?" reads
         // this tick's answer rather than last tick's.
@@ -1264,6 +1336,107 @@ mod tests {
         // And the probes still line up with the entities they describe.
         let kinds: Vec<String> = sim.npc_probes().into_iter().map(|n| n.kind).collect();
         assert_eq!(kinds, vec!["knight"; 3]);
+    }
+
+    // --- the clock, and the world it drives -------------------------------
+
+    /// Where the platform on a map is standing, straight out of the world.
+    fn platform_x(sim: &Sim) -> f32 {
+        sim.world
+            .query::<(&Position, &crate::ecs::components::Mover)>()
+            .iter()
+            .map(|(_, (pos, _))| pos.0.x)
+            .next()
+            .expect("this map places a platform")
+    }
+
+    /// The world's clock and the run's clock are two different numbers, and
+    /// hitstop is what makes them differ: nothing is decided during a freeze, so
+    /// a moving platform stands still through it while the tick counter does
+    /// not.
+    ///
+    /// This is what a save has to reproduce, at every point of the freeze **and
+    /// on the tick after it ends** — which is the case no arithmetic on `tick`
+    /// and `hitstop` can reach, because by then `hitstop` is back to 0 and says
+    /// nothing about the four ticks the world sat out.
+    ///
+    /// Through the real `save`/`load_save` round trip rather than through
+    /// [`Sim::resume_at`] directly, so that a capture which stopped writing one
+    /// of the three numbers down fails here too. It is here rather than in
+    /// `tests/save.rs` because getting a run into a freeze needs a blow to land
+    /// and no fixture map has both a knight and a platform — `hitstop` is
+    /// reached for by hand instead, which only this module can do.
+    #[test]
+    fn a_freeze_holds_the_world_still_while_the_clock_runs_on() {
+        let map = "maps/testbed_mover.ron";
+        let reload = |sim: &Sim| {
+            Sim::load_save(&mut Assets::new(), &sim.save().expect("this run has a map"))
+                .expect("a save of it loads")
+        };
+        let mut frozen = Sim::load(&mut Assets::new(), map).expect("the mover testbed loads");
+        for _ in 0..100 {
+            frozen.step(PlayerInput::default());
+        }
+        let held = platform_x(&frozen);
+        assert_eq!(frozen.decided_tick, frozen.tick - 1, "live, so one behind");
+
+        // A blow lands. The world holds for `HITSTOP_TICKS` while the clock does
+        // not, and a save taken anywhere in there has to come back to exactly
+        // this world.
+        let world_stands_at = frozen.decided_tick;
+        frozen.hitstop = HITSTOP_TICKS;
+        for elapsed in 1..=HITSTOP_TICKS {
+            frozen.step(PlayerInput::default());
+            assert_eq!(
+                platform_x(&frozen),
+                held,
+                "{elapsed} ticks in: the platform moved during the freeze",
+            );
+            assert_eq!(frozen.decided_tick, world_stands_at);
+            assert_eq!(frozen.hitstop, HITSTOP_TICKS - elapsed);
+
+            let reloaded = reload(&frozen);
+            assert_eq!(
+                platform_x(&reloaded),
+                held,
+                "{elapsed} ticks in (hitstop {}): the platform came back somewhere else",
+                frozen.hitstop,
+            );
+            assert_eq!(reloaded.hitstop, frozen.hitstop);
+            assert_eq!(reloaded.decided_tick, frozen.decided_tick);
+        }
+
+        // The last of those ticks left the sim in the state no arithmetic can
+        // read: `hitstop` is back to 0, the world is still `HITSTOP_TICKS`
+        // behind the clock, and nothing but `decided_tick` says so. A save taken
+        // here is indistinguishable — from `tick` and `hitstop` alone — from one
+        // taken in a run that has not been hit for a minute, and the two want
+        // their platforms four ticks apart.
+        assert_eq!(frozen.hitstop, 0);
+        assert_eq!(
+            frozen.tick - frozen.decided_tick,
+            u64::from(HITSTOP_TICKS) + 1,
+        );
+        let mut reloaded = reload(&frozen);
+        assert_eq!(
+            platform_x(&reloaded),
+            held,
+            "the tick a freeze ends on: the platform came back somewhere else",
+        );
+
+        // ...and the first live tick snaps the platform across the whole freeze
+        // in one step, which is the behaviour `crate::systems::mover` documents
+        // and the reason every delta above had to be right. Both runs make the
+        // same jump, because both were standing in the same place.
+        frozen.step(PlayerInput::default());
+        reloaded.step(PlayerInput::default());
+        assert_ne!(platform_x(&frozen), held, "the world never started again");
+        assert_eq!(platform_x(&reloaded), platform_x(&frozen));
+        assert_eq!(
+            frozen.decided_tick,
+            frozen.tick - 1,
+            "caught up in one tick"
+        );
     }
 
     /// The same inputs must always produce the same trace, or tapes and

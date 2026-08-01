@@ -132,6 +132,27 @@ pub fn spawn_movers(world: &mut World, level: &LevelData) {
     }
 }
 
+/// Put every platform where `tick` says it is, carrying nothing.
+///
+/// The other half of [`advance`], for the one caller that must not carry: a
+/// [`Sim`](crate::sim::Sim) rebuilt from a save has its platforms where
+/// [`spawn_movers`] put them, at tick 0, and a clock that says otherwise. The
+/// first `advance` after that reads a delta of the platform's *entire* travel
+/// — up to the whole path, in one tick — and hands it to whatever is standing
+/// on it, which is a rider teleported most of a tile sideways on the tick after
+/// a load and permanently out of step with the run it was saved from.
+///
+/// So a load places instead of advancing. Nothing is riding anything yet at
+/// that point — the world has just been built — and the platform is where the
+/// restored tick says it is before a single body is asked to move, which is
+/// what makes [`crate::save`]'s claim that restoring the tick restores the
+/// platforms true rather than merely intended.
+pub fn place(world: &mut World, tick: u64) {
+    for (_, (pos, mover)) in world.query_mut::<(&mut Position, &Mover)>() {
+        pos.0 = mover.at(tick);
+    }
+}
+
 /// Move every platform to where this tick says it is, and carry its riders.
 ///
 /// See the module docs for where in the tick this belongs and why. In short:

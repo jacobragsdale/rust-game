@@ -13,18 +13,32 @@
 //!
 //! # What is saved
 //!
-//! A save is **the player entity in full**, plus the four things that say
-//! which run it belongs to: the map, the tick, the generator, and the quest
-//! flags.
+//! A save is **the player entity in full**, plus the things that say which run
+//! it belongs to and where in it you are: the map, the clock, the generator,
+//! and the quest flags.
 //!
 //! - **the map**, so a load knows what to rebuild;
 //! - **the quest flags**, because a quest that does not survive a save is not
 //!   a quest. They are also the sanctioned way to make the *world* remember
 //!   something across a load — see "what is deliberately not saved" below: a
 //!   boss that stays dead is `quest.boss.stage`, not a saved NPC;
-//! - **the tick**, which is more load-bearing than it looks — fires, moving
-//!   platforms and swinging hazards are pure functions of it, so restoring the
-//!   tick restores every one of them exactly, with no fields of their own;
+//! - **the clock**, which is more load-bearing than it looks, and is three
+//!   numbers rather than one:
+//!   - [`SaveState::tick`], where the run is;
+//!   - [`SaveState::hitstop`], how many ticks of impact freeze are still to
+//!     run. See below — this is the one entry on this list that used to be on
+//!     the other one;
+//!   - [`SaveState::decided_tick`], where the *world* is. Fires, moving
+//!     platforms and swinging hazards are pure functions of a tick, and this is
+//!     the tick they are functions of. It is usually `tick - 1` and it is not
+//!     always, because a freeze moves the clock without moving the world —
+//!     [`Sim::decided_tick`] argues why nothing recovers it from the other two.
+//!
+//!   All three are put back by [`Sim::resume_at`], which is a call and not an
+//!   assignment for a reason: `Sim::load` builds the whole map at tick 0, so a
+//!   load that merely set `Sim::tick` left every fire, platform and hazard
+//!   describing a run that was not happening.
+//!   [`crate::systems::mover::place`] has what that costs;
 //! - **the RNG seed *and* its stream position**. Loading a save and getting
 //!   different loot than you would have is a bug report that takes a day to
 //!   find, so [`Rng::position`] is saved beside the seed and
@@ -47,10 +61,20 @@
 //! killed something for and had not picked up yet is gone, and a knight you had
 //! nearly killed is whole.
 //!
+//! **Hitstop used to be on this list, and was wrong to be.** The argument was
+//! that the four-tick freeze after a hit exists to make an impact read as
+//! impact, and there is no impact to sell on the tick you load. That is true of
+//! the *feel* and irrelevant to the *clock*. Dropping the freeze does not cost
+//! four ticks of animation and stop there: the reloaded run starts moving four
+//! ticks before the run it was saved from would have, and thereafter every tick
+//! of it is a tick the other one will not reach for another four — forever, on
+//! a fixed timestep, drifting further out of step with every hazard cycle it
+//! now meets four ticks early. It is one `u32` and it is a fact about where the
+//! run *is*, so it is saved. `tests/save.rs`'s
+//! `a_save_taken_mid_impact_reloads_still_frozen` is what holds it down.
+//!
 //! Also not saved, each for its own reason:
 //!
-//! - **Hitstop**, the four-tick freeze after a hit. It exists to make an impact
-//!   read as impact; there is no impact to sell on the tick you load.
 //! - **The mode and the inventory screen's cursor.** A load always lands in
 //!   [`crate::sim::Mode::Playing`], with the world running.
 //! - **What was held last tick.** Nothing is held at the moment a save is
@@ -79,8 +103,16 @@
 //! one field, `#[serde(default)]`, and **no version bump**. Every save written
 //! before Q-1 still loads, with no flags set — which is exactly what a run from
 //! before quests existed had. [`SAVE_VERSION`] is for changes that alter what
-//! an existing field *means*, which no additive field does. The next field goes
-//! in the same way.
+//! an existing field *means*, which no additive field does.
+//!
+//! [`SaveState::hitstop`] and [`SaveState::decided_tick`] are the second and
+//! third, added the same way. Both default, and what they default *to* is the
+//! interesting part: a missing `hitstop` is no freeze left to run, and a missing
+//! `decided_tick` is `tick - 1`, which is what every tick of every run written
+//! by a build without these fields actually had — that build could not carry a
+//! freeze across a load at all, so it never produced a save in which the world
+//! and the clock disagreed. Three additive fields, still version 1, and
+//! `a_save_written_before_flags_existed_still_loads` covers all of them.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -191,6 +223,24 @@ pub struct SaveState {
     pub map: String,
     /// Ticks elapsed. Every cycle-driven hazard is a function of this.
     pub tick: u64,
+    /// Ticks of impact freeze left to run.
+    ///
+    /// `#[serde(default)]` and no version bump, the same recipe [`Self::flags`]
+    /// followed. A save written before this field existed loads with no freeze
+    /// left, which is what that build was claiming by not writing it.
+    #[serde(default)]
+    pub hitstop: u32,
+    /// The tick the *world* is standing at, which a freeze makes a different
+    /// number from [`Self::tick`] — see [`Sim::decided_tick`], which explains
+    /// why it cannot be worked out from the other two.
+    ///
+    /// An `Option` rather than a bare `u64`, so that the additive-field recipe
+    /// can give an older save the right answer instead of a zero. Every tick of
+    /// a run written by a build without this field had its world current for
+    /// `tick - 1`, because that build could not carry a freeze across a load at
+    /// all; `None` means exactly that, and [`restore`] fills it in.
+    #[serde(default)]
+    pub decided_tick: Option<u64>,
     pub rng: RngSave,
     pub player: PlayerSave,
     /// Quest flags, by name.
@@ -382,6 +432,8 @@ impl SaveState {
             version: SAVE_VERSION,
             map,
             tick: sim.tick,
+            hitstop: sim.hitstop(),
+            decided_tick: Some(sim.decided_tick()),
             rng: RngSave {
                 seed: sim.rng.seed(),
                 position: sim.rng.position(),
@@ -506,14 +558,28 @@ impl SaveState {
 ///
 /// The order matters. `Sim::load` produces the map's spawn state — every NPC
 /// where the map puts it — and this then overwrites exactly the player, the
-/// tick and the generator. Whatever the save does not mention keeps the value
+/// clock and the generator. Whatever the save does not mention keeps the value
 /// the map gave it, which is the whole of the "you reload at the map's spawn
 /// state" design in one sentence.
+///
+/// "The clock" is [`Sim::resume_at`] rather than an assignment to `Sim::tick`,
+/// and that is the load-bearing part of this function. `Sim::load` has just
+/// built every fire, platform and swinging hazard on the map at tick 0; putting
+/// the clock somewhere else without moving them with it leaves the world
+/// describing a run that is not happening, and a platform in that state carries
+/// its riders by its entire travel on the very next tick.
 pub fn restore(assets: &mut Assets, save: &SaveState) -> anyhow::Result<Sim> {
     save.check_version()?;
 
     let mut sim = Sim::load(assets, &save.map)?;
-    sim.tick = save.tick;
+    sim.resume_at(
+        save.tick,
+        save.hitstop,
+        // A save from before the field existed had no freeze to be out of step
+        // with, so its world was current for the tick before the one it names.
+        save.decided_tick
+            .unwrap_or_else(|| save.tick.saturating_sub(1)),
+    );
     sim.rng = Rng::resume(save.rng.seed, save.rng.position);
     for (name, value) in &save.flags {
         sim.set_flag(name, *value);
@@ -925,24 +991,89 @@ mod tests {
     /// The additive-field recipe, checked rather than described: a save file
     /// written before flags existed has no `flags` key, and must still load —
     /// with no quest started, which is the state that run was in.
+    ///
+    /// `hitstop` and `decided_tick` arrived the same way and are checked beside
+    /// it, together and one at a time, so that the recipe is held down for the
+    /// *fourth* field rather than for these three.
     #[test]
     fn a_save_written_before_flags_existed_still_loads() {
+        const ADDED: [&str; 3] = ["flags", "hitstop", "decided_tick"];
+
         let text = state().to_ron().unwrap();
-        assert!(
-            text.contains("flags"),
-            "the field is written when it is set"
+        for field in ADDED {
+            assert!(text.contains(field), "`{field}` is written out: {text}");
+        }
+
+        // The same file with those keys removed, which is what an older build
+        // wrote. Line-oriented because `to_ron` pretty-prints.
+        let without = |dropped: &[&str]| -> String {
+            text.lines()
+                .filter(|line| {
+                    let line = line.trim_start();
+                    !dropped
+                        .iter()
+                        .any(|key| line.starts_with(&format!("{key}:")))
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let mut older =
+            SaveState::from_ron("test", &without(&ADDED)).expect("an older save still loads");
+        assert!(older.flags.is_empty());
+        assert_eq!(
+            older.hitstop, 0,
+            "no freeze left to run, which is what a save written before the \
+             field existed was claiming by its silence",
+        );
+        assert_eq!(older.decided_tick, None);
+        assert_eq!(older.version, SAVE_VERSION, "and needed no version bump");
+
+        // ...and a missing `decided_tick` is filled in as `tick - 1` on the way
+        // into a sim, which is where every tick of such a run had its world.
+        older.tick = 137;
+        assert_eq!(
+            Sim::load_save(&mut Assets::new(), &older)
+                .expect("a save with no decided tick loads")
+                .decided_tick(),
+            136,
         );
 
-        // The same file with the key removed, which is what an older build
-        // wrote. Line-oriented because `to_ron` pretty-prints.
-        let older: String = text
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("flags:"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let loaded = SaveState::from_ron("test", &older).expect("an older save still loads");
-        assert!(loaded.flags.is_empty());
-        assert_eq!(loaded.version, SAVE_VERSION, "and needed no version bump");
+        // ...and each defaults on its own, not only as a set.
+        for dropped in ADDED {
+            SaveState::from_ron("test", &without(&[dropped]))
+                .unwrap_or_else(|e| panic!("a save with no `{dropped}` key still loads: {e}"));
+        }
+    }
+
+    /// The freeze after a hit is state about *where the run is*, not decoration
+    /// on the tick it happened — so it is carried, and it comes back on the sim
+    /// rather than only in the file. The tick the *world* stands at is carried
+    /// beside it, because a freeze is exactly what makes that a different
+    /// number.
+    ///
+    /// `tests/save.rs` has the half that matters: what a dropped freeze costs is
+    /// not four ticks of animation but a reloaded run four ticks ahead of the
+    /// one it was saved from for the rest of its life.
+    #[test]
+    fn the_impact_freeze_survives_a_save() {
+        let mut sim = sim();
+        assert_eq!(sim.save().unwrap().hitstop, 0, "a moving world has none");
+
+        // Set by hand, because `maps/testbed.ron` places nothing to hit — which
+        // is exactly why this field went unsaved for a milestone without any
+        // test noticing. The clock reads 90 while the world stands at 86: four
+        // ticks of freeze, one of them already spent.
+        sim.resume_at(90, 3, 86);
+        let state = sim.save().unwrap();
+        assert_eq!(state.hitstop, 3);
+        assert_eq!(state.tick, 90);
+        assert_eq!(state.decided_tick, Some(86));
+
+        let loaded = Sim::load_save(&mut Assets::new(), &state).unwrap();
+        assert_eq!(loaded.hitstop(), 3, "and it came back on the sim");
+        assert_eq!(loaded.tick, 90);
+        assert_eq!(loaded.decided_tick(), 86, "world and clock still apart");
     }
 
     #[test]

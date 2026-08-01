@@ -9,30 +9,62 @@
 //! is lossy — and a forgotten timer shows up as a trace that drifts two ticks
 //! later, naming the tick it drifted on.
 //!
-//! It runs on `maps/testbed.ron`, which places no entities. That is not
-//! incidental: a save deliberately does not carry NPCs, projectiles or items
-//! lying on the floor (see `src/save.rs` for why), so an exact comparison is
-//! only meaningful where there are none of them to lose. Each save point
-//! asserts that precondition rather than assuming it, and
+//! It runs on **maps that place no NPCs**, and that restriction is a
+//! precondition rather than a preference: a save deliberately does not carry
+//! NPCs, projectiles or items lying on the floor (see `src/save.rs` for why), so
+//! an exact comparison is only *possible* where there are none of them to lose.
+//! Every case asserts that rather than assuming it, and
 //! `the_world_comes_back_at_the_maps_spawn_state` covers the other side: on a
 //! map that *does* place a knight, the knight is deliberately back at its post.
+//!
+//! What it must **not** be is one map. For a whole milestone it ran only on
+//! `maps/testbed.ron`, whose entity list is empty — no platform, no fire, no
+//! swinging hazard, no knight — and the consequence was not that the test was
+//! weak but that it was *blind*. Nothing on that map moves independently of the
+//! player, so a load that rebuilt every tick-driven thing at tick 0 compared
+//! equal; and nothing on it can land a blow, so `Sim::hitstop` was provably 0 at
+//! all twelve save points and a save that dropped it compared equal too. Both
+//! were real desyncs and neither could be seen from there. So the comparison is
+//! a table now, one row per kind of thing a map can place that has a life of its
+//! own, and `the_maps_these_are_checked_against_place_what_they_are_for` is the
+//! guard that keeps the table honest.
 
 use std::path::PathBuf;
 
 use supergame::assets::{Assets, Slot};
-use supergame::ecs::components::{Avatar, Equipment, Health, Inventory, Mana};
+use supergame::ecs::components::{
+    Avatar, Equipment, Fire, Health, Inventory, Mana, Mover, Pendulum, Position,
+};
 use supergame::save::{FileStore, SaveStore};
 use supergame::sim::tape::Tape;
 use supergame::sim::trace::Trace;
-use supergame::sim::Sim;
-use supergame::systems::input::PlayerInput;
+use supergame::sim::{GameEvent, Probe, Sim};
+use supergame::systems::hazard;
+use supergame::systems::input::{Action, PlayerInput};
 
 /// No entities, and geometry a tape can move around in without dying: the
 /// floor under the spawn runs from x=0 to x=256 and the tape below stays on it.
 const MAP: &str = "maps/testbed.ron";
 
+/// A ferry over a spiked pit. The player spends two hundred ticks standing on
+/// something that is somewhere new every tick, which is the case a load that
+/// rebuilt the platform at tick 0 destroys.
+const MOVER_MAP: &str = "maps/testbed_mover.ron";
+
+/// Two fires on opposite phases: one crossed while it is out, one stood in
+/// until it lights.
+const FIRE_MAP: &str = "maps/testbed_fire.ron";
+
+/// A ball on a chain: ducked under once, then walked into.
+const SWING_MAP: &str = "maps/testbed_swing.ron";
+
 /// A knight on a ledge, for the half of the design that is about *not* saving.
 const KNIGHT_MAP: &str = "maps/testbed_knight.ron";
+
+/// A knight within reach of a walk and a swing, for the half of the design that
+/// is about impact freeze — which needs a blow to land, and so needs something
+/// to land it on.
+const ARENA_MAP: &str = "maps/testbed_arena.ron";
 
 /// Everything a save has to survive, in one run: running, a jump, a landing, an
 /// air swing, a ground combo, a slide, a cast, and enough idling that the
@@ -80,6 +112,98 @@ const CAST_TICK: usize = 202;
 /// still. Every one of them is before the cast, so no save point has a
 /// projectile in the air — which the test asserts rather than assumes.
 const SAVE_POINTS: &[usize] = &[1, 12, 33, 40, 52, 66, 81, 96, 120, 135, 150, 175];
+
+/// The crossing `tapes/platform_ride.tape` makes, without its assertions: walk
+/// to the lip, wait for the ferry to dock, board it, ride it across with no
+/// input at all, and step off onto the far ledge.
+///
+/// The two hundred ticks of `wait` are the whole point. Through all of them the
+/// only thing moving the player is the platform under their feet, so their
+/// position is a running total of the platform's displacement — and a load that
+/// rebuilt the platform at `Mover::at(0)` hands the next tick a delta of its
+/// entire travel and carries the player by it.
+const RIDE_TAPE: &str = "
+    wait 5
+    right 20        # out to the lip of the near ledge
+    wait 30         # ...and wait there for the ferry, which docks on tick 60
+    right 26        # aboard, while it is docked
+    wait 204        # the ride: no input at all
+    right 60        # off onto the far ledge
+";
+
+/// Save points across the ride: one before boarding, one the tick after, five
+/// spread through the crossing, and one after stepping off.
+const RIDE_POINTS: &[usize] = &[40, 82, 110, 150, 190, 230, 270, 320];
+
+/// `tapes/fire_timing.tape` without its assertions: past fire A while it is
+/// out, on into fire B's cell, and stand there until B lights.
+///
+/// It ends in a death and a respawn on purpose. A fire is the one piece of
+/// tick-driven geometry whose state is a *presence* rather than a position, and
+/// dying to it is the only way that presence is ever observable.
+const FIRE_TAPE: &str = "
+    wait 5
+    right 100       # through A's cell during the gap that opens on tick 60
+    right 170       # on into B's cell, which is out when they arrive
+    wait 40         # ...until it lights
+    wait 40         # the death freeze, and the respawn
+";
+
+const FIRE_POINTS: &[usize] = &[20, 70, 100, 160, 230, 290];
+
+/// `tapes/swing_dodge.tape` without its assertions: wait out one pass of the
+/// ball, run under it at the end of its arc, then walk back into the middle of
+/// the room and stand where the bottom of the swing is.
+const SWING_TAPE: &str = "
+    wait 95         # let one pass go by, so the run starts on a known tick
+    right 180       # under the ball while it is out at the left of its arc
+    left 84         # back into the middle of the room, and stop
+    wait 20         # ...where the bottom of the swing is
+    wait 40         # the death freeze, and the respawn
+";
+
+const SWING_POINTS: &[usize] = &[40, 120, 200, 260, 330, 380];
+
+/// One run to save part way through: a map, the tape to play on it, and the
+/// ticks to split at.
+///
+/// A table rather than a single map, because what this comparison can catch is
+/// decided entirely by what the map places — see the module docs.
+struct Case {
+    /// The map. It must place no NPCs; every case asserts that.
+    map: &'static str,
+    tape: &'static str,
+    save_points: &'static [usize],
+    /// What this row is here to hold down, named in the failure message.
+    about: &'static str,
+}
+
+const CASES: &[Case] = &[
+    Case {
+        map: MAP,
+        tape: TAPE,
+        save_points: SAVE_POINTS,
+        about: "the player entity in full — every timer, pool and frame of it",
+    },
+    Case {
+        map: MOVER_MAP,
+        tape: RIDE_TAPE,
+        save_points: RIDE_POINTS,
+        about: "a moving platform, with the player standing on it",
+    },
+    Case {
+        map: FIRE_MAP,
+        tape: FIRE_TAPE,
+        save_points: FIRE_POINTS,
+        about: "two fires on opposite phases",
+    },
+    Case {
+        map: SWING_MAP,
+        tape: SWING_TAPE,
+        save_points: SWING_POINTS,
+        about: "a swinging hazard mid-arc",
+    },
+];
 
 fn assets() -> Assets {
     Assets::new()
@@ -174,58 +298,155 @@ fn outfit_the_player(sim: &mut Sim) {
 
 // ---------------------------------------------------------------------------
 
-/// The test the ticket asks for, at a dozen different save points.
+/// The test the ticket asks for, at dozens of save points across four maps.
 ///
 /// A save that forgets the jump buffer, the coyote timer, the animation frame,
-/// the mana fraction or which way the player was facing shows up here as two
-/// traces that diverge, at the tick it started to matter.
+/// the mana fraction, which way the player was facing or how many ticks of
+/// impact freeze are left to run — or that rebuilds a moving platform at the
+/// wrong tick — shows up here as two traces that diverge, at the tick it
+/// started to matter.
 #[test]
 fn a_reloaded_run_steps_identically_to_one_that_was_never_saved() {
-    let inputs = tape().inputs();
     let store = FileStore::new(scratch("save-replay"));
 
-    for &split in SAVE_POINTS {
-        assert!(split < inputs.len(), "save point {split} is past the tape");
+    for case in CASES {
+        let inputs = Tape::parse(case.tape)
+            .unwrap_or_else(|e| panic!("the tape for `{}` parses: {e:#}", case.map))
+            .inputs();
 
-        let mut original = sim(MAP);
-        outfit_the_player(&mut original);
-        play(&mut original, &inputs[..split]);
+        for &split in case.save_points {
+            let at = format!("`{}` ({}), saved at tick {split}", case.map, case.about);
+            assert!(split < inputs.len(), "{at}: past the end of the tape");
 
-        // The things a save deliberately drops must not be present, or an
-        // exact comparison would be measuring the design rather than the code.
-        let probe = original.probe();
-        assert_eq!(
-            probe.projectiles, 0,
-            "a bolt was in the air at tick {split}"
-        );
-        assert_eq!(probe.pickups, 0, "an item was on the floor at tick {split}");
+            let mut original = sim(case.map);
 
-        store.write("slot1", &original.save().unwrap()).unwrap();
-        let mut reloaded = Sim::load_save(&mut assets(), &store.read("slot1").unwrap())
-            .unwrap_or_else(|e| panic!("the save from tick {split} should load: {e:#}"));
+            // The exact comparison below is only *possible* where the save
+            // loses nothing: NPCs are deliberately not carried, so a map that
+            // places one could never match tick for tick however correct the
+            // save was. Asserted rather than assumed, because the whole reason
+            // this is a table is that nobody was checking what the one map it
+            // used to run on actually contained.
+            assert!(
+                original.npc_probes().is_empty(),
+                "{at}: this map places an NPC, and a save does not carry one — \
+                 an exact trace comparison on it could never pass",
+            );
 
-        // Before a single tick is stepped: the load landed on the same frame.
-        assert_eq!(
-            reloaded.probe(),
-            original.probe(),
-            "the sim loaded from a save at tick {split} did not start where it was saved",
-        );
-        assert_eq!(reloaded.item_probes(), original.item_probes());
-        assert_eq!(
-            reloaded.flags(),
-            original.flags(),
-            "the quest flags did not come back from the save at tick {split}",
-        );
+            outfit_the_player(&mut original);
+            play(&mut original, &inputs[..split]);
 
-        // ...and stays there for the whole rest of the run.
-        let expected = play(&mut original, &inputs[split..]);
-        let actual = play(&mut reloaded, &inputs[split..]);
-        assert_eq!(
-            first_difference(&expected, &actual),
-            None,
-            "saving at tick {split} changed the run that followed",
+            // The other two things a save deliberately drops must not be
+            // present either, or the comparison would be measuring the design
+            // rather than the code.
+            let probe = original.probe();
+            assert_eq!(probe.projectiles, 0, "{at}: a bolt was in the air");
+            assert_eq!(probe.pickups, 0, "{at}: an item was on the floor");
+
+            store.write("slot1", &original.save().unwrap()).unwrap();
+            let mut reloaded = Sim::load_save(&mut assets(), &store.read("slot1").unwrap())
+                .unwrap_or_else(|e| panic!("{at}: should load: {e:#}"));
+
+            // Before a single tick is stepped: the load landed on the same
+            // frame.
+            assert_eq!(
+                reloaded.probe(),
+                original.probe(),
+                "{at}: the load did not start where the save left off",
+            );
+            assert_eq!(reloaded.item_probes(), original.item_probes());
+            assert_eq!(
+                reloaded.flags(),
+                original.flags(),
+                "{at}: the quest flags did not come back",
+            );
+
+            // ...and stays there for the whole rest of the run.
+            let expected = play(&mut original, &inputs[split..]);
+            let actual = play(&mut reloaded, &inputs[split..]);
+            assert_eq!(
+                first_difference(&expected, &actual),
+                None,
+                "{at}: the save changed the run that followed",
+            );
+        }
+    }
+}
+
+/// The guard on the table above: each row has to place the thing it claims to,
+/// and between them they have to cover every kind of geometry that is a
+/// function of `Sim::tick`.
+///
+/// This is the test that would have caught the blind spot rather than the two
+/// bugs hiding in it. `maps/testbed.ron` places none of the three, so for a
+/// whole milestone the replay comparison proved that the *player entity* round
+/// trips and nothing else at all.
+#[test]
+fn the_maps_these_are_checked_against_place_what_they_are_for() {
+    // (platforms, fires, swinging hazards) a map places.
+    let placed = |map: &str| {
+        let sim = sim(map);
+        (
+            sim.level.movers.len(),
+            sim.level.fires.len(),
+            sim.level.pendulums.len(),
+        )
+    };
+
+    assert_eq!(
+        placed(MAP),
+        (0, 0, 0),
+        "`{MAP}` places nothing that moves on its own — which is exactly why it \
+         cannot be the only map this is checked against",
+    );
+    assert!(placed(MOVER_MAP).0 > 0, "`{MOVER_MAP}` places no platform");
+    assert!(placed(FIRE_MAP).1 > 0, "`{FIRE_MAP}` places no fire");
+    assert!(
+        placed(SWING_MAP).2 > 0,
+        "`{SWING_MAP}` places no swinging hazard"
+    );
+
+    // ...and every row is a map with no NPCs on it, which is the precondition
+    // the replay comparison asserts at every save point.
+    for case in CASES {
+        assert!(
+            sim(case.map).npc_probes().is_empty(),
+            "`{}` places an NPC and cannot be replayed exactly",
+            case.map,
         );
     }
+}
+
+/// ...and the platform row has to be an actual *ride*, not a walk past a
+/// platform that happens to be on the map. A tape that never boarded would
+/// compare two runs neither of which touched the thing under test.
+///
+/// What is counted is the signature of rider carry: a tick on which the player
+/// moved while standing still — no velocity of their own, feet on the ground,
+/// and a different `x` from the tick before.
+#[test]
+fn the_platform_case_is_actually_a_ride() {
+    let mut sim = sim(MOVER_MAP);
+    let trace = play(&mut sim, &Tape::parse(RIDE_TAPE).unwrap().inputs());
+    let frames = trace.frames();
+
+    let carried = frames
+        .windows(2)
+        .filter(|w| w[1].probe.grounded && w[1].probe.vx == 0.0 && w[1].probe.x != w[0].probe.x)
+        .count();
+    assert!(
+        carried > 150,
+        "the player was carried on only {carried} ticks, so this tape is not a ride",
+    );
+    assert!(
+        frames.iter().all(|f| !f.probe.dead),
+        "the pit is spiked, so a run that fell in proves the opposite of a ride",
+    );
+    let airborne = frames.iter().filter(|f| !f.probe.grounded).count();
+    assert!(
+        airborne <= 2,
+        "the crossing is walked onto and off rather than jumped, but the player \
+         was off the ground for {airborne} ticks",
+    );
 }
 
 /// The comparison above is only worth something if the run it compares actually
@@ -407,6 +628,214 @@ fn a_bolt_in_the_air_is_not_saved() {
         reloaded.probe().cast_cooldown,
         original.probe().cast_cooldown,
     );
+}
+
+/// Everything on a map that is somewhere — or something — different every
+/// tick, in spawn order: where each platform and each ball is, whether each
+/// fire is lit, and the collision world all three actually reach the game
+/// through.
+///
+/// As text, because `SolidRect` is not `PartialEq` and because a failure here
+/// wants to *say* what moved.
+fn tick_driven_world(sim: &Sim) -> Vec<String> {
+    let mut world: Vec<(u32, String)> = Vec::new();
+    for (entity, (pos, _)) in sim.world.query::<(&Position, &Mover)>().iter() {
+        world.push((entity.id(), format!("platform at {:?}", pos.0)));
+    }
+    for (entity, (pos, _)) in sim.world.query::<(&Position, &Pendulum)>().iter() {
+        world.push((entity.id(), format!("ball at {:?}", pos.0)));
+    }
+    for (entity, (pos, _)) in sim.world.query::<(&Position, &Fire)>().iter() {
+        world.push((
+            entity.id(),
+            format!(
+                "fire at {:?}, lit {}",
+                pos.0,
+                hazard::is_lit(&sim.world, entity)
+            ),
+        ));
+    }
+    world.sort();
+
+    let mut lines: Vec<String> = world.into_iter().map(|(_, line)| line).collect();
+    // The boxes the next tick's controllers will probe, which `Sim::new` builds
+    // from wherever it just put all three.
+    lines.push(format!("solids {:?}", sim.geometry.rects()));
+    lines.push(format!("hazards {:?}", sim.geometry.hazards()));
+    lines
+}
+
+/// The claim `src/save.rs` makes for storing four numbers instead of a world:
+/// fires, moving platforms and swinging hazards are pure functions of the tick,
+/// so restoring the tick restores all three with no fields of their own.
+///
+/// It was not true. `Sim::load` rebuilds the map at tick 0 and the tick was put
+/// back *afterwards*, so all three came back describing a run that was not
+/// happening — and for a platform that is not cosmetic, because the next
+/// `mover::advance` reads the difference between where the platform is and
+/// where the tick says it should be, and hands that difference to whatever is
+/// standing on it.
+///
+/// Checked here directly as well as through the replay comparison, because two
+/// of the three are only *indirectly* observable: a load leaves a stale fire and
+/// a stale ball in the geometry the next tick's controllers probe, and the tick
+/// after that overwrites both. This is what fails the moment any of the three
+/// stops being put back.
+#[test]
+fn the_tick_driven_world_comes_back_where_the_tick_says() {
+    // Odd numbers, so none of them lands on a boundary of any of the cycles.
+    for (map, ticks) in [(MOVER_MAP, 137), (FIRE_MAP, 91), (SWING_MAP, 211)] {
+        let mut original = sim(map);
+        assert!(
+            tick_driven_world(&original).len() > 2,
+            "`{map}` places nothing that the tick drives",
+        );
+        for _ in 0..ticks {
+            original.step(PlayerInput::default());
+        }
+
+        let reloaded = Sim::load_save(&mut assets(), &original.save().unwrap())
+            .unwrap_or_else(|e| panic!("the save from `{map}` should load: {e:#}"));
+        assert_eq!(
+            tick_driven_world(&reloaded),
+            tick_driven_world(&original),
+            "`{map}`: reloaded at tick {ticks}, the world the tick drives came \
+             back somewhere else",
+        );
+    }
+}
+
+/// Impact freeze has to survive a save, which needs a map with something to hit
+/// — the reason this is not on `maps/testbed.ron` with everything else.
+///
+/// A hit stops the world for four ticks. Dropping those from the save does not
+/// lose four ticks of animation and stop there: the reloaded run resumes early,
+/// and from then on every tick of it is a tick the never-saved run will not
+/// reach for another four, forever.
+///
+/// The comparison is in two halves, because of what a save deliberately does
+/// *not* carry. The first is against the never-saved run itself and is limited
+/// to the freeze, which is the whole of what a lost `hitstop` gets wrong and the
+/// only stretch in which the knight — back at its post after the load — cannot
+/// make the two runs legitimately differ. The second is a full-trace diff, and
+/// it is exact *including* the knight: a frozen world has not moved from the
+/// spawn state a load put it in, so during the freeze, and only during the
+/// freeze, saving again and reloading has to be a whole-trace no-op.
+#[test]
+fn a_save_taken_mid_impact_reloads_still_frozen() {
+    let mut original = sim(ARENA_MAP);
+    assert_eq!(
+        original.npc_probes().len(),
+        1,
+        "the arena places one knight"
+    );
+
+    // Walk into the knight, swinging. Which tick connects falls out of reach,
+    // chase speed and cooldown at once, so it is found rather than counted.
+    let mut connected = false;
+    for tick in 0..600 {
+        let input = if tick % 15 == 0 {
+            PlayerInput::from_actions(&[Action::Right, Action::Attack])
+        } else {
+            PlayerInput::holding(&[Action::Right])
+        };
+        original.step(input);
+        if original
+            .events()
+            .iter()
+            .any(|e| matches!(e, GameEvent::Damaged { .. }))
+        {
+            connected = true;
+            break;
+        }
+    }
+    assert!(
+        connected,
+        "never landed a blow, so there is no freeze to save"
+    );
+
+    // The save is taken on the tick after the blow, which is the first frozen
+    // one — exactly the case the module docs used to argue was not worth
+    // carrying.
+    let state = original.save().unwrap();
+    assert!(
+        state.to_ron().unwrap().contains("hitstop"),
+        "the save says nothing about the freeze it was taken in the middle of",
+    );
+
+    let mut reloaded = Sim::load_save(&mut assets(), &state).unwrap();
+    assert_eq!(reloaded.probe(), original.probe(), "the load landed wrong");
+
+    // Frozen means frozen: nothing about the player changes but the clock, and
+    // the reloaded run has to be just as still for just as long. One tick is
+    // enough to catch a run that resumed early — the swing advances, the
+    // i-frames count down and the animation moves on — and the freeze is walked
+    // out in full so that "just as long" is checked too.
+    let mut frozen = 0u32;
+    loop {
+        let before = original.probe();
+        original.step(PlayerInput::default());
+        if original.probe() != frame_after(&before) {
+            // The never-saved run has just taken a live tick, so the freeze is
+            // over. From here the knight — back at its post in the reloaded run
+            // — is free to make the two differ for reasons that are the design
+            // rather than a bug.
+            break;
+        }
+
+        let before = reloaded.probe();
+        reloaded.step(PlayerInput::default());
+        assert_eq!(
+            reloaded.probe(),
+            frame_after(&before),
+            "{frozen} ticks after the save, the reloaded run resumed early",
+        );
+        assert_eq!(
+            reloaded.probe(),
+            original.probe(),
+            "{frozen} ticks after the save, the reloaded run was somewhere else",
+        );
+        frozen += 1;
+        assert!(frozen < 60, "the world never started again");
+    }
+    assert!(
+        frozen >= 2,
+        "only {frozen} frozen ticks, so this proved almost nothing",
+    );
+
+    // ...and it starts again on the same tick, rather than staying frozen for
+    // longer than the run it came from.
+    let before = reloaded.probe();
+    reloaded.step(PlayerInput::default());
+    assert_ne!(
+        reloaded.probe(),
+        frame_after(&before),
+        "the reloaded run was still frozen after the never-saved one had resumed",
+    );
+
+    // The full-trace half. `a` is the loaded run one frozen tick in; `b` is `a`
+    // saved and loaded again. Because `a` has not taken a live tick, its world
+    // is still the spawn state a load produces, so the two are the same run in
+    // every respect a trace records — knight, events and all.
+    let mut a = Sim::load_save(&mut assets(), &state).unwrap();
+    a.step(PlayerInput::default());
+    let mut b = Sim::load_save(&mut assets(), &a.save().unwrap()).unwrap();
+
+    let rest = vec![PlayerInput::default(); 150];
+    assert_eq!(
+        first_difference(&play(&mut a, &rest), &play(&mut b, &rest)),
+        None,
+        "saving again during the freeze changed the run that followed",
+    );
+}
+
+/// The same probe one tick later with nothing having happened: only the clock
+/// moved. Used to tell a frozen tick from a live one without reaching into
+/// `Sim` for a counter that is nobody else's business.
+fn frame_after(probe: &Probe) -> Probe {
+    let mut next = probe.clone();
+    next.tick += 1;
+    next
 }
 
 /// Where two traces first differ, as the tick and the fields that moved. A raw
