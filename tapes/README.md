@@ -302,6 +302,7 @@ do not move what is already there.
 | `testbed_arena.ron` | fighting: a small walled room with a knight and nowhere to run |
 | `testbed_fire.ron` | fire: two alternating fires on a flat corridor, one to cross while it is out and one to stand in until it lights |
 | `testbed_mover.ron` | moving platforms: two ledges with a spiked pit between them and one platform ferrying across |
+| `testbed_swing.ron` | swinging hazards: one room with a spiked ball on a chain across the middle of it |
 
 Items have no fixture map of their own, and deliberately so: the only source of
 items in the game is a corpse, so `loot.tape` and `inventory_use.tape` both run
@@ -322,6 +323,13 @@ line. The platform's path is level with both ledges, so the crossing is walked
 onto and off rather than jumped between — which is what lets the tape assert
 `expect no jumped` and `expect landed == 1` and thereby claim that contact
 never flickered off, not even for a tick, while the ground was moving.
+
+`testbed_swing.ron` is the one fixture whose tape is genuinely *timed*. The
+ball is only at body height near the bottom of its arc, so the room has a
+window rather than a safe route: `swing_dodge.tape` starts its run on the tick
+that leaves the widest clearance (66px), and starting twenty-two ticks later or
+sixty-five earlier is a death. That number came out of a sweep, not out of
+guessing — see "Balance by probing" in the dev skill.
 
 `castle_spawn.tape` is the exception: it runs on the real map but asserts only
 that the player spawns on solid ground and is not standing in a hazard, so

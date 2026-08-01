@@ -275,8 +275,8 @@ survive save and load.
 
 **Size:** medium. **Depends on:** M1. **Parallelizable** — independent of the
 combat/dialogue chain, so it can slot in wherever there is appetite.
-**In progress:** entity colliders, the broadphase, fire and moving platforms
-have landed; swinging hazards (L-4) remain.
+**Done:** entity colliders, the broadphase, fire, moving platforms and swinging
+hazards have all landed.
 
 Fire (a hazard that toggles on a cycle), moving platforms, and swinging
 hazards. All three need the same thing: **geometry that changes every tick**.
@@ -294,8 +294,21 @@ entity-owned colliders before rider carry was attempted.
 **Exit criteria:** ✅ `tapes/platform_ride.tape` rides a platform across a
 spiked gap and arrives; the property sweeps in `tests/physics_diagnostics.rs`
 pass with dynamic geometry in the mix, and six new ones cover carry itself.
+✅ `tapes/swing_dodge.tape` times a run under a swinging ball, survives, then
+stands in its arc and dies to it.
 
-Notes from rider carry, for L-4 and anything else that owns a collider:
+Swinging hazards (L-4) closed the milestone and cost almost nothing, which is
+the point: the ball is a `Position`, a `Hazard` collider and a closed form.
+Nothing in the physics, the geometry rebuild or the death check changed to
+accept it. `Pendulum::at` is `anchor + length * (sin theta, cos theta)` with
+`theta(t) = amplitude * cos(2*pi * (t + phase) / period)`, and the tick reaches
+the cosine only as an integer remainder — which is what makes `at(t)` and
+`at(t + period)` bit-identical rather than merely close. An integrated pendulum
+would have been worse than an integrated platform: explicit Euler gains energy
+every cycle, so the authored amplitude would not be the amplitude the ball
+reached, and it would drift wider the longer a trace ran.
+
+Notes from rider carry, for anything else that owns a collider:
 
 - **A mover's position is a closed form of `Sim::tick`**, like `Schedule`, not
   an integration. A counter drifts, and drifts differently across the ticks

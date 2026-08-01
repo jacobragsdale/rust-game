@@ -19,7 +19,8 @@ use ggez::{Context, GameResult};
 use crate::assets::TilesetDef;
 use crate::debug::DebugOverlay;
 use crate::ecs::components::{
-    AnimationState, Avatar, Collider, Fire, Health, Mover, Patrol, Pickup, Position, Size, Sprite,
+    AnimationState, Avatar, Collider, Fire, Health, Mover, Patrol, Pendulum, Pickup, Position,
+    Size, Sprite,
 };
 use crate::scenes::{inventory, pause::PauseScene, Resources, Scene, Transition};
 use crate::sim::{Mode, Sim};
@@ -294,12 +295,85 @@ impl AdventureScene {
         Ok(())
     }
 
+    /// Draw the swinging hazards: a chain to the anchor and a spiked ball on
+    /// the end of it.
+    ///
+    /// Placeholder art like the spikes, the fires and the platforms, and drawn
+    /// off the collider the physics actually uses for the same reason
+    /// [`AdventureScene::draw_movers`] is. The ball's radius is *derived* from
+    /// its collider — the lethal box is the square inscribed in the circle, so
+    /// the circle is the box's diagonal — rather than stored beside it. There
+    /// is therefore no second number that could be edited out of step with the
+    /// first, which is the failure mode that makes a hazard look like it kills
+    /// from a pixel away.
+    fn draw_swings(&self, ctx: &mut Context, canvas: &mut Canvas) -> GameResult {
+        let offset = self.camera.offset();
+        let mut any = false;
+        let mut mb = MeshBuilder::new();
+
+        for (_, (pos, collider, pendulum)) in self
+            .sim
+            .world
+            .query::<(&Position, &Collider, &Pendulum)>()
+            .iter()
+        {
+            let anchor = pendulum.anchor - offset;
+            let centre = pos.0 - offset;
+            let radius = collider.size.x * std::f32::consts::SQRT_2 / 2.0;
+
+            // The chain, and a bracket where it is bolted to the world.
+            mb.line(&[anchor, centre], 2.0, Color::from_rgb(120, 116, 128))?;
+            mb.rectangle(
+                graphics::DrawMode::fill(),
+                graphics::Rect::new(anchor.x - 4.0, anchor.y - 4.0, 8.0, 8.0),
+                Color::from_rgb(80, 76, 88),
+            )?;
+
+            // Spikes first, so the ball is drawn over their roots and they
+            // read as sticking out of it rather than lying across it.
+            const SPIKES: usize = 8;
+            for i in 0..SPIKES {
+                let angle = std::f32::consts::TAU * i as f32 / SPIKES as f32;
+                let out = Vec2::new(angle.cos(), angle.sin());
+                let across = Vec2::new(-out.y, out.x) * radius * 0.4;
+                mb.polygon(
+                    graphics::DrawMode::fill(),
+                    &[
+                        centre + out * radius * 1.55,
+                        centre + across,
+                        centre - across,
+                    ],
+                    Color::from_rgb(190, 186, 200),
+                )?;
+            }
+            mb.circle(
+                graphics::DrawMode::fill(),
+                centre,
+                radius,
+                0.2,
+                Color::from_rgb(64, 60, 72),
+            )?;
+            // A highlight up and to the left, so the ball reads as a sphere
+            // and not as a hole in the level.
+            mb.circle(
+                graphics::DrawMode::fill(),
+                centre - Vec2::splat(radius * 0.3),
+                radius * 0.35,
+                0.2,
+                Color::from_rgb(120, 114, 132),
+            )?;
+            any = true;
+        }
+
+        if any {
+            let mesh = Mesh::from_data(ctx, mb.build());
+            canvas.draw(&mesh, DrawParam::default());
+        }
+        Ok(())
+    }
+
     /// Draw every sprite in the world, whatever sheet it comes from.
     ///
-    /// Entities no longer share one atlas — the player is one image of 50x37
-    /// cells, the knight is several with different cell sizes — so the sheet
-    /// is looked up per entity and each frame's placement is computed from its
-    /// own frame size.
     fn draw_sprites(&self, canvas: &mut Canvas) {
         let offset = self.camera.offset();
 
@@ -383,6 +457,7 @@ impl Scene for AdventureScene {
         canvas.draw(&self.tile_batch, DrawParam::default());
         self.draw_hazards(ctx, &mut canvas)?;
         self.draw_movers(ctx, &mut canvas)?;
+        self.draw_swings(ctx, &mut canvas)?;
         self.draw_pickups(ctx, &mut canvas)?;
         self.draw_sprites(&mut canvas);
         crate::hud::draw(&mut canvas, &self.sim, self.camera.offset());

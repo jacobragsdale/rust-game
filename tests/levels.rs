@@ -10,8 +10,10 @@ use std::path::{Path, PathBuf};
 use ggez::glam::Vec2;
 
 use supergame::assets::{Assets, StatBlock, StatTable};
+use supergame::ecs::components::Pendulum;
 use supergame::level::LevelData;
 use supergame::physics::Aabb;
+use supergame::systems::pendulum::ball_size;
 
 fn map_paths() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/maps");
@@ -161,6 +163,91 @@ fn every_moving_platform_has_a_path_clear_of_the_level() {
     assert!(
         problems.is_empty(),
         "{} bad platform path(s):\n  {}",
+        problems.len(),
+        problems.join("\n  ")
+    );
+}
+
+/// A swinging hazard whose arc is buried in the level is the same authoring
+/// mistake as a moving platform whose path is, and it is worse to play.
+///
+/// A platform inside a wall at least looks wrong. A ball inside a wall is
+/// simply *invisible* for part of its swing, and it stays lethal the whole
+/// time it is in there — so the room contains a stretch that kills you with
+/// nothing on screen to explain it. The failure reads as a physics bug, or as
+/// nothing at all, and never as a map problem.
+///
+/// The arc is walked by angle rather than by tick, so the check says something
+/// about the shape the map authored and not about how long the map said the
+/// swing takes. `Pendulum::at_angle` exists for this.
+#[test]
+fn every_swinging_hazard_has_an_arc_clear_of_the_level() {
+    /// Enough samples that nothing the size of a tile can hide between two of
+    /// them on any arc a map can author.
+    const SAMPLES: u32 = 256;
+
+    let mut assets = Assets::new();
+    let mut problems: Vec<String> = Vec::new();
+
+    for path in map_paths() {
+        let level = LevelData::load(&path, &mut assets)
+            .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+
+        for (index, spawn) in level.pendulums.iter().enumerate() {
+            let swing = Pendulum::new(
+                spawn.anchor,
+                spawn.length,
+                spawn.amplitude,
+                spawn.period,
+                spawn.phase,
+            );
+            let size = ball_size(spawn.radius);
+            // The ball's box at `sample` of the way from one extreme to the
+            // other. Angles, not ticks, so the samples are spread evenly along
+            // the arc rather than bunched at the ends where the ball dwells.
+            let ball_at = |sample: u32| {
+                let t = sample as f32 / SAMPLES as f32;
+                let at = swing.at_angle(spawn.amplitude * (2.0 * t - 1.0));
+                Aabb::new(at.x - size.x / 2.0, at.y - size.y / 2.0, size.x, size.y)
+            };
+
+            for sample in 0..=SAMPLES {
+                let ball = ball_at(sample);
+                if let Some(hit) = level.solids.iter().find(|s| ball.overlaps(s)) {
+                    problems.push(format!(
+                        "{name}: swing {index} anchored at ({:.0}, {:.0}) passes through \
+                         solid {hit:?} at ({:.0}, {:.0})",
+                        swing.anchor.x,
+                        swing.anchor.y,
+                        ball.x + size.x / 2.0,
+                        ball.y + size.y / 2.0
+                    ));
+                    break;
+                }
+            }
+
+            // ...and the ball must not sweep the spawn point. A hazard that
+            // reaches it is a death *loop*: you respawn inside the thing that
+            // killed you, and the run is over.
+            let spawn_point = level.player_spawn;
+            let body = body();
+            let occupied = Aabb::new(spawn_point.x, spawn_point.y, body.x, body.y);
+            for sample in 0..=SAMPLES {
+                if occupied.overlaps(&ball_at(sample)) {
+                    problems.push(format!(
+                        "{name}: swing {index} sweeps through the player spawn ({:.0}, {:.0})",
+                        spawn_point.x, spawn_point.y
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "{} bad swing arc(s):\n  {}",
         problems.len(),
         problems.join("\n  ")
     );

@@ -76,6 +76,31 @@ pub struct MoverSpawn {
     pub phase: u32,
 }
 
+/// A swinging hazard the map places: where the chain hangs from, how long it
+/// is, and how far and how fast it swings.
+///
+/// Apart from [`EntitySpawn`] for the reason [`FireSpawn`] and [`MoverSpawn`]
+/// are: that list is addressed by spawn index, so a ball dropped into it would
+/// renumber every NPC after it in every tape running on the map.
+#[derive(Clone, Copy, Debug)]
+pub struct PendulumSpawn {
+    /// Where the chain is fixed: the centre of the anchor cell, world pixels.
+    pub anchor: Vec2,
+    /// Chain length from the anchor to the ball's centre, in pixels.
+    pub length: f32,
+    /// Half-swing in radians. Authored in degrees; converted on load, because
+    /// nobody writes 1.0471975 into a map file on purpose.
+    pub amplitude: f32,
+    /// Ticks for one full there-and-back.
+    pub period: u32,
+    /// Offset into the cycle, so two balls can swing out of step.
+    pub phase: u32,
+    /// The ball's drawn radius in pixels. Its lethal box is derived from this
+    /// — see [`crate::systems::pendulum::ball_size`] — rather than authored
+    /// beside it, so the art and the collider cannot be given different sizes.
+    pub radius: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct LevelData {
     /// Name of the tileset definition (`assets/data/tilesets/{name}.ron`).
@@ -100,6 +125,9 @@ pub struct LevelData {
     /// Moving platforms, which are solids that are somewhere new every tick.
     /// Not in `solids` for the same reason fires are not in `hazards`.
     pub movers: Vec<MoverSpawn>,
+    /// Swinging hazards, which are hazards that are somewhere new every tick.
+    /// Not in `hazards` for the same reason fires are not.
+    pub pendulums: Vec<PendulumSpawn>,
     pub player_spawn: Vec2,
     #[allow(dead_code)]
     pub entities: Vec<EntitySpawn>,
@@ -140,6 +168,7 @@ impl LevelData {
             hazards: vec![],
             fires: vec![],
             movers: vec![],
+            pendulums: vec![],
             player_spawn: Vec2::ZERO,
             entities: vec![],
         }

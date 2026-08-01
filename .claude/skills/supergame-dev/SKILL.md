@@ -48,7 +48,7 @@ handed, and reordering it moves the game.
 
 | Tool | Use it for |
 | --- | --- |
-| `cargo test` | everything; 15 tapes and 15 golden traces replay here |
+| `cargo test` | everything; 21 tapes and 21 golden traces replay here |
 | `cargo run --bin sim -- --tape tapes/x.tape` | one tape, with an event timeline |
 | `... --trace out.jsonl` | tick-by-tick JSONL for inspection |
 | `... --map maps/x.ron --geometry` | a map's collision rects, to write assertions against |
@@ -57,9 +57,14 @@ handed, and reordering it moves the game.
 | `SUPERGAME_DEBUG=1`, or F1 in game | colliders, sprite bounds, hitboxes and a state HUD drawn over the world — this is what catches art that does not match its collider |
 
 **Authoring a map.** ASCII grids in `assets/maps/*.ron`: `#` solid, `=` one-way
-platform, `^` spikes, `P` player spawn, `K` knight, `.` empty. Tile art is
+platform, `^` spikes, `F` fire, `P` player spawn, `K` knight, `.` empty.
+Geometry that *moves* has no character and goes in the entity list instead —
+`Platform(from:, to:, …)`, `Swing(anchor:, length:, amplitude:, period:, …)`,
+and `Fire(cell:, period:, duty:, phase:)` for a fire off the house cycle —
+because a character can say where a thing is but not where it goes. Tile art is
 chosen by autotiling, so maps never contain tile indices. `tests/levels.rs`
-checks every shipped map for unreachable platforms and spawns inside geometry.
+checks every shipped map for unreachable platforms, spawns inside geometry, and
+platform paths or swing arcs that run into the level.
 
 **Writing a tape.** Keys are `left right down jump attack wait`, combinable with
 `+`. `assert` samples state (`assert hp == 5`, `assert knight.0.dead`,
@@ -83,7 +88,7 @@ bumping `JUMP_SPEED` by one left every tape assertion passing and failed 7 of 11
 traces.
 
 **Never re-record a trace you have not accounted for.** Adding a probe field
-rewrites all 15 baselines, which looks identical to a physics change. Run:
+rewrites all 21 baselines, which looks identical to a physics change. Run:
 
 ```bash
 uv run .claude/skills/supergame-dev/scripts/trace_diff.py --ignore <new fields>

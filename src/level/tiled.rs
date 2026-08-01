@@ -87,6 +87,7 @@ pub fn load(path: &Path, player: Vec2) -> anyhow::Result<LevelData> {
         hazards: Vec::new(),
         fires: Vec::new(),
         movers: Vec::new(),
+        pendulums: Vec::new(),
         player_spawn,
         entities: Vec::new(),
     })

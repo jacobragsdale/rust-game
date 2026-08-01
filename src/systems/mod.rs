@@ -8,4 +8,5 @@ pub mod input;
 pub mod inventory;
 pub mod mover;
 pub mod npc;
+pub mod pendulum;
 pub mod spell;
