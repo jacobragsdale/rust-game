@@ -1,0 +1,46 @@
+// Ysolde of Varr: taken like the player, from another world, and here long
+// enough to know how things work. The one who explains the Circle and the
+// husks from the point of view of the taken.
+Dialogue(
+    id: "ysolde",
+    start: "greet",
+    nodes: {
+        "greet": Node(
+            speaker: "Ysolde of Varr",
+            lines: [
+                "Another new one. You have the look - nobody took your mind on the way up, did they? Good.",
+            ],
+            choices: [
+                Choice(text: "Where are we?", next: "where"),
+                Choice(text: "What are the husks?", next: "husks"),
+                Choice(text: "What is the Circle?", next: "circle"),
+                Choice(text: "Farewell.", next: None),
+            ],
+        ),
+        "where": Node(
+            speaker: "Ysolde of Varr",
+            lines: [
+                "A ship the size of a kingdom, over your world. They took me from mine two winters ago. Varr has three moons; I miss them.",
+                "The ones in the pods are the ones it took whole. Your people will be among them. They sleep. They are safe - for now.",
+            ],
+            choices: [Choice(text: "I have more questions.", next: "greet")],
+        ),
+        "husks": Node(
+            speaker: "Ysolde of Varr",
+            lines: [
+                "Fighters the song got to first. It gets inside the head and scoops it out, and then it wears what is left.",
+                "Some of them are your knights. Do not hesitate on account of it. There is nobody in there to spare.",
+            ],
+            choices: [Choice(text: "I have more questions.", next: "greet")],
+        ),
+        "circle": Node(
+            speaker: "Ysolde of Varr",
+            lines: [
+                "The Vael will not send anyone into the deep until they know what you can do. So: the Proving Circle. Three champions.",
+                "Kesh is quick, Brakka is strong, Morwen is clever. They fight the way you fight - they are warriors, like us. Nobody dies. Mostly.",
+                "I lost to Morwen. Twice. Beat her for me.",
+            ],
+            choices: [Choice(text: "I have more questions.", next: "greet")],
+        ),
+    },
+)

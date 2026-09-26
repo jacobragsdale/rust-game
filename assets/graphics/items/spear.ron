@@ -1,0 +1,28 @@
+// An item icon: spear. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/spear
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (160, 90, 40),
+        'c': (120, 132, 156),
+        'd': (192, 203, 220),
+        'e': (240, 246, 255),
+    },
+    frames: [
+        [
+            "..........ae",
+            ".........ada",
+            "........ada.",
+            ".......aca..",
+            "......aba...",
+            ".....aba....",
+            "....aba.....",
+            "...aba......",
+            "..aba.......",
+            ".aba........",
+            "aba.........",
+            "aa..........",
+        ],
+    ],
+)

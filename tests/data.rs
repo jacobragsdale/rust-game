@@ -28,13 +28,12 @@ use anyhow::Context as _;
 use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::Deserialize;
 
-use supergame::assets::{Assets, AttackTable, ItemKind, ItemTable, StatTable};
-use supergame::ecs::spawn::KINDS;
-use supergame::level::LevelData;
+use supergame::assets::{Assets, AttackTable, ItemKind, ItemTable, SpellEffect, StatTable};
+use supergame::level::{LevelData, PropKind};
 
 /// The clip set the player draws from. `Sim::load` loads exactly this name
-/// alongside one set per entity kind, and the player is not in
-/// [`KINDS`] — nothing places it, so nothing may name it in a map.
+/// alongside one set per entity kind, and the player is not among
+/// `spawn::kinds` — nothing places it, so nothing may name it in a map.
 const PLAYER_SET: &str = "player";
 
 // ---------------------------------------------------------------------------
@@ -51,6 +50,14 @@ fn assets_root() -> PathBuf {
 
 /// A path in the form a failure message should print it: repo-relative, so it
 /// can be pasted into an editor and is identical on every machine.
+/// The file an image name resolves to — a PNG, or pixel art written as text —
+/// or `None` if neither exists. The same rule `Assets::decode_image` follows.
+fn image_path(name: &str) -> Option<PathBuf> {
+    let png = assets_root().join(format!("graphics/{name}.png"));
+    let text = assets_root().join(format!("graphics/{name}.ron"));
+    [png, text].into_iter().find(|path| path.exists())
+}
+
 fn rel(path: &Path) -> String {
     path.strip_prefix(manifest())
         .unwrap_or(path)
@@ -129,17 +136,14 @@ fn report(problems: &[String]) {
 // Maps -> entity kinds -> clip sets
 // ---------------------------------------------------------------------------
 
-/// A map naming a kind `spawn::entity` does not know fails at load, which is
-/// to say the first time someone opens that map — possibly long after the
-/// typo, and never in CI if no tape visits it.
-///
-/// Doors are included on purpose: `ascii.rs` turns `Door { to }` into the
-/// kind `door:<to>`, and nothing spawns those yet, so a map that places one
-/// is broken today. When doors become real, either they join `KINDS` or this
-/// check learns to route them elsewhere.
+/// A map naming a kind that cannot be placed fails at load, which is to say
+/// the first time someone opens that map — possibly long after the typo, and
+/// never in CI if no tape visits it.
 #[test]
 fn every_entity_kind_a_map_places_is_a_kind_that_spawns() {
     let mut assets = Assets::new();
+    let table = stat_table();
+    let kinds = supergame::ecs::spawn::kinds(&table);
     let mut problems: Vec<String> = Vec::new();
 
     for path in map_paths() {
@@ -147,13 +151,14 @@ fn every_entity_kind_a_map_places_is_a_kind_that_spawns() {
             LevelData::load(&path, &mut assets).unwrap_or_else(|e| panic!("{}: {e:#}", rel(&path)));
 
         for placement in &level.entities {
-            if !KINDS.contains(&placement.kind.as_str()) {
+            if !kinds.contains(&placement.kind.as_str()) {
                 problems.push(format!(
-                    "{}: places entity kind `{}`, which is not in `spawn::KINDS` \
-                     (known kinds: {}). Add an arm to `spawn::entity` or fix the map.",
+                    "{}: places entity kind `{}`, which is not a kind a map can place \
+                     (known kinds: {}). Give it a stat block with an `ai` group in \
+                     assets/data/stats.ron, or fix the map.",
                     rel(&path),
                     placement.kind,
-                    KINDS.join(", "),
+                    kinds.join(", "),
                 ));
             }
         }
@@ -171,7 +176,7 @@ fn every_kind_has_a_clip_set_that_loads() {
 
     for name in animated_kinds() {
         let path = assets_root().join(format!("data/animations/{name}.ron"));
-        if let Err(e) = assets.clip_set(name) {
+        if let Err(e) = assets.clip_set(&name) {
             problems.push(format!(
                 "`{name}` needs a clip set at {}, which does not load: {e:#}",
                 rel(&path),
@@ -185,9 +190,11 @@ fn every_kind_has_a_clip_set_that_loads() {
 /// Everything that needs art or numbers of its own: the entity kinds a map
 /// may place, plus the player, which no map places but `Sim::load` always
 /// spawns.
-fn animated_kinds() -> Vec<&'static str> {
+fn animated_kinds() -> Vec<String> {
+    let table = stat_table();
     std::iter::once(PLAYER_SET)
-        .chain(KINDS.iter().copied())
+        .chain(supergame::ecs::spawn::kinds(&table))
+        .map(str::to_string)
         .collect()
 }
 
@@ -212,7 +219,7 @@ fn every_kind_has_a_stat_block() {
     let mut problems: Vec<String> = Vec::new();
 
     for kind in animated_kinds() {
-        if !table.0.contains_key(kind) {
+        if !table.0.contains_key(&kind) {
             problems.push(format!(
                 "{}: no stat block for `{kind}`, which `spawn` will ask for",
                 rel(&path),
@@ -259,14 +266,16 @@ fn every_clip_frame_lands_on_a_sheet_that_exists() {
         for (clip_name, clip) in clips {
             let sheet = set.sheet_of(clip);
             let (fw, fh) = set.frame_size_of(clip);
-            let sheet_path = assets_root().join(format!("graphics/{sheet}.png"));
+            let sheet_path = image_path(sheet)
+                .unwrap_or_else(|| assets_root().join(format!("graphics/{sheet}.png")));
 
             let (sheet_w, sheet_h) = match sheets.get(sheet) {
                 Some(size) => *size,
                 None => {
-                    if !sheet_path.exists() {
+                    if image_path(sheet).is_none() {
                         problems.push(format!(
-                            "{}: clip `{clip_name}` names sheet `{sheet}`, but {} does not exist",
+                            "{}: clip `{clip_name}` names sheet `{sheet}`, but neither {} \
+                             nor a .ron of pixel art beside it exists",
                             rel(&set_path),
                             rel(&sheet_path),
                         ));
@@ -324,14 +333,13 @@ fn every_image_a_data_file_names_exists() {
                 .unwrap_or_else(|e| panic!("failed to read {}: {e}", rel(&path))),
         );
 
-        for field in ["sheet", "image"] {
+        for field in ["sheet", "image", "sprite"] {
             for name in quoted_after(&text, &format!("{field}:")) {
-                let image = assets_root().join(format!("graphics/{name}.png"));
-                if !image.exists() {
+                if image_path(&name).is_none() {
                     problems.push(format!(
-                        "{}: {field} `{name}`, but {} does not exist",
+                        "{}: {field} `{name}`, but neither assets/graphics/{name}.png nor \
+                         assets/graphics/{name}.ron exists",
                         rel(&path),
-                        rel(&image),
                     ));
                 }
             }
@@ -383,9 +391,11 @@ fn attack_entry_points() -> Vec<(String, String)> {
 
     for kind in animated_kinds() {
         let block = table
-            .get(kind)
+            .get(&kind)
             .unwrap_or_else(|e| panic!("{}: {e:#}", rel(&assets_root().join("data/stats.ron"))));
-        entries.push((kind.to_string(), block.attack.clone()));
+        if let Some(attack) = &block.attack {
+            entries.push((kind.clone(), attack.clone()));
+        }
         if let Some(avatar) = &block.avatar {
             entries.push((kind.to_string(), avatar.air_attack.clone()));
             entries.push((kind.to_string(), avatar.plunge_attack.clone()));
@@ -576,70 +586,41 @@ fn sorted_ids(table: &AttackTable) -> Vec<String> {
 // Content that later tickets introduce
 // ---------------------------------------------------------------------------
 
-/// C-1 writes `assets/data/spells.ron`, whose `clip` is played on the caster.
-/// Only the player casts for now; when something else does, give this the
-/// same clip-set treatment the attack check has.
-///
-/// A projectile's art is a clip on the *caster's* set too, rather than a raw
-/// sheet — same reason an attack names a clip and not a PNG — so both ends of
-/// a spell are checked here, and both fail the same way if the id is wrong: a
-/// spell that animates nothing, or a bolt that flies invisibly.
+/// A spell's `clip` is played on its caster, and its projectile is drawn out
+/// of the caster's clip set too — same reason an attack names a clip and not
+/// a PNG — so both have to exist in the set of every kind that casts it, and
+/// both fail the same way if one is missing: a cast that animates nothing, or
+/// a bolt that flies invisibly. Checked against each set *with* its `base`,
+/// which is where a borrowed look gets most of its clips.
 #[test]
 fn every_spell_clip_exists_on_its_caster() {
-    /// Deliberately minimal: serde ignores the fields it is not told about,
-    /// so cost, cooldown and the rest of the effect can change shape without
-    /// touching this.
-    #[derive(Deserialize)]
-    #[serde(rename = "Spells")]
-    struct SpellTable(HashMap<String, SpellShape>);
+    let spells = Assets::new()
+        .spells()
+        .unwrap_or_else(|e| panic!("data/spells.ron: {e:#}"));
+    let stats = stat_table();
+    let mut assets = Assets::new();
+    let mut problems: Vec<String> = Vec::new();
 
-    #[derive(Deserialize)]
-    #[serde(rename = "SpellDef")]
-    struct SpellShape {
-        clip: String,
-        effect: EffectShape,
-    }
-
-    #[derive(Deserialize)]
-    enum EffectShape {
-        Projectile { clip: String },
-    }
-
-    impl SpellShape {
-        /// Every clip this spell asks its caster's set for, and what each one
-        /// is for, so a failure says which end is broken.
-        fn clips(&self) -> Vec<(&'static str, &str)> {
-            let EffectShape::Projectile { clip } = &self.effect;
-            vec![("casts", self.clip.as_str()), ("throws", clip.as_str())]
+    for kind in animated_kinds() {
+        let Some(id) = stats.get(&kind).ok().and_then(|block| block.spell.clone()) else {
+            continue;
+        };
+        let Some(def) = spells.get(&id) else {
+            continue; // reported by `every_spell_a_kind_names_exists_in_the_table`
+        };
+        let Ok(set) = assets.clip_set(&kind) else {
+            continue; // reported by `every_kind_has_a_clip_set_that_loads`
+        };
+        let SpellEffect::Projectile { clip: thrown, .. } = &def.effect;
+        for (verb, clip) in [("casts", &def.clip), ("throws", thrown)] {
+            if set.clip(clip).is_none() {
+                problems.push(format!(
+                    "`{kind}` casts spell `{id}`, which {verb} clip `{clip}`, but \
+                     data/animations/{kind}.ron (with its base) defines no such clip",
+                ));
+            }
         }
     }
-
-    let Some(path) = optional_content("data/spells.ron") else {
-        skipping("spell checks", "data/spells.ron", "ticket C-1");
-        return;
-    };
-
-    let table: SpellTable = load_ron(&path).unwrap_or_else(|e| panic!("{e:#}"));
-    let set_path = assets_root().join(format!("data/animations/{PLAYER_SET}.ron"));
-    let set = Assets::new()
-        .clip_set(PLAYER_SET)
-        .unwrap_or_else(|e| panic!("{}: {e:#}", rel(&set_path)));
-
-    let mut spells: Vec<(&String, &SpellShape)> = table.0.iter().collect();
-    spells.sort_by_key(|(id, _)| *id);
-
-    let problems: Vec<String> = spells
-        .into_iter()
-        .flat_map(|(id, spell)| spell.clips().into_iter().map(move |named| (id, named)))
-        .filter(|(_, (_, clip))| set.clip(clip).is_none())
-        .map(|(id, (verb, clip))| {
-            format!(
-                "{}: spell `{id}` {verb} clip `{clip}`, but {} defines no such clip",
-                rel(&path),
-                rel(&set_path),
-            )
-        })
-        .collect();
 
     report(&problems);
 }
@@ -666,7 +647,7 @@ fn every_spell_a_kind_names_exists_in_the_table() {
     let problems: Vec<String> = animated_kinds()
         .into_iter()
         .filter_map(|kind| {
-            let block = stats.get(kind).ok()?;
+            let block = stats.get(&kind).ok()?;
             let spell = block.spell.clone()?;
             (!table.0.contains_key(&spell)).then(|| {
                 format!(
@@ -686,9 +667,9 @@ fn every_spell_a_kind_names_exists_in_the_table() {
 /// system — loot, dialogue effects, quest rewards — so two items answering to
 /// the same id is a bug that only shows up as the wrong thing being given.
 ///
-/// Item *sprites* are not checked: I-2 explicitly allows a `sprite` naming
-/// art that does not exist yet, drawn as a coloured quad, so that content
-/// does not have to be rewritten when the art arrives.
+/// Item *sprites* are checked too, by [`every_image_a_data_file_names_exists`]
+/// and [`every_item_has_an_icon_a_pickup_can_wear`]: every item now has art,
+/// and an icon that does not exist is a hole in the bag and on the floor.
 #[test]
 fn every_item_id_is_defined_once() {
     let Some(dir) = optional_content("data/items") else {
@@ -798,7 +779,7 @@ fn every_item_a_loot_table_names_exists() {
     let mut problems: Vec<String> = Vec::new();
 
     for kind in animated_kinds() {
-        let Ok(block) = stats.get(kind) else {
+        let Ok(block) = stats.get(&kind) else {
             continue; // reported by `every_kind_has_a_stat_block`
         };
         for drop in &block.loot {
@@ -1012,7 +993,7 @@ fn every_dialogue_graph_a_kind_names_exists() {
     let problems: Vec<String> = animated_kinds()
         .into_iter()
         .filter_map(|kind| {
-            let block = stats.get(kind).ok()?;
+            let block = stats.get(&kind).ok()?;
             let def = block.interact.as_ref()?;
             (!known.contains(&def.dialogue)).then(|| {
                 format!(
@@ -1041,10 +1022,20 @@ fn every_dialogue_graph_is_reachable_from_something() {
     };
 
     let stats = stat_table();
-    let named: BTreeSet<String> = animated_kinds()
+    let mut named: BTreeSet<String> = animated_kinds()
         .into_iter()
-        .filter_map(|kind| Some(stats.get(kind).ok()?.interact.as_ref()?.dialogue.clone()))
+        .filter_map(|kind| Some(stats.get(&kind).ok()?.interact.as_ref()?.dialogue.clone()))
         .collect();
+    // ...and every conversation a map hands out itself: a sign, a trigger,
+    // or an NPC given lines of its own.
+    for (_, level) in maps() {
+        for prop in &level.props {
+            if let PropKind::Sign { dialogue } | PropKind::Trigger { dialogue, .. } = &prop.kind {
+                named.insert(dialogue.clone());
+            }
+        }
+        named.extend(level.entities.iter().filter_map(|e| e.dialogue.clone()));
+    }
 
     let problems: Vec<String> = graph_ids(&dir)
         .into_iter()
@@ -1052,7 +1043,8 @@ fn every_dialogue_graph_is_reachable_from_something() {
         .map(|id| {
             format!(
                 "{}: dialogue graph `{id}` is defined but nothing opens it — give a \
-                 kind an `interact:` group naming it, or delete the graph",
+                 kind an `interact:` group naming it, put it on a map's `Sign`, \
+                 `Trigger` or `Npc(dialogue:)`, or delete the graph",
                 rel(&dir),
             )
         })
@@ -1163,4 +1155,334 @@ mod scanning {
     fn a_field_holding_something_other_than_a_string_is_skipped() {
         assert!(quoted_after("sheet: None", "sheet:").is_empty());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Maps -> other maps, items, dialogue, tileset art; and who writes each flag
+// ---------------------------------------------------------------------------
+
+/// Every shipped map, loaded the way the game loads it.
+fn maps() -> Vec<(PathBuf, LevelData)> {
+    let mut assets = Assets::new();
+    map_paths()
+        .into_iter()
+        .map(|path| {
+            let level = LevelData::load(&path, &mut assets)
+                .unwrap_or_else(|e| panic!("{}: {e:#}", rel(&path)));
+            (path, level)
+        })
+        .collect()
+}
+
+/// A door or an exit that leads to a map that does not load, or to an arrival
+/// point that map does not have, is a door that does nothing in front of a
+/// player — `TravelFailed` in the trace, and a dead end on screen.
+#[test]
+fn every_door_and_exit_leads_somewhere_real() {
+    let player = stat_table().get("player").unwrap().size();
+    let mut assets = Assets::new();
+    let mut problems: Vec<String> = Vec::new();
+    for (path, level) in maps() {
+        for prop in &level.props {
+            let (to, at) = match &prop.kind {
+                PropKind::Door { to, at, .. } | PropKind::Exit { to, at, .. } => (to, at),
+                _ => continue,
+            };
+            let target = assets_root().join(to);
+            match LevelData::load(&target, &mut assets) {
+                Err(e) => problems.push(format!(
+                    "{}: `{}` leads to `{to}`, which does not load: {e:#}",
+                    rel(&path),
+                    prop.name()
+                )),
+                Ok(there) => {
+                    if there.arrival(at, player).is_none() {
+                        problems.push(format!(
+                            "{}: `{}` leads to `{at}` on `{to}`, which has no Spawn or Door by \
+                             that name (it has: {})",
+                            rel(&path),
+                            prop.name(),
+                            there
+                                .spawns
+                                .iter()
+                                .map(|(id, _)| id.clone())
+                                .chain(
+                                    there
+                                        .props
+                                        .iter()
+                                        .filter(|p| matches!(p.kind, PropKind::Door { .. }))
+                                        .map(|p| p.name())
+                                )
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    report(&problems);
+}
+
+/// Every item a map puts somewhere — in a chest, on the floor, in a lock — is
+/// an item the game defines.
+#[test]
+fn every_item_a_map_names_is_defined() {
+    let items = item_table();
+    let mut problems: Vec<String> = Vec::new();
+    for (path, level) in maps() {
+        for prop in &level.props {
+            let named: Vec<&String> = match &prop.kind {
+                PropKind::Chest { items, .. } => items.iter().map(|(id, _)| id).collect(),
+                PropKind::Item { item, .. } => vec![item],
+                PropKind::Door {
+                    locked: Some(key), ..
+                } => vec![key],
+                _ => continue,
+            };
+            for id in named {
+                if items.get(id).is_none() {
+                    problems.push(format!(
+                        "{}: `{}` names item `{id}`, which no file in assets/data/items defines",
+                        rel(&path),
+                        prop.name()
+                    ));
+                }
+            }
+        }
+    }
+    report(&problems);
+}
+
+/// A door's art and every piece of decor name a prop in their map's tileset.
+/// A name the tileset does not have draws nothing at all.
+#[test]
+fn every_prop_art_a_map_names_is_in_its_tileset() {
+    let mut assets = Assets::new();
+    let mut problems: Vec<String> = Vec::new();
+    for (path, level) in maps() {
+        let Ok(tileset) = assets.tileset(&level.tileset) else {
+            continue; // the tileset check is tests/assets.rs's
+        };
+        let mut named: Vec<(String, String)> = level
+            .decor
+            .iter()
+            .map(|d| ("decor".to_string(), d.prop.clone()))
+            .collect();
+        for prop in &level.props {
+            if let PropKind::Door { art, .. } = &prop.kind {
+                named.push((
+                    prop.name(),
+                    art.clone().unwrap_or_else(|| "door".to_string()),
+                ));
+            }
+        }
+        for (what, art) in named {
+            if !tileset.props.contains_key(&art) {
+                let mut known: Vec<&String> = tileset.props.keys().collect();
+                known.sort();
+                problems.push(format!(
+                    "{}: {what} is drawn as `{art}`, which tileset `{}` has no prop called \
+                     (it has: {known:?})",
+                    rel(&path),
+                    level.tileset
+                ));
+            }
+        }
+    }
+    report(&problems);
+}
+
+/// An item's icon is the first frame of its sprite, drawn at the size of the
+/// box a pickup is collected by — so the picture on the floor is exactly the
+/// thing you have to walk over.
+#[test]
+fn every_item_has_an_icon_a_pickup_can_wear() {
+    let assets = Assets::new();
+    let items = item_table();
+    let size = supergame::ecs::spawn::PICKUP_SIZE;
+    let mut problems: Vec<String> = Vec::new();
+    for id in items.ids() {
+        let def = items.get(id).unwrap();
+        match assets.decode_image(&def.sprite, None) {
+            Err(e) => problems.push(format!(
+                "item `{id}`: sprite `{}` does not load: {e:#}",
+                def.sprite
+            )),
+            Ok(image) => {
+                if image.height() != size.y as u32 || image.width() < size.x as u32 {
+                    problems.push(format!(
+                        "item `{id}`: sprite `{}` is {}x{}; an icon is {}x{} (a strip of \
+                         frames that tall is fine)",
+                        def.sprite,
+                        image.width(),
+                        image.height(),
+                        size.x,
+                        size.y
+                    ));
+                }
+            }
+        }
+    }
+    report(&problems);
+}
+
+/// Every conversation a map names — on a sign, or given to one NPC in place
+/// of its kind's — is a graph that exists.
+#[test]
+fn every_dialogue_a_map_names_exists() {
+    let dialogue = supergame::assets::DialogueTable::shipped();
+    let mut problems: Vec<String> = Vec::new();
+    for (path, level) in maps() {
+        let named = level
+            .props
+            .iter()
+            .filter_map(|p| match &p.kind {
+                PropKind::Sign { dialogue } | PropKind::Trigger { dialogue, .. } => {
+                    Some(dialogue.clone())
+                }
+                _ => None,
+            })
+            .chain(level.entities.iter().filter_map(|e| e.dialogue.clone()));
+        for graph in named {
+            if dialogue.get(&graph).is_none() {
+                problems.push(format!(
+                    "{}: names dialogue `{graph}`, which assets/data/dialogue does not define \
+                     (it has: {})",
+                    rel(&path),
+                    dialogue.ids().join(", ")
+                ));
+            }
+        }
+    }
+    report(&problems);
+}
+
+/// Every flag something *reads* is one something *writes*.
+///
+/// A flag is created by setting it, and an unset one reads as 0 — so a
+/// condition on `quest.hlem.stage`, or a gate waiting on a lever wired to a
+/// different name, is a branch that never opens, with nothing anywhere to say
+/// so. Writers are dialogue `SetFlag`/`AddFlag`, levers, and NPC death flags;
+/// readers are dialogue conditions and gates. `world.` flags are written by
+/// the engine for every chest, item and locked door, and are left out.
+#[test]
+fn every_flag_read_is_written_by_something() {
+    use supergame::assets::{DialogueCondition, DialogueEffect};
+
+    fn reads(condition: &DialogueCondition, into: &mut Vec<String>) {
+        match condition {
+            DialogueCondition::FlagEq(name, _) | DialogueCondition::FlagAtLeast(name, _) => {
+                into.push(name.clone())
+            }
+            DialogueCondition::All(inner) | DialogueCondition::Any(inner) => {
+                inner.iter().for_each(|c| reads(c, into))
+            }
+            DialogueCondition::Not(inner) => reads(inner, into),
+            DialogueCondition::HasItem(_) | DialogueCondition::HasItems(..) => {}
+        }
+    }
+
+    let mut written: BTreeSet<String> = BTreeSet::new();
+    let mut read: Vec<(String, String)> = Vec::new();
+
+    let dialogue = supergame::assets::DialogueTable::shipped();
+    for id in dialogue.ids() {
+        let graph = dialogue.get(id).unwrap();
+        for node_id in graph.node_ids() {
+            for choice in &graph.node(node_id).unwrap().choices {
+                for effect in &choice.effects {
+                    if let DialogueEffect::SetFlag(name, _) | DialogueEffect::AddFlag(name, _) =
+                        effect
+                    {
+                        written.insert(name.clone());
+                    }
+                }
+                let mut names = Vec::new();
+                if let Some(condition) = &choice.condition {
+                    reads(condition, &mut names);
+                }
+                read.extend(
+                    names
+                        .into_iter()
+                        .map(|n| (format!("dialogue `{id}` node `{node_id}`"), n)),
+                );
+            }
+        }
+    }
+    for (path, level) in maps() {
+        for prop in &level.props {
+            match &prop.kind {
+                PropKind::Lever { flag, .. } => {
+                    written.insert(flag.clone());
+                }
+                PropKind::Gate { flag, .. }
+                | PropKind::Trigger {
+                    when: Some(flag), ..
+                } => read.push((rel(&path), flag.clone())),
+                _ => {}
+            }
+        }
+        written.extend(level.entities.iter().filter_map(|e| e.flag.clone()));
+    }
+
+    let problems: Vec<String> = read
+        .into_iter()
+        .filter(|(_, name)| !name.starts_with("world.") && !written.contains(name))
+        .map(|(where_, name)| {
+            format!("{where_} reads flag `{name}`, which nothing ever sets (set: {written:?})")
+        })
+        .collect();
+    report(&problems);
+}
+
+/// The view asks `effects.ron` for an effect by name when something happens —
+/// a hit, a landing — and a name it does not find is a hit with no spark,
+/// which nothing else would ever notice. The table also has to load: ranges
+/// the right way round, and colours to draw in.
+#[test]
+fn every_effect_the_view_asks_for_is_defined() {
+    let table = Assets::new()
+        .effects()
+        .unwrap_or_else(|e| panic!("data/effects.ron: {e:#}"));
+    let problems: Vec<String> = supergame::view::fx::CUES
+        .iter()
+        .filter(|cue| table.get(cue).is_none())
+        .map(|cue| format!("data/effects.ron: the view asks for `{cue}`, which is not defined"))
+        .collect();
+    report(&problems);
+}
+
+/// A kind that names a spell has to be able to throw it: a pool at least the
+/// spell's cost and, for anything a map places, a range to throw it from.
+/// Either missing is a caster that never casts — no error, no event, just an
+/// enemy that walks up to you and stands there.
+#[test]
+fn every_kind_that_casts_can_afford_it_and_knows_when() {
+    let spells = Assets::new()
+        .spells()
+        .unwrap_or_else(|e| panic!("data/spells.ron: {e:#}"));
+    let stats = stat_table();
+    let mut problems: Vec<String> = Vec::new();
+    for kind in animated_kinds() {
+        let Ok(block) = stats.get(&kind) else {
+            continue; // reported by `every_kind_has_a_stat_block`
+        };
+        let Some(def) = block.spell.as_deref().and_then(|id| spells.get(id)) else {
+            continue; // no spell, or one `every_spell_a_kind_names_exists_in_the_table` reports
+        };
+        if block.max_mana < def.cost {
+            problems.push(format!(
+                "data/stats.ron: `{kind}` casts a spell costing {} with a pool of {}",
+                def.cost, block.max_mana
+            ));
+        }
+        if kind != PLAYER_SET && block.ai.as_ref().is_some_and(|ai| ai.cast_range <= 0.0) {
+            problems.push(format!(
+                "data/stats.ron: `{kind}` names a spell but its `ai.cast_range` is 0, \
+                 so it never throws it"
+            ));
+        }
+    }
+    report(&problems);
 }

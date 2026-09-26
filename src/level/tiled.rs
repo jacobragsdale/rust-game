@@ -90,6 +90,10 @@ pub fn load(path: &Path, player: Vec2) -> anyhow::Result<LevelData> {
         pendulums: Vec::new(),
         player_spawn,
         entities: Vec::new(),
+        props: Vec::new(),
+        spawns: Vec::new(),
+        decor: Vec::new(),
+        title: None,
     })
 }
 
@@ -103,7 +107,7 @@ fn find_spawn(
     player: Vec2,
 ) -> Option<Vec2> {
     for x in 1..width {
-        for y in (0..height - 1).rev() {
+        for y in (0..height.saturating_sub(1)).rev() {
             let open = !solid[(y * width + x) as usize];
             let floor_below = solid[((y + 1) * width + x) as usize];
             if open && floor_below {

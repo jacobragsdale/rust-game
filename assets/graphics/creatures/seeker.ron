@@ -1,0 +1,40 @@
+// A seeking star. 12x12 frames.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image creatures/seeker
+Pixels(
+    palette: {
+        'a': (160, 100, 30),
+        'b': (255, 214, 96),
+        'c': (255, 255, 230),
+    },
+    frames: [
+        [
+            "....aba.....",
+            "....aba.....",
+            "aaaabbbaaaa.",
+            "bbbbbbbbbbba",
+            "abbbbbbbbba.",
+            ".abbbcbbba..",
+            "..abbbcba...",
+            "..abbbbba...",
+            ".abbaaabba..",
+            ".aba...aba..",
+            "..a.....a...",
+            "............",
+        ],
+        [
+            "..aba.......",
+            "..abba...a..",
+            "..abbbaaaba.",
+            "..abbbbbba..",
+            "aaabbbbbba..",
+            "bbbbbcbba...",
+            "aaabbbcbba..",
+            "..abbbbbba..",
+            "..abbbaaaba.",
+            "..abba...a..",
+            "..aba.......",
+            "...a........",
+        ],
+    ],
+)

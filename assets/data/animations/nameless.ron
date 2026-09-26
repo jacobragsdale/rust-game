@@ -1,0 +1,7 @@
+// The Nameless — a champion the Choir hollowed, in the player's art gone to
+// shadow: what you would be with nobody inside.
+ClipSet(
+    base: "player",
+    tint: (92, 92, 124),
+    clips: {},
+)

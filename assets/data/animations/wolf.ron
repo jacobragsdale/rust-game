@@ -1,0 +1,15 @@
+// A wolf. Its own pixel art: assets/graphics/creatures/wolf.ron — three
+// strides of a run and a dead one, 26x16. A bite is a touch, not a swing, so
+// `attack` is never selected; it is here because every walker can reach it.
+ClipSet(
+    sheet: "creatures/wolf",
+    frame_size: (26.0, 16.0),
+    clips: {
+        "idle": Clip(frames: [(0, 0)], fps: 1.0, looping: true),
+        "run": Clip(frames: [(0, 0), (1, 0), (2, 0), (1, 0)], fps: 12.0, looping: true),
+        "jump": Clip(frames: [(1, 0)], fps: 1.0, looping: false),
+        "fall": Clip(frames: [(2, 0)], fps: 1.0, looping: false),
+        "attack": Clip(frames: [(1, 0)], fps: 1.0, looping: false),
+        "death": Clip(frames: [(3, 0)], fps: 1.0, looping: false),
+    },
+)

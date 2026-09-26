@@ -1,0 +1,24 @@
+// Warden — the crypt's keeper, and the first boss. The knight's art (`base`),
+// in dried-blood red; a sword up close and embers from across the room, so
+// the cast and the ember are here as well.
+ClipSet(
+    base: "knight",
+    tint: (255, 120, 104),
+    clips: {
+        "cast": Clip(
+            sheet: "knight/knightAttack",
+            frame_size: (144.0, 64.0),
+            offset: (5.0, 0.0),
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0)],
+            fps: 8.0,
+            looping: false,
+        ),
+        "ember_bolt": Clip(
+            sheet: "creatures/ember",
+            frame_size: (10.0, 8.0),
+            frames: [(0, 0), (1, 0)],
+            fps: 10.0,
+            looping: true,
+        ),
+    },
+)

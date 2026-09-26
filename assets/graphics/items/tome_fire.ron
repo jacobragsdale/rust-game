@@ -1,0 +1,30 @@
+// An item icon: tome fire. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/tome_fire
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (190, 38, 51),
+        'c': (236, 92, 92),
+        'd': (247, 118, 34),
+        'e': (255, 214, 120),
+        'f': (254, 231, 97),
+        'g': (255, 250, 236),
+    },
+    frames: [
+        [
+            "..aaaaaaaa..",
+            ".abbbbbbbca.",
+            ".abbbebbbca.",
+            ".abbedebbca.",
+            ".abededebca.",
+            ".abedfdebca.",
+            ".abbefebbca.",
+            ".abbbebbbca.",
+            ".abbbbbbbca.",
+            ".agggggggga.",
+            ".aaaaaaaaaa.",
+            "............",
+        ],
+    ],
+)

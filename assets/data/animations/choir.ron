@@ -1,0 +1,23 @@
+// The Choir, in the shell it wears at the Heart of the Ark. Its own pixel
+// art: assets/graphics/creatures/choir.ron — four frames of breathing (the
+// fourth its eye flaring) and broken, 48x44 — and its bolt.
+ClipSet(
+    sheet: "creatures/choir",
+    frame_size: (48.0, 44.0),
+    clips: {
+        "idle": Clip(frames: [(0, 0), (1, 0), (2, 0), (1, 0)], fps: 5.0, looping: true),
+        "run": Clip(frames: [(0, 0), (1, 0), (2, 0), (1, 0)], fps: 6.0, looping: true),
+        "jump": Clip(frames: [(0, 0), (1, 0), (2, 0), (1, 0)], fps: 6.0, looping: true),
+        "fall": Clip(frames: [(0, 0), (1, 0), (2, 0), (1, 0)], fps: 5.0, looping: true),
+        "attack": Clip(frames: [(3, 0)], fps: 1.0, looping: false),
+        "cast": Clip(frames: [(3, 0)], fps: 1.0, looping: false),
+        "death": Clip(frames: [(4, 0)], fps: 1.0, looping: false),
+        "judgement_bolt": Clip(
+            sheet: "creatures/judgement",
+            frame_size: (14.0, 14.0),
+            frames: [(0, 0), (1, 0)],
+            fps: 12.0,
+            looping: true,
+        ),
+    },
+)

@@ -1,0 +1,14 @@
+// A warning at the brigands' camp.
+Dialogue(
+    id: "sign_camp",
+    start: "read",
+    nodes: {
+        "read": Node(
+            speaker: "A board nailed to a tree",
+            lines: [
+                "THIS CAMP IS GORRAN'S. SO IS EVERYTHING IN IT.",
+                "SO IS YOUR PURSE.",
+            ],
+        ),
+    },
+)

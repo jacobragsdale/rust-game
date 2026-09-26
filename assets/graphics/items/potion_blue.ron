@@ -1,0 +1,29 @@
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Preview: cargo run --bin sheet -- --image items/potion_blue
+Pixels(
+    palette: {
+        'B': (90, 160, 240),
+        'G': (192, 203, 220),
+        'b': (38, 92, 190),
+        'c': (116, 63, 57),
+        'g': (139, 155, 180),
+        'k': (24, 20, 37),
+        'w': (255, 255, 255),
+    },
+    frames: [
+        [
+            "....kkkk....",
+            "....kcck....",
+            "....kkkk....",
+            ".....kk.....",
+            "....kGGk....",
+            "...kGbBBk...",
+            "..kGbbBBBk..",
+            "..kwbbbbBk..",
+            "..kGbbbbbk..",
+            "..kgbbbbbk..",
+            "...kgbbbk...",
+            "....kkkk....",
+        ],
+    ],
+)

@@ -19,12 +19,90 @@
         id: "iron_sword",
         name: "Iron Sword",
         sprite: "items/iron_sword",
+        description: "A plain soldier's blade. +1 damage to every swing.",
         kind: Weapon(
             // One extra point a hit. The bare-handed combo does 1/1/2 across
             // its three links, so this is a fight that is a swing shorter
             // rather than a different fight.
             damage: 1,
             combo: ["player_slash1", "player_slash2", "player_slash3"],
+            speed: 1.0,
+        ),
+    ),
+    // --- styles ------------------------------------------------------------
+    //
+    // A weapon whose `combo` opens a chain of its own swings differently,
+    // not just harder: the style lives in attacks.ron under the opener's id,
+    // and the champions of the Proving Circle fight with the same entries.
+
+    ItemDef(
+        id: "glass_saber",
+        name: "Glass Saber",
+        sprite: "items/glass_saber",
+        description: "Kesh's blade, fused from desert sand. Three quick cuts.",
+        kind: Weapon(
+            // No bonus: the saber's gift is time, not weight. Its combo lands
+            // the plain one's damage in two thirds of the ticks, with less of
+            // you committed to every cut.
+            damage: 0,
+            combo: ["saber_1", "saber_2", "saber_3"],
+            speed: 1.0,
+        ),
+    ),
+    ItemDef(
+        id: "hunting_spear",
+        name: "Hunting Spear",
+        sprite: "items/spear",
+        description: "Ash shaft, iron point. It keeps a wolf at arm's length - a long arm.",
+        kind: Weapon(
+            // No bonus: reach is what it gives, half a tile past a sword.
+            damage: 0,
+            combo: ["spear_1", "spear_2", "spear_3"],
+            speed: 1.0,
+        ),
+    ),
+    ItemDef(
+        id: "redhand_axe",
+        name: "Redhand Axe",
+        sprite: "items/axe",
+        description: "Gorran's. Two blows, and each one lands like a finisher.",
+        kind: Weapon(
+            damage: 0,
+            combo: ["axe_1", "axe_2"],
+            speed: 1.0,
+        ),
+    ),
+    ItemDef(
+        id: "brakka_maul",
+        name: "Brakka's Maul",
+        sprite: "items/maul",
+        description: "Too heavy for anyone but a champion. Slow, and it throws what it hits.",
+        kind: Weapon(
+            damage: 0,
+            combo: ["maul_1", "maul_2"],
+            speed: 1.0,
+        ),
+    ),
+    ItemDef(
+        id: "circle_blade",
+        name: "Circle Blade",
+        sprite: "items/circle_blade",
+        description: "A champion's blade from the Arbiter. Four quick cuts, +1 to each.",
+        kind: Weapon(
+            damage: 1,
+            combo: ["circle_1", "circle_2", "circle_3", "circle_4"],
+            speed: 1.0,
+        ),
+    ),
+    ItemDef(
+        id: "starmetal_blade",
+        name: "Starmetal Blade",
+        sprite: "items/starmetal",
+        description: "Forged in the Ark's heart before the flare. Long reach, +2 to every cut.",
+        kind: Weapon(
+            // The best blade in the game, and hidden for it.
+            damage: 2,
+            combo: ["star_1", "star_2", "star_3"],
             speed: 1.0,
         ),
     ),

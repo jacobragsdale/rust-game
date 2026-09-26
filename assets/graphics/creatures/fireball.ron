@@ -1,0 +1,45 @@
+// A fireball, flying right. 18x14 frames.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image creatures/fireball
+Pixels(
+    palette: {
+        'a': (200, 60, 30),
+        'b': (247, 118, 34),
+        'c': (255, 200, 90),
+        'd': (255, 250, 220),
+    },
+    frames: [
+        [
+            "..................",
+            "........bbbabbb...",
+            ".......bbbabbbab..",
+            "......bbcccccccbb.",
+            ".....bbcccccccccab",
+            "...abbbccdddddccbb",
+            "b.abbbaccdddddccbb",
+            "b.bbbabccdddddccba",
+            "...babbccdddddccab",
+            ".....bbcccccccccbb",
+            "......abcccccccbb.",
+            ".......bbabbbabb..",
+            "........abbbabb...",
+            "..................",
+        ],
+        [
+            "..................",
+            "........bbabbba...",
+            ".......bbabbbabb..",
+            "......bbcccccccba.",
+            ".....bbcccccccccbb",
+            "..a.bbaccdddddccbb",
+            "..bbbabccdddddccba",
+            "..bbabbccdddddccab",
+            "..b.bbbccdddddccbb",
+            ".....bacccccccccbb",
+            "......bbcccccccbb.",
+            ".......babbbabbb..",
+            "........bbbabbb...",
+            "..................",
+        ],
+    ],
+)

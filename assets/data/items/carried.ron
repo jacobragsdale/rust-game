@@ -1,0 +1,55 @@
+// Things that are only carried: nothing happens when you `confirm` one in the
+// bag. What each is *for* is written where it is asked for — a door's
+// `locked:`, a merchant's `HasItems("coin", 5)`, a reply's `TakeItem` — so an
+// item here never needs code to mean something.
+[
+    ItemDef(
+        id: "coin",
+        name: "Coin",
+        sprite: "items/coin",
+        description: "Old silver. Merchants still take it.",
+        kind: Carried,
+    ),
+    ItemDef(
+        id: "iron_key",
+        name: "Iron Key",
+        sprite: "items/key",
+        description: "Heavy, and cold. It opens a door somewhere near.",
+        kind: Carried,
+    ),
+    ItemDef(
+        id: "warden_seal",
+        name: "Warden's Seal",
+        sprite: "items/seal",
+        description: "Not wax: warm metal, a star cut into it, humming. Brann will want it.",
+        kind: Carried,
+    ),
+    ItemDef(
+        id: "gate_key",
+        name: "East Gate Key",
+        sprite: "items/gate_key",
+        description: "Runa's key to the east gate, and the Thornwood beyond it.",
+        kind: Carried,
+    ),
+    ItemDef(
+        id: "wolf_pelt",
+        name: "Wolf Pelt",
+        sprite: "items/pelt",
+        description: "Grey and thick. Runa could make something of three of these.",
+        kind: Carried,
+    ),
+    ItemDef(
+        id: "ossian_staff",
+        name: "Ossian's Staff",
+        sprite: "items/staff",
+        description: "A hermit's staff, blue light in the head of it. Gorran was using it as a tent pole.",
+        kind: Carried,
+    ),
+    ItemDef(
+        id: "star_key",
+        name: "Star Key",
+        sprite: "items/star_key",
+        description: "Vael glass. It opens the Ark's inner doors.",
+        kind: Carried,
+    ),
+]

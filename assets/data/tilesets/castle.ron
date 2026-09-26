@@ -26,4 +26,23 @@ Tileset(
         platform: 196,
         background: [151, 152, 153],
     ),
+    // Named pieces of the atlas, as (column, row, width, height) in tiles.
+    // A prop stands on the floor of the cell it is placed in and grows up and
+    // to the right from there. Doors are two tiles wide and three tall, and
+    // the door a `Door(...)` draws unless it says otherwise is `door`.
+    props: {
+        "door": (13, 11, 2, 3),
+        "archway": (9, 11, 2, 3),
+        "portcullis": (11, 11, 2, 3),
+        "window": (0, 11, 1, 1),
+        "window_lit": (1, 11, 1, 1),
+        "porthole": (2, 11, 1, 1),
+        "porthole_barred": (3, 11, 1, 1),
+        "porthole_lit": (5, 11, 1, 1),
+        "fence": (9, 14, 1, 1),
+        "crate": (10, 14, 1, 1),
+        "barrel": (11, 14, 1, 1),
+        "torch": (12, 14, 1, 1),
+        "lantern": (14, 14, 1, 1),
+    },
 )

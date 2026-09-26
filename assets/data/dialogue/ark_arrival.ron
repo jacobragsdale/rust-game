@@ -1,0 +1,15 @@
+// The first thing the Ark says: a trigger on the spot the light sets you down.
+Dialogue(
+    id: "ark_arrival",
+    start: "voice",
+    nodes: {
+        "voice": Node(
+            speaker: "A voice, everywhere at once",
+            lines: [
+                "WARRIOR. YOU ARE ABOARD THE ARK OF THE VAEL. YOU ARE NOT HARMED.",
+                "YOU WILL BE MET. PLEASE DO NOT STRIKE THE ONES WHO MEET YOU. THERE ARE VERY FEW OF US LEFT.",
+                "BEWARE THE LOWER HOLD. THE SONG HAS GOT IN THERE.",
+            ],
+        ),
+    },
+)

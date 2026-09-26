@@ -1,0 +1,16 @@
+// After the Choir: a trigger past the Heart, once its death flag is set.
+Dialogue(
+    id: "epilogue_ark",
+    start: "quiet",
+    nodes: {
+        "quiet": Node(
+            speaker: "The Archivist",
+            lines: [
+                "It is quiet. For the first time since our sun sang, the Ark is quiet.",
+                "The husks have fallen still. The sleepers are waking. Your people will be going down within the day - all of them we can wake.",
+                "We will not come to your world again. We have lived on what we took for long enough.",
+                "The door beside you goes home. Thank you, warrior. We never deserved you.",
+            ],
+        ),
+    },
+)

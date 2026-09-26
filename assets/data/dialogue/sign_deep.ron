@@ -1,0 +1,14 @@
+// At the top of the Engine Deep.
+Dialogue(
+    id: "sign_deep",
+    start: "read",
+    nodes: {
+        "read": Node(
+            speaker: "A Vael warning plate",
+            lines: [
+                "ENGINE DEEP. FURNACES ACTIVE. PISTONS ACTIVE. COOLANT CHANNEL: DO NOT TOUCH THE FLOOR.",
+                "Beneath, freshly scratched: THE SONG IS LOUDEST HERE.",
+            ],
+        ),
+    },
+)

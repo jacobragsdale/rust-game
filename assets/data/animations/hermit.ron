@@ -1,0 +1,6 @@
+// Old Ossian — the knight's art gone grey: he was one, once.
+ClipSet(
+    base: "knight",
+    tint: (196, 178, 156),
+    clips: {},
+)

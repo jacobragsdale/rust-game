@@ -1,0 +1,14 @@
+// A plaque at the first pit of the Proving Circle.
+Dialogue(
+    id: "sign_circle",
+    start: "read",
+    nodes: {
+        "read": Node(
+            speaker: "A plaque of Vael glass",
+            lines: [
+                "THE PROVING CIRCLE. ONE CHAMPION TO A PIT. THE GATE OPENS WHEN THE CHAMPION FALLS.",
+                "YIELDING IS PERMITTED. HEALING IS PROVIDED.",
+            ],
+        ),
+    },
+)

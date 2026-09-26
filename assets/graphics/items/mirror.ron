@@ -1,0 +1,26 @@
+// An item icon: mirror. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/mirror
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (150, 236, 255),
+        'c': (240, 246, 255),
+    },
+    frames: [
+        [
+            ".....aa.....",
+            "....acca....",
+            "...acbbca...",
+            "..acbccbca..",
+            "..abcbbcba..",
+            ".acbbccbbca.",
+            ".abcbbbbcba.",
+            "..abcbbcba..",
+            "...abccba...",
+            "....abba....",
+            ".....aa.....",
+            "............",
+        ],
+    ],
+)

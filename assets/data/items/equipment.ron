@@ -12,6 +12,7 @@
         id: "knight_helm",
         name: "Knight Helm",
         sprite: "items/helm",
+        description: "Dented steel. +2 maximum health.",
         kind: Equipment(
             slot: Head,
             // Two points is 40% more health than the player starts with, which
@@ -19,5 +20,68 @@
             // has to be unmistakably worth wearing.
             modifiers: [MaxHealth(2)],
         ),
+    ),
+    // --- the Body slot ---------------------------------------------------------
+    ItemDef(
+        id: "leather_jerkin",
+        name: "Leather Jerkin",
+        sprite: "items/jerkin",
+        description: "Boiled leather off a brigand. +1 maximum health.",
+        kind: Equipment(slot: Body, modifiers: [MaxHealth(1)]),
+    ),
+    ItemDef(
+        id: "thrall_mail",
+        name: "Thrall Mail",
+        sprite: "items/thrall_mail",
+        description: "A castle hauberk. +2 maximum health, but it slows you.",
+        kind: Equipment(
+            slot: Body,
+            // The first trade-off in the game: health for pace, a choice
+            // rather than an upgrade.
+            modifiers: [MaxHealth(2), RunSpeed(-20.0)],
+        ),
+    ),
+    ItemDef(
+        id: "vael_weave",
+        name: "Vael Weave",
+        sprite: "items/vael_weave",
+        description: "Cloth the Vael wove before the flare. +2 health, +2 mana.",
+        kind: Equipment(slot: Body, modifiers: [MaxHealth(2), MaxMana(2)]),
+    ),
+    // --- heads and trinkets -----------------------------------------------------
+    ItemDef(
+        id: "wolf_hood",
+        name: "Wolf-Pelt Hood",
+        sprite: "items/wolf_hood",
+        description: "Runa's stitching. +1 maximum health, and quicker feet.",
+        kind: Equipment(slot: Head, modifiers: [MaxHealth(1), RunSpeed(15.0)]),
+    ),
+    ItemDef(
+        id: "lantern_circlet",
+        name: "Lantern Circlet",
+        sprite: "items/circlet",
+        description: "A Vael heirloom, hidden in the walls of the hold. +3 maximum mana.",
+        kind: Equipment(slot: Head, modifiers: [MaxMana(3)]),
+    ),
+    ItemDef(
+        id: "wildheart_charm",
+        name: "Wildheart Charm",
+        sprite: "items/wildheart",
+        description: "A seed that never sprouted, from the oldest tree in the wood. Swifter feet.",
+        kind: Equipment(slot: Trinket, modifiers: [RunSpeed(30.0)]),
+    ),
+    ItemDef(
+        id: "mirror_shard",
+        name: "Mirror Shard",
+        sprite: "items/mirror",
+        description: "What the Nameless left of itself. +1 health, +1 mana, +1 to every blow.",
+        kind: Equipment(slot: Trinket, modifiers: [MaxHealth(1), MaxMana(1), Damage(1)]),
+    ),
+    ItemDef(
+        id: "guard_ring",
+        name: "Captain Hale's Signet",
+        sprite: "items/guard_ring",
+        description: "The garrison captain's ring, hidden where he hid it. +1 to every blow.",
+        kind: Equipment(slot: Trinket, modifiers: [Damage(1)]),
     ),
 ]

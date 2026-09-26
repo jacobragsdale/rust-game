@@ -1,0 +1,15 @@
+// The trigger that waits on `quest.testbed.bell`: silent until the bell has
+// rung, and then it speaks once.
+Dialogue(
+    id: "testbed_trigger_late",
+    start: "told",
+    nodes: {
+        "told": Node(
+            speaker: "A voice in the dark",
+            lines: ["The bell has rung. Now I can say it."],
+            choices: [
+                Choice(text: "Say what?", next: None, effects: [SetFlag("quest.testbed.heard", 1)]),
+            ],
+        ),
+    },
+)

@@ -106,9 +106,10 @@ pub const ACTIONS: [Binding; 11] = [
         trigger: Trigger::Edge,
     },
     Binding {
+        // Beside `X`, so arrow hands attack and cast from neighbouring keys.
         action: Action::Cast,
         name: "cast",
-        keys: &[Key::K],
+        keys: &[Key::C],
         trigger: Trigger::Edge,
     },
     Binding {
@@ -130,10 +131,12 @@ pub const ACTIONS: [Binding; 11] = [
         trigger: Trigger::Edge,
     },
     Binding {
-        // Not `Escape`: the app quits on that before any scene sees it.
+        // Escape backs out of whatever is open — the bag, a conversation, the
+        // pause menu — and never quits the game: that is the title screen's
+        // `Quit`, where it cannot be pressed by accident.
         action: Action::Cancel,
         name: "cancel",
-        keys: &[Key::Back],
+        keys: &[Key::Escape, Key::Back],
         trigger: Trigger::Edge,
     },
 ];
@@ -174,6 +177,12 @@ impl Action {
 
     pub const fn is_edge(self) -> bool {
         self.binding().is_edge()
+    }
+
+    /// Whether `key` is one of this action's keys — for a scene outside the
+    /// sim that answers to an action rather than to a particular key.
+    pub fn triggered_by(self, key: Key) -> bool {
+        self.binding().keys.contains(&key)
     }
 
     /// Resolve a tape token, or `None` if nothing is spelled that way.
@@ -221,6 +230,7 @@ fn key_label(key: Key) -> String {
     match key {
         Key::Return => "Enter".to_string(),
         Key::Back => "Backspace".to_string(),
+        Key::Escape => "Esc".to_string(),
         other => format!("{other:?}"),
     }
 }
@@ -282,6 +292,15 @@ impl ActionSet {
     /// The actions in both sets.
     pub const fn intersect(self, other: ActionSet) -> ActionSet {
         ActionSet(self.0 & other.0)
+    }
+
+    pub const fn union(self, other: ActionSet) -> ActionSet {
+        ActionSet(self.0 | other.0)
+    }
+
+    /// The actions in `self` that are not in `other`.
+    pub const fn without(self, other: ActionSet) -> ActionSet {
+        ActionSet(self.0 & !other.0)
     }
 
     /// Left and right cancel out: holding both is standing still, whether the
@@ -355,6 +374,17 @@ impl PlayerInput {
     /// the only caller, and does it once for every mode.
     pub const fn held_set(self) -> ActionSet {
         self.held
+    }
+
+    /// The one-shot presses on this tick.
+    pub const fn pressed_set(self) -> ActionSet {
+        self.pressed
+    }
+
+    /// This input with `extra` presses added — presses carried over from ticks
+    /// the world could not act on. See `Sim`'s hitstop handling.
+    pub const fn with_pressed(self, extra: ActionSet) -> PlayerInput {
+        PlayerInput::new(self.held, self.pressed.union(extra))
     }
 
     pub fn set_held(&mut self, action: Action, on: bool) {
@@ -609,6 +639,17 @@ mod tests {
         latch.key_down(Key::Left);
         latch.key_down(Key::P);
         assert!(!take(&mut latch, Action::Jump));
+    }
+
+    /// Escape is a way back out of a menu, not out of the game: it reaches the
+    /// sim as `cancel`, which closes the bag and ends a conversation.
+    #[test]
+    fn escape_backs_out() {
+        let mut latch = InputLatch::default();
+        latch.key_down(Key::Escape);
+        assert!(take(&mut latch, Action::Cancel));
+        assert!(Action::Cancel.triggered_by(Key::Escape));
+        assert!(Action::Cast.triggered_by(Key::C) && !Action::Cast.triggered_by(Key::K));
     }
 
     /// Every edge-triggered action gets the same treatment, which is the point

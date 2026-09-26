@@ -1,0 +1,14 @@
+// The trigger at the mouth of the Circle's secret: a warning.
+Dialogue(
+    id: "nameless_warning",
+    start: "dark",
+    nodes: {
+        "dark": Node(
+            speaker: "Scratched into the wall",
+            lines: [
+                "IT WAS A CHAMPION. THE SONG GOT TO IT IN THE PIT. IT STILL FIGHTS.",
+                "IT FIGHTS LIKE YOU DO.",
+            ],
+        ),
+    },
+)

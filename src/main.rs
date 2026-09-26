@@ -13,10 +13,16 @@ fn main() -> anyhow::Result<()> {
 
     let (mut ctx, event_loop) = ContextBuilder::new("supergame", "Jacob Ragsdale")
         .window_setup(ggez::conf::WindowSetup::default().title("SuperGame"))
-        .window_mode(
-            ggez::conf::WindowMode::default()
-                .dimensions(config.display.width, config.display.height),
-        )
+        .window_mode(ggez::conf::WindowMode {
+            // Logical points, not physical pixels: on a 2x display the
+            // physical size would open a window half the intended size.
+            logical_size: Some(ggez::winit::dpi::LogicalSize::new(
+                config.display.width,
+                config.display.height,
+            )),
+            resizable: true,
+            ..ggez::conf::WindowMode::default()
+        })
         .build()?;
 
     let app = App::new(&mut ctx, config);

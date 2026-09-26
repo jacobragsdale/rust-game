@@ -9,26 +9,28 @@ map maps/testbed_arena.ron
 #
 #   player  spawns x=70, 5 hp
 #   knight  spawns x=229 with 6 hp, swings once every 75 ticks
+#
+# Outcomes rather than arrival times: when the first blow lands falls out of
+# chase speed, spawn distance and reach at once, and pinning it here broke on
+# every one of them. What this tape claims is that every swing of a knight
+# standing in reach connects — five swings, five hits, one dead player — which
+# is exactly what a knight swinging from outside its own sword's reach failed.
 
 assert hp == 5
 assert !dead
 expect no damaged
 
-# it has to walk over first
-wait 200
-assert hp == 5
-expect no player.damaged
-
-# five swings, five hits, one dead player
-wait 390
+# five swings, five hits, one dead player, still in the death freeze
+wait 530
+expect knight_slash.attacked == 5
+expect player.damaged == 5
+expect player.died == 1
 assert hp <= 0
 assert dead
 assert clip == die
-expect player.damaged == 5
-expect player.died == 1
 
 # the death freeze, then back at spawn with full health
-wait 60
+wait 70
 assert !dead
 assert hp == 5
 assert x == 70

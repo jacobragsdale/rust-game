@@ -14,7 +14,8 @@ map maps/village.ron
 #   Runa         paces x 358..388 in the notch and cannot leave it
 #   counter      x 672..768, surface y=288 — one 32px step
 #   gatehouse    x 1056..1152 above y=256; the passage under it is 64px
-#   east edge    the player is clamped at x=1260
+#   east gate    x 1408..1472, Runa's locked portcullis to the Thornwood, in
+#                front of the town wall at x 1472
 
 wait 1
 assert grounded
@@ -65,8 +66,8 @@ right 40
 assert grounded
 assert x > 700
 
-# Under the gatehouse and out onto the east road, which is the way to the
-# dungeon. Clamped by the map's own edge, not by a wall.
+# Under the gatehouse and out onto the east road, past the castle gate, toward
+# the east gate — still running when the tape ends, and nothing in the way.
 right 200
 assert grounded
 assert x > 1200

@@ -1,0 +1,26 @@
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Preview: cargo run --bin sheet -- --image items/iron_sword
+Pixels(
+    palette: {
+        'G': (192, 203, 220),
+        'k': (24, 20, 37),
+        'o': (160, 90, 40),
+        'y': (230, 170, 40),
+    },
+    frames: [
+        [
+            "..........kk",
+            ".........kGk",
+            "........kGk.",
+            ".......kGk..",
+            "......kGk...",
+            ".....kGk....",
+            ".kk.kGk.....",
+            ".kykGk......",
+            "..kyk.......",
+            ".kokyk......",
+            "kok.kk......",
+            "kk..........",
+        ],
+    ],
+)

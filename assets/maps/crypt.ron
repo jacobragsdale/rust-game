@@ -1,0 +1,66 @@
+// The Crypt — below the old dungeon, where the knights come from. The first
+// map built for the enemies that are only data: bats in the cavern, a mage on
+// the ledge, and the Warden in its hall.
+//
+//   cols  1-12  the stair down, a sign and a brazier
+//   cols 13-30  the cavern: bats, a spike pit, planks up to a chest
+//   cols 31-40  the step and the ledge: a mage, and the lever for the gate
+//   cols 41-54  the Warden's hall, behind the first gate; a second brazier
+//   cols 55-58  behind the second gate, which opens when the Warden dies:
+//               its chest, and the long stair up into the village
+//
+// Standing height is two rows: the entry corridor is four tall, the planks
+// have two clear rows over them, and a single jump only just clears three
+// tiles — which is why the high plank is a double jump from the low one.
+Level(
+    tileset: "castle",
+    name: "The Crypt",
+    grid: [
+        "############################################################",
+        "#############............................###################",
+        "#############............................######%%%%%%%######",
+        "#############............................######%%%%%%%######",
+        "#############............................######=======######",
+        "#############............................#.............#####",
+        "#############............................#.............#####",
+        "#############............................#.............#...#",
+        "#############.................................===.===......#",
+        "#############.........=====................................#",
+        "#..........................................................#",
+        "#................................###########################",
+        "#..............====............#############################",
+        "#....P.........................#############################",
+        "####################...#####################################",
+        "####################^^^#####################################",
+    ],
+    entities: [
+        // NPCs first, in the order a tape addresses them: bat.0-2, mage.0,
+        // warden.0.
+        Npc(kind: "bat", cell: (18, 10)),
+        Npc(kind: "bat", cell: (30, 10)),
+        Npc(kind: "bat", cell: (27, 6)),
+        Npc(kind: "mage", cell: (37, 10)),
+        // Its death is what opens the second gate.
+        Npc(kind: "warden", cell: (50, 10), flag: "quest.crypt.warden"),
+
+        Door(id: "stair", cell: (2, 13), to: "maps/dungeon.ron", at: "crypt_stair", art: "archway"),
+        Sign(cell: (7, 13), dialogue: "sign_crypt"),
+        Checkpoint(cell: (10, 13)),
+        Chest(id: "cavern_chest", cell: (24, 8), items: [("coin", 6), ("minor_potion", 1)]),
+        Lever(id: "crypt_lever", cell: (39, 10), flag: "quest.crypt.gate"),
+        Gate(cell: (41, 10), height: 3, flag: "quest.crypt.gate"),
+        Checkpoint(cell: (43, 10)),
+        Gate(cell: (55, 10), height: 3, flag: "quest.crypt.warden"),
+        Chest(id: "warden_chest", cell: (56, 10), items: [("warden_seal", 1), ("coin", 10)]),
+        Door(id: "long_stair", cell: (57, 10), to: "maps/village.ron", at: "dungeon_stair", art: "archway"),
+
+        Decor(cell: (9, 11), prop: "torch"),
+        Decor(cell: (29, 12), prop: "torch"),
+        Decor(cell: (44, 6), prop: "torch"),
+        Decor(cell: (53, 6), prop: "torch"),
+        // The Warden's hoard, in the ceiling of its hall (cols 47-53, rows
+        // 2-3): false wall on a plank floor, a double jump up from the hall's
+        // planks. The chest shows through the stone.
+        Chest(id: "secret_hoard", cell: (50, 3), items: [("greater_potion", 2), ("coin", 15)]),
+    ],
+)

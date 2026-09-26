@@ -114,7 +114,12 @@ Stats({
             sight: 130.0,
             sight_height: 36.0,
             lose: 200.0,
-            reach: 30.0,
+            // A jump is about 100px of air; this outlasts one.
+            lose_height: 120.0,
+            // No further than `knight_slash` actually reaches (16 + 28 - 22,
+            // from attacks.ron): a knight that swung from 30px out was
+            // swinging at air every time the player stood still.
+            reach: 20.0,
             cooldown: 75,
             home_slack: 8.0,
             chase_multiplier: 1.25,
@@ -139,11 +144,10 @@ Stats({
         max_fall: 900.0,
         max_health: 4,
         iframe_ticks: 30,
-        // Never thrown. A villager has no `Hostile`, so nothing ever starts a
-        // swing on it — but everything alive names something it *would* swing,
-        // and naming the knight's keeps `tests/data.rs`'s reachability check
-        // honest without inventing an attack nobody performs.
-        attack: "knight_slash",
+        // On the player's side: the player's sword passes through it, no
+        // enemy hunts it, and `spawn` gives it no `Hostile` — so it has no
+        // `attack` either.
+        friendly: true,
         damage_bonus: 0,
         // No bag, which is also what stops anything that looks for "whoever
         // carries an inventory" from mistaking a villager for the player.
@@ -168,12 +172,906 @@ Stats({
             sight: 0.0,
             sight_height: 36.0,
             lose: 0.0,
+            lose_height: 0.0,
             reach: 0.0,
             cooldown: 0,
             home_slack: 8.0,
             chase_multiplier: 1.0,
             lookahead: 6.0,
             floor_probe: 4.0,
+        ),
+    ),
+    // --- the crypt's enemies ------------------------------------------------
+    //
+    // Three kinds, and no code of their own: `spawn` builds each from what its
+    // block has (see `spawn::entity`) and `npc::think` runs the moves it has.
+
+    // A flyer that bites. Hangs where it was placed until the player comes
+    // within sight — all round, not just ahead — then flies straight at them;
+    // a bite that lands sends it off up and away for its `cooldown`, and back
+    // it comes. Two hits kill it.
+    "bat": StatBlock(
+        width: 14.0,
+        height: 10.0,
+        // Its pace keeping station and going home. The chase is 2.2x this:
+        // 110 px/s, just over half the player's run, so it can be outrun.
+        run_speed: 50.0,
+        // What it falls with once it is dead. Alive, a flyer has none.
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 2,
+        iframe_ticks: 10,
+        // One point, and a shove that breaks the contact.
+        contact: Contact(damage: 1, knockback: (160.0, -120.0), hitstun: 12),
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "coin", count: 1, chance: 0.5),
+        ],
+        max_mana: 0,
+        mana_regen: 0,
+        ai: AiStats(
+            sight: 150.0,
+            // Sight is a box all round a flyer, so this is how far above or
+            // below it looks — much more than a walker's body height.
+            sight_height: 110.0,
+            lose: 260.0,
+            lose_height: 200.0,
+            reach: 0.0,
+            // How long it keeps away after a bite.
+            cooldown: 50,
+            home_slack: 4.0,
+            chase_multiplier: 2.2,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+            flying: true,
+        ),
+    ),
+    // A caster. Keeps its distance — it walks until the player is within
+    // `cast_range`, then stands and throws embers — and has no sword at all,
+    // so closing in on one is the answer. Fragile for it.
+    "mage": StatBlock(
+        width: 22.0,
+        height: 30.0,
+        run_speed: 40.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 4,
+        iframe_ticks: 10,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "coin", count: 3, chance: 1.0),
+            LootDrop(item: "mana_potion", count: 1, chance: 0.5),
+        ],
+        // Two embers on a full pool, and about three seconds to earn a third.
+        max_mana: 4,
+        mana_regen: 12,
+        spell: "ember",
+        ai: AiStats(
+            sight: 220.0,
+            sight_height: 40.0,
+            lose: 300.0,
+            lose_height: 120.0,
+            reach: 0.0,
+            cooldown: 60,
+            home_slack: 8.0,
+            chase_multiplier: 1.0,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+            // Inside the ember's 360px of flight, with room to spare.
+            cast_range: 200.0,
+        ),
+    ),
+    // The crypt's keeper: a knight that has had time to get good. A heavier
+    // sword up close and embers from across the room, twice a knight's
+    // health, and faster on its feet. A map gives it a death flag, and the
+    // way out of the crypt opens on it.
+    "warden": StatBlock(
+        width: 22.0,
+        height: 30.0,
+        run_speed: 50.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 12,
+        // Still under the gap between combo links, or only the opener lands.
+        iframe_ticks: 8,
+        attack: "warden_slash",
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "coin", count: 10, chance: 1.0),
+            LootDrop(item: "minor_potion", count: 2, chance: 1.0),
+        ],
+        max_mana: 4,
+        // Slow: after the opening volley the warden fights with its sword,
+        // and an ember comes about once every five seconds.
+        mana_regen: 6,
+        spell: "ember",
+        ai: AiStats(
+            sight: 180.0,
+            sight_height: 40.0,
+            lose: 400.0,
+            lose_height: 140.0,
+            // Just inside `warden_slash`'s 26px.
+            reach: 24.0,
+            cooldown: 50,
+            home_slack: 8.0,
+            chase_multiplier: 1.5,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+            cast_range: 170.0,
+        ),
+    ),
+    // Brann the Pedlar: a shop, which is a friendly kind and a dialogue file.
+    // He keeps his stall — a pace of zero is standing still, and every other
+    // walking number is the villager's.
+    "pedlar": StatBlock(
+        width: 22.0,
+        height: 30.0,
+        run_speed: 0.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 4,
+        iframe_ticks: 30,
+        friendly: true,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [],
+        max_mana: 0,
+        mana_regen: 0,
+        interact: Interact(prompt: "trade", dialogue: "pedlar"),
+        ai: AiStats(
+            sight: 0.0,
+            sight_height: 36.0,
+            lose: 0.0,
+            lose_height: 0.0,
+            reach: 0.0,
+            cooldown: 0,
+            home_slack: 8.0,
+            chase_multiplier: 1.0,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+    // --- shields --------------------------------------------------------------
+
+    // A thrall with a shield: one of the castle's own knights, hollowed by the
+    // Warden's call, still holding the kite shield it drilled with. `guard`
+    // turns anything from the front while it stands ready, so it is fought
+    // like a door: wait for the swing, hit it while it is committed — or come
+    // down on it from above, or get round behind. Slower than a knight, and
+    // it has to be: a shield that could also chase you down would be a wall.
+    "shieldbearer": StatBlock(
+        width: 22.0,
+        height: 30.0,
+        run_speed: 42.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 6,
+        iframe_ticks: 10,
+        attack: "knight_slash",
+        guard: true,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "coin", count: 2, chance: 1.0),
+            LootDrop(item: "minor_potion", count: 1, chance: 0.25),
+        ],
+        max_mana: 0,
+        mana_regen: 0,
+        ai: AiStats(
+            sight: 140.0,
+            sight_height: 36.0,
+            lose: 220.0,
+            lose_height: 120.0,
+            reach: 20.0,
+            // Longer between swings than a knight: every gap is an opening,
+            // and the openings are the fight.
+            cooldown: 90,
+            home_slack: 8.0,
+            chase_multiplier: 1.3,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+
+    // --- the Thornwood ------------------------------------------------------
+    //
+    // East of Ashford, where brigands moved in once the knights had emptied
+    // the farms. Everything here is quicker than what lives under the dungeon,
+    // and less armoured: the wood is a place to keep moving through.
+
+    // A wolf: fast, fragile, and a biter that does not hang on. It runs you
+    // down at not quite your own pace, bites, and gives ground while its
+    // `cooldown` runs — a walker with a `contact` backs off after a bite, the
+    // way a bat swoops (npc::think). Two cuts kill it, and it drops the pelts
+    // Runa can make a hood from.
+    "wolf": StatBlock(
+        width: 22.0,
+        height: 14.0,
+        run_speed: 70.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 2,
+        iframe_ticks: 10,
+        contact: Contact(damage: 1, knockback: (180.0, -110.0), hitstun: 12),
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "wolf_pelt", count: 1, chance: 0.5),
+            LootDrop(item: "coin", count: 1, chance: 0.3),
+        ],
+        max_mana: 0,
+        mana_regen: 0,
+        ai: AiStats(
+            sight: 170.0,
+            sight_height: 40.0,
+            lose: 320.0,
+            lose_height: 120.0,
+            reach: 0.0,
+            cooldown: 50,
+            home_slack: 8.0,
+            chase_multiplier: 2.4,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+    // A brigand: a knight's sword without a knight's patience — a quicker
+    // swing (`brigand_slash`), less health, and it comes at you faster.
+    "brigand": StatBlock(
+        width: 22.0,
+        height: 30.0,
+        run_speed: 60.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 5,
+        iframe_ticks: 10,
+        attack: "brigand_slash",
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "coin", count: 2, chance: 1.0),
+            LootDrop(item: "leather_jerkin", count: 1, chance: 0.15),
+            LootDrop(item: "bread", count: 1, chance: 0.3),
+        ],
+        max_mana: 0,
+        mana_regen: 0,
+        ai: AiStats(
+            sight: 150.0,
+            sight_height: 36.0,
+            lose: 240.0,
+            lose_height: 120.0,
+            reach: 20.0,
+            cooldown: 60,
+            home_slack: 8.0,
+            chase_multiplier: 1.4,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+    // An archer: the mage's habits with a bow. It keeps to its range and looses
+    // arrows — faster than an ember and cheaper, so more of them — and has
+    // nothing at all for you up close.
+    "archer": StatBlock(
+        width: 22.0,
+        height: 30.0,
+        run_speed: 45.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 3,
+        iframe_ticks: 10,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "coin", count: 2, chance: 1.0),
+            LootDrop(item: "minor_potion", count: 1, chance: 0.2),
+        ],
+        max_mana: 3,
+        mana_regen: 14,
+        spell: "arrow",
+        ai: AiStats(
+            sight: 250.0,
+            sight_height: 40.0,
+            lose: 320.0,
+            lose_height: 120.0,
+            reach: 0.0,
+            cooldown: 60,
+            home_slack: 8.0,
+            chase_multiplier: 1.0,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+            cast_range: 230.0,
+        ),
+    ),
+    // Gorran Redhand, who leads the brigands and took the hermit's staff: a
+    // shield, and an axe that clears half a room. `guard` turns everything from
+    // the front while he stands ready; his cleave has a long wind-up, and that
+    // wind-up is the way in. A map gives him a death flag, and the palisade
+    // behind him opens on it.
+    "gorran": StatBlock(
+        width: 24.0,
+        height: 30.0,
+        run_speed: 50.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 18,
+        iframe_ticks: 8,
+        attack: "redhand_cleave",
+        guard: true,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "redhand_axe", count: 1, chance: 1.0),
+            LootDrop(item: "ossian_staff", count: 1, chance: 1.0),
+            LootDrop(item: "coin", count: 15, chance: 1.0),
+        ],
+        max_mana: 0,
+        mana_regen: 0,
+        ai: AiStats(
+            sight: 200.0,
+            sight_height: 40.0,
+            lose: 420.0,
+            lose_height: 140.0,
+            reach: 28.0,
+            cooldown: 55,
+            home_slack: 8.0,
+            chase_multiplier: 1.6,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+
+    // --- the Ark ---------------------------------------------------------------
+    //
+    // The Vael's ship, and what woke in it. Husks are warriors the Choir
+    // hollowed out — the knights of Ashford among them — so they are drawn from
+    // the knight's art, gone the Choir's colour. Drones and wisps are the
+    // machine itself.
+
+    // A husk: a warrior with nobody left inside, which is why it does not
+    // tire — a quick rake of a swing, over and over, and a fast walk.
+    "husk": StatBlock(
+        width: 22.0,
+        height: 30.0,
+        run_speed: 62.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 6,
+        iframe_ticks: 10,
+        attack: "husk_rake",
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "coin", count: 3, chance: 1.0),
+            LootDrop(item: "minor_potion", count: 1, chance: 0.2),
+        ],
+        max_mana: 0,
+        mana_regen: 0,
+        ai: AiStats(
+            sight: 170.0,
+            sight_height: 36.0,
+            lose: 260.0,
+            lose_height: 120.0,
+            reach: 20.0,
+            cooldown: 50,
+            home_slack: 8.0,
+            chase_multiplier: 1.6,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+    // A sentinel: a husk in Vael plate with a Vael shield. Slow, and the
+    // hardest thing in the Ark to hit from the front.
+    "sentinel": StatBlock(
+        width: 24.0,
+        height: 30.0,
+        run_speed: 38.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 10,
+        iframe_ticks: 10,
+        attack: "sentinel_slam",
+        guard: true,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "coin", count: 5, chance: 1.0),
+            LootDrop(item: "greater_potion", count: 1, chance: 0.25),
+        ],
+        max_mana: 0,
+        mana_regen: 0,
+        ai: AiStats(
+            sight: 150.0,
+            sight_height: 36.0,
+            lose: 240.0,
+            lose_height: 120.0,
+            reach: 24.0,
+            cooldown: 85,
+            home_slack: 8.0,
+            chase_multiplier: 1.4,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+    // One of the Choir's eyes: a flyer that shoots. It keeps its distance and
+    // throws aimed bolts — at you, wherever you are, not merely straight
+    // ahead — slow enough to step out of, and it has almost nothing to take a
+    // hit with.
+    "drone": StatBlock(
+        width: 16.0,
+        height: 16.0,
+        run_speed: 55.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 3,
+        iframe_ticks: 10,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "coin", count: 1, chance: 0.6),
+            LootDrop(item: "mana_potion", count: 1, chance: 0.15),
+        ],
+        max_mana: 4,
+        mana_regen: 14,
+        spell: "zap",
+        ai: AiStats(
+            sight: 220.0,
+            sight_height: 160.0,
+            lose: 340.0,
+            lose_height: 240.0,
+            reach: 0.0,
+            cooldown: 40,
+            home_slack: 4.0,
+            chase_multiplier: 1.2,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+            flying: true,
+            cast_range: 200.0,
+        ),
+    ),
+    // An arc wisp: loose lightning. A bat that is faster and meaner, and goes
+    // out at one touch of anything.
+    "wisp": StatBlock(
+        width: 12.0,
+        height: 12.0,
+        run_speed: 60.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 1,
+        iframe_ticks: 10,
+        contact: Contact(damage: 1, knockback: (200.0, -140.0), hitstun: 14),
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [],
+        max_mana: 0,
+        mana_regen: 0,
+        ai: AiStats(
+            sight: 170.0,
+            sight_height: 130.0,
+            lose: 300.0,
+            lose_height: 220.0,
+            reach: 0.0,
+            cooldown: 40,
+            home_slack: 4.0,
+            chase_multiplier: 2.8,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+            flying: true,
+        ),
+    ),
+    // The Choir: the thing that woke in the Vael's machines when their sun
+    // flared, in the shell it wears at the Heart. It hangs over its hall and
+    // throws aimed bolts faster than anything else — and what touches it is
+    // thrown off whatever it was standing on, which up there is a catwalk.
+    // The throw is the punishment, so a touch costs a heart like any other
+    // bite. Forty points of health, and a map gives it the flag the ending is
+    // built on.
+    "choir": StatBlock(
+        width: 40.0,
+        height: 36.0,
+        run_speed: 34.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 40,
+        iframe_ticks: 8,
+        contact: Contact(damage: 1, knockback: (260.0, -200.0), hitstun: 18),
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [],
+        max_mana: 10,
+        mana_regen: 34,
+        spell: "judgement",
+        ai: AiStats(
+            sight: 420.0,
+            sight_height: 300.0,
+            lose: 900.0,
+            lose_height: 600.0,
+            reach: 0.0,
+            cooldown: 60,
+            home_slack: 6.0,
+            chase_multiplier: 1.3,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+            flying: true,
+            cast_range: 320.0,
+        ),
+    ),
+
+    // --- people ------------------------------------------------------------------
+    //
+    // Friendly kinds: each a stat block and a dialogue file, standing still
+    // (`run_speed: 0`) where the map puts them.
+
+    // Old Ossian, the hermit of the Thornwood: a knight once, before he walked
+    // away from it, which is why he wears the knight's art gone grey. He has
+    // the spark too, and teaches what he knows.
+    "hermit": StatBlock(
+        width: 22.0,
+        height: 30.0,
+        run_speed: 0.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 4,
+        iframe_ticks: 30,
+        friendly: true,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [],
+        max_mana: 0,
+        mana_regen: 0,
+        interact: Interact(prompt: "talk", dialogue: "hermit"),
+        ai: AiStats(
+            sight: 0.0,
+            sight_height: 36.0,
+            lose: 0.0,
+            lose_height: 0.0,
+            reach: 0.0,
+            cooldown: 0,
+            home_slack: 8.0,
+            chase_multiplier: 1.0,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+    // Ysolde of Varr: another warrior the Vael took, from another world, drawn
+    // from the player's own art because she is what the player is.
+    "ysolde": StatBlock(
+        width: 20.0,
+        height: 34.0,
+        run_speed: 0.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 4,
+        iframe_ticks: 30,
+        friendly: true,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [],
+        max_mana: 0,
+        mana_regen: 0,
+        interact: Interact(prompt: "talk", dialogue: "ysolde"),
+        ai: AiStats(
+            sight: 0.0,
+            sight_height: 36.0,
+            lose: 0.0,
+            lose_height: 0.0,
+            reach: 0.0,
+            cooldown: 0,
+            home_slack: 8.0,
+            chase_multiplier: 1.0,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+    // The Vael: the Archivist, who tells you what happened to his people; the
+    // Arbiter, who keeps the Circle; the Quartermaster, who keeps a shop. Tall,
+    // robed, with a lantern where a head would be.
+    "archivist": StatBlock(
+        width: 14.0,
+        height: 38.0,
+        run_speed: 0.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 4,
+        iframe_ticks: 30,
+        friendly: true,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [],
+        max_mana: 0,
+        mana_regen: 0,
+        interact: Interact(prompt: "talk", dialogue: "archivist"),
+        ai: AiStats(
+            sight: 0.0,
+            sight_height: 36.0,
+            lose: 0.0,
+            lose_height: 0.0,
+            reach: 0.0,
+            cooldown: 0,
+            home_slack: 8.0,
+            chase_multiplier: 1.0,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+    "arbiter": StatBlock(
+        width: 14.0,
+        height: 38.0,
+        run_speed: 0.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 4,
+        iframe_ticks: 30,
+        friendly: true,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [],
+        max_mana: 0,
+        mana_regen: 0,
+        interact: Interact(prompt: "talk", dialogue: "arbiter"),
+        ai: AiStats(
+            sight: 0.0,
+            sight_height: 36.0,
+            lose: 0.0,
+            lose_height: 0.0,
+            reach: 0.0,
+            cooldown: 0,
+            home_slack: 8.0,
+            chase_multiplier: 1.0,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+    "quartermaster": StatBlock(
+        width: 14.0,
+        height: 38.0,
+        run_speed: 0.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 4,
+        iframe_ticks: 30,
+        friendly: true,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [],
+        max_mana: 0,
+        mana_regen: 0,
+        interact: Interact(prompt: "trade", dialogue: "quartermaster"),
+        ai: AiStats(
+            sight: 0.0,
+            sight_height: 36.0,
+            lose: 0.0,
+            lose_height: 0.0,
+            reach: 0.0,
+            cooldown: 0,
+            home_slack: 8.0,
+            chase_multiplier: 1.0,
+            lookahead: 6.0,
+            floor_probe: 4.0,
+        ),
+    ),
+
+    // --- the Proving Circle's champions ------------------------------------
+    //
+    // Warriors the Vael took from other worlds, and what the player is up
+    // against in the Circle: not enemies but rivals, each an avatar with the
+    // player's own kit — the same controller, the same jump, the same combo
+    // engine — and a brain at its controls instead of a keyboard. A rival is
+    // a flat group like anyone's, an `avatar` group like the player's, and a
+    // `brain` (see `BrainStats` in src/assets.rs); there is no `ai`, because
+    // nothing about it walks a route.
+    //
+    // What makes each one itself is what it swings (`attack`, a style from
+    // attacks.ron), what it throws, how fast it reacts, and whether it takes
+    // to the air.
+
+    // Kesh of the Glass Dunes: quick feet and a quicker blade. Faster than
+    // the player on the ground, a combo that comes out in two thirds of the
+    // time, and fragile for it — two clean combos put her down.
+    "kesh": StatBlock(
+        width: 20.0,
+        height: 34.0,
+        run_speed: 225.0,
+        gravity: 1400.0,
+        max_health: 8,
+        max_fall: 900.0,
+        iframe_ticks: 10,
+        attack: "saber_1",
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "glass_saber", count: 1, chance: 1.0),
+        ],
+        max_mana: 0,
+        mana_regen: 0,
+        avatar: AvatarStats(
+            accel: 1700.0,
+            decel: 1900.0,
+            jump_speed: 520.0,
+            double_jump_speed: 470.0,
+            low_jump_gravity: 1800.0,
+            max_air_jumps: 1,
+            coyote_ticks: 6,
+            jump_buffer_ticks: 6,
+            wall_slide_speed: 70.0,
+            wall_jump_push: 260.0,
+            wall_jump_speed: 480.0,
+            wall_coyote_ticks: 6,
+            drop_ticks: 8,
+            slide_ticks: 20,
+            slide_speed: 300.0,
+            slide_cooldown: 20,
+            death_ticks: 36,
+            air_attack: "player_air",
+            plunge_attack: "player_plunge",
+            plunge_hover_ticks: 10,
+            plunge_speed: 1000.0,
+            plunge_impact_ticks: 20,
+        ),
+        brain: BrainStats(
+            sight: 240.0,
+            reaction: 8,
+            aerial: true,
+        ),
+    ),
+    // Brakka the Unbroken: a mountain with a maul. Slow feet and a slow mind —
+    // the slowest reactions in the Circle — and every blow of the maul
+    // (`maul_1`) throws you across the pit. Unbroken is the word:
+    // `steadfast`, so a combo does not stun him, and he swings back straight
+    // through yours. Hit him, and be somewhere else.
+    "brakka": StatBlock(
+        width: 22.0,
+        height: 34.0,
+        run_speed: 165.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 12,
+        iframe_ticks: 10,
+        attack: "maul_1",
+        steadfast: true,
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "brakka_maul", count: 1, chance: 1.0),
+        ],
+        max_mana: 0,
+        mana_regen: 0,
+        avatar: AvatarStats(
+            accel: 1100.0,
+            decel: 1500.0,
+            jump_speed: 520.0,
+            double_jump_speed: 470.0,
+            low_jump_gravity: 1800.0,
+            max_air_jumps: 1,
+            coyote_ticks: 6,
+            jump_buffer_ticks: 6,
+            wall_slide_speed: 70.0,
+            wall_jump_push: 260.0,
+            wall_jump_speed: 480.0,
+            wall_coyote_ticks: 6,
+            drop_ticks: 8,
+            slide_ticks: 20,
+            slide_speed: 300.0,
+            slide_cooldown: 20,
+            death_ticks: 36,
+            air_attack: "player_air",
+            plunge_attack: "player_plunge",
+            plunge_hover_ticks: 10,
+            plunge_speed: 1000.0,
+            plunge_impact_ticks: 20,
+        ),
+        brain: BrainStats(
+            sight: 260.0,
+            reaction: 13,
+        ),
+    ),
+    // Morwen of the Hollow Hills: a hexblade — a sword and a spell, and she
+    // knows which the distance calls for. From range she throws `hex`; up close
+    // she swings the plain combo. She takes to the air as readily as you do.
+    "morwen": StatBlock(
+        width: 20.0,
+        height: 34.0,
+        run_speed: 200.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        max_health: 10,
+        iframe_ticks: 10,
+        attack: "player_slash1",
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "tome_seeking", count: 1, chance: 1.0),
+        ],
+        max_mana: 8,
+        mana_regen: 30,
+        spell: "hex",
+        avatar: AvatarStats(
+            accel: 1500.0,
+            decel: 1800.0,
+            jump_speed: 520.0,
+            double_jump_speed: 470.0,
+            low_jump_gravity: 1800.0,
+            max_air_jumps: 1,
+            coyote_ticks: 6,
+            jump_buffer_ticks: 6,
+            wall_slide_speed: 70.0,
+            wall_jump_push: 260.0,
+            wall_jump_speed: 480.0,
+            wall_coyote_ticks: 6,
+            drop_ticks: 8,
+            slide_ticks: 20,
+            slide_speed: 300.0,
+            slide_cooldown: 20,
+            death_ticks: 36,
+            air_attack: "player_air",
+            plunge_attack: "player_plunge",
+            plunge_hover_ticks: 10,
+            plunge_speed: 1000.0,
+            plunge_impact_ticks: 20,
+        ),
+        brain: BrainStats(
+            sight: 300.0,
+            reaction: 9,
+            cast_range: 220.0,
+            aerial: true,
+        ),
+    ),
+    // The Nameless: a champion the Choir got to first, fighting on with nobody
+    // inside — your own kit, your own spell, and reactions no person has. The
+    // Circle keeps it where nobody is meant to find it.
+    "nameless": StatBlock(
+        width: 20.0,
+        height: 34.0,
+        run_speed: 210.0,
+        gravity: 1400.0,
+        max_fall: 900.0,
+        // A mirror: about what a player who has found everything so far has.
+        max_health: 9,
+        iframe_ticks: 10,
+        attack: "player_slash1",
+        // Your own numbers exactly: what makes it the hardest fight in the
+        // game is how fast it reacts, not how hard it hits.
+        damage_bonus: 0,
+        inventory_slots: 0,
+        loot: [
+            LootDrop(item: "mirror_shard", count: 1, chance: 1.0),
+        ],
+        max_mana: 6,
+        mana_regen: 26,
+        spell: "shock",
+        avatar: AvatarStats(
+            accel: 1700.0,
+            decel: 1900.0,
+            jump_speed: 520.0,
+            double_jump_speed: 470.0,
+            low_jump_gravity: 1800.0,
+            max_air_jumps: 1,
+            coyote_ticks: 6,
+            jump_buffer_ticks: 6,
+            wall_slide_speed: 70.0,
+            wall_jump_push: 260.0,
+            wall_jump_speed: 480.0,
+            wall_coyote_ticks: 6,
+            drop_ticks: 8,
+            slide_ticks: 20,
+            slide_speed: 300.0,
+            slide_cooldown: 20,
+            death_ticks: 36,
+            air_attack: "player_air",
+            plunge_attack: "player_plunge",
+            plunge_hover_ticks: 10,
+            plunge_speed: 1000.0,
+            plunge_impact_ticks: 20,
+        ),
+        brain: BrainStats(
+            // Short, for a sealed cell: it wakes when you are well inside, and
+            // never for someone fighting — and jumping — in the pit under its
+            // floor. (A brain's sight is a radius, and floors do not block it.)
+            sight: 120.0,
+            reaction: 5,
+            cast_range: 200.0,
+            aerial: true,
         ),
     ),
 })

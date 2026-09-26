@@ -1,0 +1,7 @@
+// A husk — a warrior the Choir hollowed out, in the knight's art because some
+// of them were Ashford's knights, gone the Choir's sick teal.
+ClipSet(
+    base: "knight",
+    tint: (104, 224, 204),
+    clips: {},
+)

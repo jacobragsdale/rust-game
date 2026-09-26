@@ -18,6 +18,9 @@
 //! cargo run --bin sheet -- player --grid     # the raw sheet, cells numbered
 //!                                            # row-major, for deriving a
 //!                                            # layout from a new art pack
+//! cargo run --bin sheet -- --image items/potion_red   # any one image, PNG or
+//!                                            # pixel art, blown up to look at
+//! cargo run --bin sheet -- --image tile_castle --cell 32x32
 //! ```
 
 use std::path::PathBuf;
@@ -30,10 +33,14 @@ use supergame::assets::{Assets, Clip, ClipSet};
 
 const USAGE: &str = "\
 usage: sheet <clip-set> [options]
+       sheet --image <name> [--cell WxH] [options]
 
   <clip-set>       name under assets/data/animations/, e.g. player, knight
   --clip <name>    render only this clip
   --grid           also render the raw sheet with a cell grid
+  --image <name>   render one image under assets/graphics/ (a .png, or a .ron
+                   of pixel art), instead of a clip set
+  --cell <WxH>     with --image: draw a cell grid of this size over it
   --scale <n>      pixel zoom (default 5)
   --out <dir>      output directory (default target/sheets/<clip-set>)
   -h, --help       show this help
@@ -49,6 +56,8 @@ const RULE_TEN: Rgba<u8> = Rgba([130, 120, 170, 255]);
 
 struct Args {
     set: String,
+    image: Option<String>,
+    cell: Option<(u32, u32)>,
     clip: Option<String>,
     grid: bool,
     scale: u32,
@@ -58,6 +67,8 @@ struct Args {
 fn parse_args() -> anyhow::Result<Option<Args>> {
     let mut argv = std::env::args().skip(1);
     let mut set = None;
+    let mut image = None;
+    let mut cell = None;
     let mut clip = None;
     let mut grid = false;
     let mut scale = 5;
@@ -67,6 +78,16 @@ fn parse_args() -> anyhow::Result<Option<Args>> {
         match arg.as_str() {
             "-h" | "--help" => return Ok(None),
             "--clip" => clip = Some(argv.next().context("--clip needs a name")?),
+            "--image" => image = Some(argv.next().context("--image needs a name")?),
+            "--cell" => {
+                let raw = argv.next().context("--cell needs WxH")?;
+                let (w, h) = raw
+                    .split_once('x')
+                    .with_context(|| format!("`{raw}` is not WxH"))?;
+                let (w, h): (u32, u32) = (w.parse()?, h.parse()?);
+                anyhow::ensure!(w > 0 && h > 0, "a cell must have a size");
+                cell = Some((w, h));
+            }
             "--grid" => grid = true,
             "--scale" => {
                 let raw = argv.next().context("--scale needs a number")?;
@@ -82,11 +103,15 @@ fn parse_args() -> anyhow::Result<Option<Args>> {
         }
     }
 
-    let Some(set) = set else {
-        bail!("which clip set?\n\n{USAGE}");
+    let set = match (set, &image) {
+        (Some(set), _) => set,
+        (None, Some(_)) => String::new(),
+        (None, None) => bail!("which clip set?\n\n{USAGE}"),
     };
     Ok(Some(Args {
         set,
+        image,
+        cell,
         clip,
         grid,
         scale,
@@ -111,6 +136,9 @@ fn run() -> anyhow::Result<()> {
     };
 
     let mut assets = Assets::new();
+    if let Some(name) = &args.image {
+        return render_image(&assets, name, &args);
+    }
     let set = assets
         .clip_set(&args.set)
         .with_context(|| format!("failed to load clip set `{}`", args.set))?;
@@ -179,6 +207,48 @@ fn run() -> anyhow::Result<()> {
     }
 
     println!("\n{rendered} clip(s) -> {}", dir.display());
+    Ok(())
+}
+
+/// One image, blown up — with a cell grid over it when `--cell` says how big a
+/// cell is. The way to look at pixel art written as text, or at a tileset.
+fn render_image(assets: &Assets, name: &str, args: &Args) -> anyhow::Result<()> {
+    let image = assets
+        .decode_image(name, None)
+        .with_context(|| format!("failed to load image `{name}`"))?;
+    let out = match args.cell {
+        Some((w, h)) => render_grid(&image, w, h, args.scale.max(2)),
+        None => {
+            let mut out =
+                RgbaImage::from_pixel(image.width() * args.scale, image.height() * args.scale, BG);
+            blit(
+                &image,
+                &mut out,
+                0,
+                0,
+                image.width(),
+                image.height(),
+                0,
+                0,
+                args.scale,
+            );
+            out
+        }
+    };
+    let dir = args
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("target/sheets/_images"));
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    let path = dir.join(format!("{}.png", name.replace('/', "_")));
+    out.save(&path)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    println!(
+        "  {name}  {}x{}  -> {}",
+        image.width(),
+        image.height(),
+        path.display()
+    );
     Ok(())
 }
 

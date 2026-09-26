@@ -8,6 +8,8 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub display: DisplayConfig,
+    #[serde(default)]
+    pub game: GameConfig,
 }
 
 impl Config {
@@ -28,4 +30,24 @@ impl Config {
 pub struct DisplayConfig {
     pub height: f32,
     pub width: f32,
+}
+
+/// Where a new game begins. Content rather than a literal in the menu code, so
+/// moving the opening of the story is an edit here.
+#[derive(Clone, Debug, Deserialize)]
+pub struct GameConfig {
+    #[serde(default = "default_start_map")]
+    pub start_map: String,
+}
+
+impl Default for GameConfig {
+    fn default() -> Self {
+        GameConfig {
+            start_map: default_start_map(),
+        }
+    }
+}
+
+fn default_start_map() -> String {
+    "maps/keep.ron".to_string()
 }

@@ -184,7 +184,24 @@ fn shipped_clip_sets_cover_every_state_their_selector_can_reach() {
     let mut assets = Assets::new();
     let mut problems: Vec<String> = Vec::new();
 
-    let expected: [(&str, &[&str]); 2] = [("player", AVATAR_CLIPS), ("knight", PATROL_CLIPS)];
+    // The player, and every kind a map can place — each of which walks (or
+    // flies) through the patrol selector, except a rival, which is an avatar
+    // and goes through the player's.
+    let stats = supergame::assets::StatTable::shipped();
+    let expected: Vec<(&str, &[&str])> = std::iter::once(("player", AVATAR_CLIPS))
+        .chain(
+            supergame::ecs::spawn::kinds(&stats)
+                .into_iter()
+                .map(|kind| {
+                    let block = stats.get(kind).expect("a listed kind has a block");
+                    if supergame::ecs::spawn::rival(&block) {
+                        (kind, AVATAR_CLIPS)
+                    } else {
+                        (kind, PATROL_CLIPS)
+                    }
+                }),
+        )
+        .collect();
     for (set_name, required) in expected {
         let set = assets
             .clip_set(set_name)

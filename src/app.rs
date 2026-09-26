@@ -10,14 +10,28 @@ use ggez::{Context, GameResult};
 
 use crate::assets::Assets;
 use crate::config::Config;
+use crate::render::gpu::GpuRenderer;
+use crate::render::Frame;
 use crate::save::FileStore;
 use crate::scenes::{main_menu::MainMenuScene, Resources, Scene, Transition};
 use crate::sim::TICKS_PER_SECOND;
 use crate::systems::input::InputLatch;
 
+/// The most fixed ticks one frame may run to catch up.
+///
+/// The accumulator is otherwise unbounded: a hitch — a first frame that spent
+/// a quarter of a second decoding PNGs, a window dragged between screens —
+/// banks the missed time and pays it back as a burst of ticks the player never
+/// saw, which in a platformer is a jump that happened off screen. Past this the
+/// game runs slow for a frame instead, which is the lesser wrong.
+const MAX_TICKS_PER_FRAME: u32 = 4;
+
 pub struct App {
     scenes: Vec<Box<dyn Scene>>,
     resources: Resources,
+    renderer: GpuRenderer,
+    /// Frames drawn, for `SUPERGAME_CAPTURE`.
+    frames: u32,
 }
 
 impl App {
@@ -34,17 +48,13 @@ impl App {
         // skipping the menu. SUPERGAME_MAP picks which one — a testbed map is
         // often the only way to get a specific thing on screen to look at.
         //
-        // SUPERGAME_PAUSE=1 opens the pause menu on top of it. A menu is the
-        // one part of the game no tape can reach — a tape presses actions, and
-        // these are window keys — so booting into it is how it gets looked at
-        // at all.
+        // SUPERGAME_PAUSE=1 opens the pause menu on top of it. (Headless, the
+        // same picture is `cargo run --bin render -- --map <m> --pause`.)
         if std::env::var("SUPERGAME_SCENE").as_deref() == Ok("adventure") {
-            let map =
-                std::env::var("SUPERGAME_MAP").unwrap_or_else(|_| "maps/castle.ron".to_string());
-            match crate::scenes::adventure::AdventureScene::new(ctx, &mut resources, &map) {
+            let map = std::env::var("SUPERGAME_MAP")
+                .unwrap_or_else(|_| resources.config.game.start_map.clone());
+            match crate::scenes::adventure::AdventureScene::new(&mut resources, &map) {
                 Ok(scene) => {
-                    // Built before the scene is moved, and pushed after it, so
-                    // the overlay ends up on top of the world it describes.
                     let overlay = std::env::var("SUPERGAME_PAUSE")
                         .is_ok_and(|v| v != "0")
                         .then(|| Box::new(scene.pause()) as Box<dyn Scene>);
@@ -55,11 +65,16 @@ impl App {
             }
         }
 
-        App { scenes, resources }
+        App {
+            scenes,
+            resources,
+            renderer: GpuRenderer::new(ctx),
+            frames: 0,
+        }
     }
 
     fn initial_stack() -> Vec<Box<dyn Scene>> {
-        vec![Box::new(MainMenuScene)]
+        vec![Box::new(MainMenuScene::default())]
     }
 
     fn apply(&mut self, transition: Transition) {
@@ -97,7 +112,13 @@ impl App {
 
 impl EventHandler for App {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
+        let mut ticks = 0;
         while ctx.time.check_update_time(TICKS_PER_SECOND) {
+            ticks += 1;
+            if ticks > MAX_TICKS_PER_FRAME {
+                // Drain what is left of the backlog without running it.
+                continue;
+            }
             let start = self.first_active(|s| s.updates_below());
             let top = self.scenes.len() - 1;
             let mut transition = Transition::None;
@@ -115,15 +136,29 @@ impl EventHandler for App {
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         let start = self.first_active(|s| s.draws_below());
-        // Offscreen passes must finish before the frame canvas opens.
-        for i in start..self.scenes.len() {
-            self.scenes[i].pre_draw(ctx, &mut self.resources)?;
+        let mut frame = Frame::default();
+        for scene in &self.scenes[start..] {
+            scene.draw(&mut frame, &self.resources);
+        }
+        self.renderer
+            .draw(ctx, &mut self.resources.assets, &frame)?;
+
+        // Dev hook: SUPERGAME_CAPTURE=out.png saves the thirtieth frame exactly
+        // as the GPU drew it and quits — a screenshot with no window manager,
+        // no colour profile and no scaling in the way.
+        self.frames += 1;
+        if self.frames == 30 {
+            if let Ok(path) = std::env::var("SUPERGAME_CAPTURE") {
+                let image = self.renderer.capture(ctx)?;
+                image
+                    .save(&path)
+                    .map_err(|e| ggez::GameError::CustomError(format!("{path}: {e}")))?;
+                ctx.request_quit();
+            }
         }
 
         let mut canvas = Canvas::from_frame(ctx, Color::BLACK);
-        for i in start..self.scenes.len() {
-            self.scenes[i].draw(ctx, &mut canvas, &mut self.resources)?;
-        }
+        self.renderer.present(ctx, &mut canvas);
         canvas.finish(ctx)
     }
 
@@ -131,18 +166,30 @@ impl EventHandler for App {
         if repeated {
             return Ok(());
         }
-        match input.keycode {
-            Some(VirtualKeyCode::Escape) => ctx.request_quit(),
-            Some(key) => {
-                // Latch here, not in the tick loop: this is the only place
-                // that sees every press exactly once. (`repeated` is filtered
-                // above, so holding the key does not re-arm it.)
-                self.resources.input.key_down(key);
-                let top = self.scenes.len() - 1;
-                let transition = self.scenes[top].key_down(ctx, &mut self.resources, key);
-                self.apply(transition);
-            }
-            None => {}
+        // Escape is not special here: it is `cancel`, and backs out of
+        // whatever is open (see `ACTIONS`). Quitting is the title screen's.
+        if let Some(key) = input.keycode {
+            // Latch here, not in the tick loop: this is the only place that
+            // sees every press exactly once. (`repeated` is filtered above,
+            // so holding the key does not re-arm it.)
+            self.resources.input.key_down(key);
+            let top = self.scenes.len() - 1;
+            let transition = self.scenes[top].key_down(ctx, &mut self.resources, key);
+            self.apply(transition);
+        }
+        Ok(())
+    }
+
+    /// Losing the window pauses the game, the way tabbing away from any game
+    /// should: the world is not left running with nobody at the keys.
+    fn focus_event(&mut self, ctx: &mut Context, gained: bool) -> GameResult {
+        // A capture is taken from a window launched from a terminal, which
+        // rarely has focus — pausing it would capture the pause menu.
+        if !gained && std::env::var_os("SUPERGAME_CAPTURE").is_none() {
+            let top = self.scenes.len() - 1;
+            let transition =
+                self.scenes[top].key_down(ctx, &mut self.resources, VirtualKeyCode::Pause);
+            self.apply(transition);
         }
         Ok(())
     }

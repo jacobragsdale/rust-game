@@ -1,0 +1,101 @@
+// Effects: what things look like when they happen — sparks off a hit, the
+// puff a death leaves, dust off a landing.
+//
+// Presentation only. The view spawns these from what changed in the world
+// between two ticks and never tells the simulation anything, so nothing here
+// can move a trace or a tape: tune freely, and look at the result with
+//   cargo run --bin render -- --tape tapes/knight_fights.tape --every 20
+//
+// Each is a `Burst`: `count` square particles launched from one point, each
+// picking its speed (px/s), direction (degrees — 0 right, 90 down, 270 up),
+// life (ticks), size (px) and colour uniformly from what is given, then
+// falling with `gravity` (px/s², negative rises) and fading over the second
+// half of its life.
+//
+// The names are the view's — `CUES` in src/view/fx.rs — and tests/data.rs
+// checks every one is defined here.
+Effects({
+    // A blow landing on anything but the player: a white-hot flick of sparks,
+    // over in a quarter of a second.
+    "hit": Burst(
+        count: 7,
+        speed: (70.0, 170.0),
+        angle: (0.0, 360.0),
+        life: (8, 16),
+        size: (1.0, 2.0),
+        gravity: 250.0,
+        colours: [(255, 255, 255), (255, 230, 150), (255, 190, 90)],
+    ),
+    // The player hurt: the same shape, in red, so which side of a trade you
+    // were on reads without looking at the bar.
+    "hurt": Burst(
+        count: 8,
+        speed: (60.0, 150.0),
+        angle: (0.0, 360.0),
+        life: (10, 18),
+        size: (1.0, 2.0),
+        gravity: 250.0,
+        colours: [(255, 90, 90), (230, 40, 60), (255, 200, 200)],
+    ),
+    // Something dying: a slow puff that rises and thins.
+    "death": Burst(
+        count: 16,
+        speed: (15.0, 70.0),
+        angle: (190.0, 350.0),
+        life: (24, 44),
+        size: (2.0, 3.0),
+        gravity: -30.0,
+        colours: [(190, 186, 200), (140, 136, 156), (230, 226, 236)],
+    ),
+    // Touching down: a few grains kicked out sideways along the floor.
+    "land": Burst(
+        count: 5,
+        speed: (25.0, 60.0),
+        angle: (195.0, 345.0),
+        life: (8, 14),
+        size: (1.0, 2.0),
+        gravity: 140.0,
+        colours: [(180, 170, 150), (140, 130, 115)],
+    ),
+    // A bolt ending — against a wall, a body, or simply running out.
+    "bolt": Burst(
+        count: 6,
+        speed: (30.0, 110.0),
+        angle: (0.0, 360.0),
+        life: (6, 12),
+        size: (1.0, 2.0),
+        gravity: 0.0,
+        colours: [(255, 240, 180), (255, 200, 90), (160, 210, 255)],
+    ),
+    // Something going into the bag: a small gold glint that floats up.
+    "pickup": Burst(
+        count: 8,
+        speed: (20.0, 55.0),
+        angle: (200.0, 340.0),
+        life: (14, 24),
+        size: (1.0, 2.0),
+        gravity: -40.0,
+        colours: [(255, 236, 120), (255, 255, 220)],
+    ),
+    // A checkpoint taking: a column of flame-coloured sparks.
+    "checkpoint": Burst(
+        count: 20,
+        speed: (30.0, 90.0),
+        angle: (240.0, 300.0),
+        life: (20, 36),
+        size: (1.0, 2.0),
+        gravity: -20.0,
+        colours: [(255, 214, 120), (247, 118, 34), (255, 255, 220)],
+    ),
+    // A blow turned by a shield: a hard, bright spray of steel off the rim,
+    // thrown back toward whoever struck it.
+    "block": Burst(
+        count: 9,
+        speed: (80.0, 190.0),
+        angle: (150.0, 390.0),
+        life: (6, 12),
+        size: (1.0, 2.0),
+        gravity: 300.0,
+        colours: [(210, 226, 255), (255, 255, 255), (140, 170, 220)],
+    ),
+})

@@ -1,0 +1,9 @@
+// Brann the Pedlar — the knight's art (`base`), in a merchant's mustard, the
+// same way the villager wears it in green. He stands at his stall, so only
+// `idle` is ever seen; the rest are the knight's, for the states every walker
+// can reach.
+ClipSet(
+    base: "knight",
+    tint: (255, 214, 130),
+    clips: {},
+)

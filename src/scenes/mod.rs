@@ -5,14 +5,15 @@ pub mod adventure;
 pub mod dialogue;
 pub mod inventory;
 pub mod main_menu;
+pub mod menu;
 pub mod pause;
 
-use ggez::graphics::Canvas;
 use ggez::winit::event::VirtualKeyCode;
 use ggez::{Context, GameResult};
 
 use crate::assets::Assets;
 use crate::config::Config;
+use crate::render::Frame;
 use crate::save::FileStore;
 use crate::systems::input::InputLatch;
 
@@ -53,14 +54,11 @@ pub trait Scene {
     /// Runs once per fixed tick while this scene is active.
     fn update(&mut self, ctx: &mut Context, res: &mut Resources) -> GameResult<Transition>;
 
-    /// Offscreen rendering hook, called before the frame canvas is created.
-    /// Scenes that render to an internal canvas (pixel-art scaling) do that
-    /// work here; `draw` then just composites into the frame.
-    fn pre_draw(&mut self, _ctx: &mut Context, _res: &mut Resources) -> GameResult {
-        Ok(())
-    }
-
-    fn draw(&mut self, ctx: &mut Context, canvas: &mut Canvas, res: &mut Resources) -> GameResult;
+    /// Add this scene's picture to `frame`, which already holds everything
+    /// drawn by the scenes below it. No graphics context: a frame is data,
+    /// and [`crate::render`] is what turns it into pixels — which is why a
+    /// menu can be looked at with `cargo run --bin render` like anything else.
+    fn draw(&self, frame: &mut Frame, res: &Resources);
 
     /// One-shot key presses (menu navigation, pause). Only the top scene
     /// receives these; per-tick movement input is polled in `update`.

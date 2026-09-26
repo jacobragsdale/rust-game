@@ -72,7 +72,7 @@ use hecs::World;
 use crate::assets::{
     DialogueChoice, DialogueCondition, DialogueEffect, DialogueGraph, DialogueNode, ItemTable,
 };
-use crate::ecs::components::{Health, InteractTarget, Interactable, Inventory, Position, Size};
+use crate::ecs::components::{Health, InteractTarget, Interactable, Position, Size};
 use crate::physics::Aabb;
 use crate::sim::event::GameEvent;
 use crate::systems::input::{Action, ActionSet, PlayerInput};
@@ -173,8 +173,14 @@ pub fn nearest_interactable(world: &World) -> Option<Prompt> {
 /// inventory is whoever gets the prompt — the same entity a `GiveItem` would
 /// hand something to. Two different answers to "who is the player" is exactly
 /// how a reward ends up in somebody else's pocket.
+///
+/// Nobody is in reach of the dead: the prompt clears for the length of the
+/// death freeze, so a corpse is never offered a conversation.
 fn player_reach(world: &World) -> Option<(Aabb, Vec2)> {
     let holder = inventory::holder(world)?;
+    if world.get::<&Health>(holder).is_ok_and(|h| h.dead()) {
+        return None;
+    }
     let pos = world.get::<&Position>(holder).ok()?.0;
     let size = world.get::<&Size>(holder).ok()?.0;
     let box_ = Aabb::new(pos.x, pos.y, size.x, size.y);
@@ -365,6 +371,21 @@ pub fn step_conversation(
     // Cloned out of the graph, because applying the effects borrows the world
     // mutably and the choice is read out of an `Arc` the conversation holds.
     let choice = talk.node().choices[index].clone();
+
+    // **All of a reply's effects happen, or none of them do.** A price and
+    // the thing it buys are two effects, and applied one at a time a full bag
+    // took the coins and then refused the goods. So the item effects are tried
+    // on a copy of the bag first; if any would fail, the reply is not taken —
+    // the bag's refusal is announced the way a full bag always is, and the
+    // conversation stays where it was so the player can make room and ask
+    // again.
+    if let Some(refused) = refusal(world, &choice.effects) {
+        if let Some(item) = refused {
+            events.push(GameEvent::InventoryFull { item });
+        }
+        return false;
+    }
+
     events.push(GameEvent::ChoiceTaken {
         node: talk.node.clone(),
         index,
@@ -380,6 +401,50 @@ pub fn step_conversation(
         }
         None => true,
     }
+}
+
+/// Why a reply's item effects could not all be applied, if they could not:
+/// `Some(Some(item))` for a gift the bag has no room for, `Some(None)` for a
+/// taking the player cannot cover. `None` when everything fits.
+///
+/// Worked out on a copy of the bag, in the order the effects are written, so
+/// "take three coins, then give a potion" is judged on the bag as it will be
+/// after the coins are gone — which is what lets a purchase free the slot the
+/// thing it buys goes into.
+fn refusal(world: &World, effects: &[DialogueEffect]) -> Option<Option<String>> {
+    let holder = inventory::holder(world)?;
+    let mut bag = world
+        .get::<&crate::ecs::components::Inventory>(holder)
+        .ok()
+        .map(|bag| crate::ecs::components::Inventory::clone(&bag))?;
+    let worn: Vec<String> = world
+        .get::<&crate::ecs::components::Equipment>(holder)
+        .map(|gear| gear.slots.values().cloned().collect())
+        .unwrap_or_default();
+    let mut worn = worn;
+    for effect in effects {
+        match effect {
+            DialogueEffect::GiveItem(item, count) => {
+                if !bag.add(item, *count) {
+                    return Some(Some(item.clone()));
+                }
+            }
+            DialogueEffect::TakeItem(item, count) => {
+                let from_bag = bag.count(item).min(*count);
+                bag.remove(item, from_bag);
+                let mut owed = count - from_bag;
+                while owed > 0 {
+                    let Some(at) = worn.iter().position(|id| id == item) else {
+                        return Some(None);
+                    };
+                    worn.remove(at);
+                    owed -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Which of a node's choices may be offered, as authored indices.
@@ -403,6 +468,9 @@ fn available(node: &DialogueNode, world: &World, flags: &BTreeMap<String, i64>) 
 fn holds(condition: &DialogueCondition, world: &World, flags: &BTreeMap<String, i64>) -> bool {
     match condition {
         DialogueCondition::HasItem(item) => carried(world, item) > 0,
+        DialogueCondition::HasItems(item, count) => carried(world, item) >= *count,
+        DialogueCondition::Not(inner) => !holds(inner, world, flags),
+        DialogueCondition::Any(inner) => inner.iter().any(|c| holds(c, world, flags)),
         DialogueCondition::FlagEq(name, value) => flag(flags, name) == *value,
         DialogueCondition::FlagAtLeast(name, value) => flag(flags, name) >= *value,
         // The fetch quest's return leg: "you took the errand" *and* "you have
@@ -417,16 +485,13 @@ pub fn flag(flags: &BTreeMap<String, i64>, name: &str) -> i64 {
     flags.get(name).copied().unwrap_or(0)
 }
 
-/// How many of `item` the player is carrying.
+/// How many of `item` the player has, in the bag or on their body.
+///
+/// Worn counts. Runa asks for the helm off a dead knight, and the obvious
+/// thing to do with a helm is put it on — so counting only the bag hid the
+/// turn-in from exactly the player who had done the sensible thing.
 fn carried(world: &World, item: &str) -> u32 {
-    inventory::holder(world)
-        .and_then(|holder| {
-            world
-                .get::<&Inventory>(holder)
-                .ok()
-                .map(|bag| bag.count(item))
-        })
-        .unwrap_or(0)
+    inventory::holder(world).map_or(0, |holder| inventory::owned(world, holder, item))
 }
 
 /// Apply one effect.
@@ -450,6 +515,9 @@ fn apply(
         DialogueEffect::SetFlag(name, value) => {
             flags.insert(name.clone(), *value);
         }
+        DialogueEffect::AddFlag(name, by) => {
+            *flags.entry(name.clone()).or_insert(0) += by;
+        }
         DialogueEffect::GiveItem(item, count) => {
             // Unknown ids are dropped rather than handed over: `tests/data.rs`
             // is where a typo in content is caught, and the simulation's job is
@@ -460,7 +528,7 @@ fn apply(
         }
         DialogueEffect::TakeItem(item, count) => {
             if let Some(holder) = holder {
-                inventory::take_item(world, holder, item, *count);
+                inventory::take_item(world, holder, item, *count, events);
             }
         }
         DialogueEffect::Heal(amount) => {
@@ -475,7 +543,7 @@ fn apply(
 mod tests {
     use super::*;
     use crate::assets::{Assets, DialogueTable};
-    use crate::ecs::components::{Attacking, Equipment, Team};
+    use crate::ecs::components::{Attacking, Equipment, Inventory, Team};
     use crate::sim::{GameEvent, Mode, Sim};
     use ggez::glam::Vec2;
 
@@ -647,6 +715,57 @@ mod tests {
         assert_eq!(sim.probe().prompt, NO_PROMPT);
     }
 
+    /// ...and nothing is offered *to* the dead either: a corpse cannot hold a
+    /// conversation, or open its bag and drink potions respawn would refill
+    /// for free.
+    #[test]
+    fn the_dead_player_can_neither_talk_nor_open_the_bag() {
+        let mut sim = talking_sim();
+        give(&mut sim, "minor_potion", 1);
+        let player = inventory::holder(&sim.world).unwrap();
+        sim.world.get::<&mut Health>(player).unwrap().current = 0;
+        sim.step(PlayerInput::default());
+        assert!(sim.probe().dead);
+        assert_eq!(sim.probe().prompt, NO_PROMPT, "no prompt while dead");
+
+        sim.step(INTERACT);
+        assert_eq!(sim.mode(), Mode::Playing);
+        sim.step(PlayerInput::default());
+        sim.step(PlayerInput::from_actions(&[Action::Inventory]));
+        assert_eq!(sim.mode(), Mode::Playing);
+        assert_eq!(bag_count(&sim, "minor_potion"), 1);
+    }
+
+    /// Runa asks for a helm, and the obvious thing to do with a helm is wear
+    /// it. A worn item counts for `HasItem`, and `TakeItem` takes it off you.
+    #[test]
+    fn a_worn_item_counts_for_a_turn_in_and_is_taken_off_you() {
+        let mut sim = talking_sim();
+        sim.set_flag("quest.helm.stage", 1);
+        let player = inventory::holder(&sim.world).unwrap();
+        sim.world
+            .get::<&mut Equipment>(player)
+            .unwrap()
+            .slots
+            .insert(crate::assets::Slot::Head, "knight_helm".to_string());
+        sim.step(PlayerInput::default());
+        sim.step(INTERACT);
+        read_out(&mut sim);
+
+        select(&mut sim, "helm you asked for");
+        sim.step(CONFIRM);
+        assert_eq!(sim.flag("quest.helm.stage"), 2);
+        assert!(
+            sim.world.get::<&Equipment>(player).unwrap().is_empty(),
+            "the helm came off"
+        );
+        assert!(sim.events().iter().any(|e| matches!(
+            e,
+            GameEvent::Unequipped { item, .. } if item == "knight_helm"
+        )));
+        assert_eq!(bag_count(&sim, "iron_band"), 1, "and the reward arrived");
+    }
+
     #[test]
     fn pressing_interact_with_nothing_in_reach_does_nothing_at_all() {
         let mut sim = grounded_sim();
@@ -769,6 +888,8 @@ mod tests {
     #[test]
     fn a_choice_whose_condition_fails_is_absent_rather_than_inert() {
         let mut sim = talking_sim();
+        // The draught errand taken, so the potion is the one missing half.
+        sim.set_flag("quest.draught.stage", 1);
         sim.step(INTERACT);
         read_out(&mut sim);
 
@@ -890,6 +1011,8 @@ mod tests {
     #[test]
     fn a_gated_branch_trades_one_item_for_another_and_sets_its_flag() {
         let mut sim = talking_sim();
+        // The draught errand taken, so the potion is the one missing half.
+        sim.set_flag("quest.draught.stage", 1);
         give(&mut sim, "minor_potion", 1);
         sim.step(PlayerInput::default());
         sim.step(INTERACT);
@@ -914,6 +1037,8 @@ mod tests {
     #[test]
     fn revisiting_a_node_re_evaluates_its_conditions() {
         let mut sim = talking_sim();
+        // The draught errand taken, so the potion is the one missing half.
+        sim.set_flag("quest.draught.stage", 1);
         sim.step(INTERACT);
         read_out(&mut sim);
         let before = sim.probe().dialogue_choices;
@@ -1032,6 +1157,43 @@ mod tests {
         );
     }
 
+    /// A reply's effects are all-or-nothing. With a full bag and two helms,
+    /// handing one over frees no slot, so the band cannot fit — and the reply
+    /// used to take the helm and set the stage anyway, losing the reward for
+    /// good. Now nothing happens at all, the refusal is announced, and the
+    /// player can make room and ask again.
+    #[test]
+    fn a_reply_whose_reward_does_not_fit_changes_nothing() {
+        let mut sim = talking_sim();
+        sim.set_flag("quest.helm.stage", 1);
+        let holder = inventory::holder(&sim.world).unwrap();
+        {
+            let mut bag = sim.world.get::<&mut Inventory>(holder).unwrap();
+            assert!(bag.add("knight_helm", 2));
+            for index in 1..bag.capacity {
+                assert!(bag.add(&format!("filler_{index}"), 1));
+            }
+            assert!(bag.is_full());
+        }
+        sim.step(PlayerInput::default());
+        sim.step(INTERACT);
+        read_out(&mut sim);
+        select(&mut sim, "helm you asked for");
+        sim.step(CONFIRM);
+
+        assert_eq!(sim.flag("quest.helm.stage"), 1, "the stage did not move");
+        assert_eq!(bag_count(&sim, "knight_helm"), 2, "the helm was not taken");
+        assert_eq!(bag_count(&sim, "iron_band"), 0);
+        assert_eq!(sim.probe().dialogue_node, "greet", "still asking");
+        assert!(!sim
+            .events()
+            .iter()
+            .any(|e| matches!(e, GameEvent::ChoiceTaken { .. })));
+        assert!(sim.events().contains(&GameEvent::InventoryFull {
+            item: "iron_band".to_string()
+        }));
+    }
+
     /// Content is cross-referenced in `tests/data.rs`; the simulation's job is
     /// to keep running when it is not.
     #[test]
@@ -1142,6 +1304,7 @@ mod tests {
                 &crate::level::EntitySpawn {
                     kind: kind.to_string(),
                     pos: Vec2::new(cell as f32 * 32.0, 32.0),
+                    ..Default::default()
                 },
                 32.0,
                 clips.clone(),
@@ -1186,6 +1349,7 @@ mod tests {
             &crate::level::EntitySpawn {
                 kind: "villager".to_string(),
                 pos: Vec2::new(3.0 * 32.0, 32.0),
+                ..Default::default()
             },
             32.0,
             clips,
@@ -1236,6 +1400,7 @@ mod tests {
                 &crate::level::EntitySpawn {
                     kind: kind.to_string(),
                     pos: Vec2::new(cell * 32.0, 32.0),
+                    ..Default::default()
                 },
                 32.0,
                 clips.clone(),
@@ -1258,7 +1423,7 @@ mod tests {
                 break;
             }
             if !sim.world.get::<&Attacking>(knight).unwrap().busy() {
-                let attack = stats.get("knight").unwrap().attack.clone();
+                let attack = stats.get("knight").unwrap().attack.clone().unwrap();
                 sim.world
                     .get::<&mut Attacking>(knight)
                     .unwrap()

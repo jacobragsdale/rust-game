@@ -20,10 +20,10 @@
 //! Each line is `<keys> [count]`, where `<keys>` is `+`-separated from the
 //! names in [`crate::systems::input::ACTIONS`] (`left right down up jump
 //! attack cast ...`), or `wait`/`none` for no input. `count` defaults to 1.
-//! `#` starts a comment. Three directives are also recognized: `map <path>`
+//! `#` starts a comment. A few directives are also recognized: `map <path>`
 //! names the map to run against, `seed <n>` fixes the simulation's random
-//! seed, and `assert ...` checks the player's state at the tick where it
-//! appears.
+//! seed, `assert ...` and `expect ...` check the run at the tick where they
+//! appear, and `reload` saves the run and loads it back, then waits a tick.
 //!
 //! The subtle part is [`Tape::inputs`]: `jump_pressed` is edge-triggered while
 //! `jump_held` is level-triggered, exactly as
@@ -263,6 +263,15 @@ pub struct Tape {
     /// Keys held, one entry per tick.
     pub keys: Vec<Keys>,
     pub asserts: Vec<Assertion>,
+    /// `reload` lines: the tick index a save-and-load happens before, and the
+    /// line it was written on.
+    ///
+    /// A reload is a round trip through [`crate::save`] — `Sim::save`, then
+    /// `Sim::load_save` — in the middle of a run, followed by one tick with no
+    /// input. The tick is what keeps a trace one frame per tick; the round trip
+    /// is what lets a tape claim that something survives a save, which until
+    /// now only `tests/save.rs` could.
+    pub reloads: Vec<(usize, usize)>,
 }
 
 impl Tape {
@@ -316,6 +325,18 @@ impl Tape {
                 continue;
             }
 
+            if head == "reload" {
+                if tokens.next().is_some() {
+                    bail!("line {line}: `reload` takes nothing after it");
+                }
+                if tape.keys.len() >= MAX_TICKS {
+                    bail!("line {line}: tape exceeds the {MAX_TICKS} tick limit");
+                }
+                tape.reloads.push((tape.keys.len(), line));
+                tape.keys.push(Keys::default());
+                continue;
+            }
+
             if head == "assert" || head == "expect" {
                 let rest: Vec<&str> = tokens.collect();
                 let check = if head == "expect" {
@@ -345,7 +366,9 @@ impl Tape {
             if let Some(extra) = tokens.next() {
                 bail!("line {line}: unexpected trailing token `{extra}`");
             }
-            if tape.keys.len() + count > MAX_TICKS {
+            // Compared as a subtraction, so an absurd count is refused rather
+            // than overflowing the addition that would have measured it.
+            if count > MAX_TICKS - tape.keys.len() {
                 bail!("line {line}: tape exceeds the {MAX_TICKS} tick limit");
             }
 
@@ -580,6 +603,8 @@ fn known_subjects(kind: Subject) -> &'static [String] {
         modes: Vec<String>,
         graphs: Vec<String>,
         nodes: Vec<String>,
+        targets: Vec<String>,
+        maps: Vec<String>,
     }
 
     static TABLES: OnceLock<Tables> = OnceLock::new();
@@ -603,6 +628,24 @@ fn known_subjects(kind: Subject) -> &'static [String] {
         nodes.sort();
         nodes.dedup();
 
+        // What an interactable can offer: every conversation, and the three
+        // kinds of furniture that are not one.
+        let mut targets: Vec<String> = owned(dialogue.ids());
+        targets.extend(["chest", "door", "lever"].map(str::to_string));
+        targets.sort();
+        // Maps by the short name `traveled` reports them under.
+        let dir = Assets::new().base_dir().join("maps");
+        let mut maps: Vec<String> = std::fs::read_dir(&dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.extension().is_some_and(|e| e == "ron"))
+                    .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        maps.sort();
+
         Tables {
             kinds: owned(StatTable::shipped().kinds()),
             attacks: attack_ids,
@@ -611,6 +654,8 @@ fn known_subjects(kind: Subject) -> &'static [String] {
             modes: MODES.iter().map(|m| m.name().to_string()).collect(),
             graphs: owned(dialogue.ids()),
             nodes,
+            targets,
+            maps,
         }
     });
 
@@ -622,6 +667,8 @@ fn known_subjects(kind: Subject) -> &'static [String] {
         Subject::Mode => &tables.modes,
         Subject::Graph => &tables.graphs,
         Subject::Node => &tables.nodes,
+        Subject::Target => &tables.targets,
+        Subject::Map => &tables.maps,
     }
 }
 
@@ -965,6 +1012,10 @@ mod tests {
             "duplicate map"
         );
         assert!(Tape::parse("sideways 3").is_err(), "unknown key");
+        assert!(
+            Tape::parse("right 18446744073709551615").is_err(),
+            "a count that would overflow the tape length"
+        );
         assert!(Tape::parse("seed").is_err(), "seed without a number");
         assert!(Tape::parse("seed x").is_err(), "seed that is not a number");
         assert!(

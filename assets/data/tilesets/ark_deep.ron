@@ -1,0 +1,34 @@
+// The Engine Deep: the Ark's own plate (see ark.ron) by the light of the
+// furnaces that still burn down there — the same art, tinted, so the deep is
+// a different place without a second tileset to keep in step.
+Tileset(
+    image: "tiles/ark",
+    tile_size: 32,
+    columns: 12,
+    transparent_color: None,
+    rules: Rules(
+        solid_top_left: 0,
+        solid_top: 1,
+        solid_top_right: 2,
+        solid_left: 3,
+        solid_fill: 4,
+        solid_right: 5,
+        platform: 6,
+        background: [12, 13, 14],
+    ),
+    props: {
+        // What a `Door(...)` draws here unless it says otherwise.
+        "hatch": (7, 0, 2, 3),
+        "door": (7, 0, 2, 3),
+        "archway": (7, 0, 2, 3),
+        "pod": (9, 0, 1, 2),
+        "viewport": (10, 0, 2, 2),
+        "console": (3, 1, 1, 1),
+        // A wall light, under the name every tileset's light goes by.
+        "torch": (4, 1, 1, 1),
+        "vent": (5, 1, 1, 1),
+        "pipe": (6, 1, 1, 1),
+    },
+    tint: (255, 170, 130),
+    clear: (14, 6, 6),
+)

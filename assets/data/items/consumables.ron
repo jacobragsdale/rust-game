@@ -12,10 +12,42 @@
         id: "minor_potion",
         name: "Minor Health Potion",
         sprite: "items/potion_red",
+        description: "Restores 2 health.",
         kind: Consumable(
             // Two of the player's five points: enough to be worth stopping
             // for, not enough to make a fight winnable by drinking through it.
             effects: [Heal(2)],
         ),
+    ),
+    ItemDef(
+        id: "mana_potion",
+        name: "Mana Draught",
+        sprite: "items/potion_blue",
+        description: "Restores 3 mana.",
+        kind: Consumable(
+            // Most of a pool: a second cast now rather than a wait for one.
+            effects: [RestoreMana(3)],
+        ),
+    ),
+    ItemDef(
+        id: "greater_potion",
+        name: "Greater Health Potion",
+        sprite: "items/potion_big",
+        description: "Restores 4 health.",
+        kind: Consumable(effects: [Heal(4)]),
+    ),
+    ItemDef(
+        id: "elixir",
+        name: "Elixir",
+        sprite: "items/elixir",
+        description: "Restores 3 health and 3 mana.",
+        kind: Consumable(effects: [Heal(3), RestoreMana(3)]),
+    ),
+    ItemDef(
+        id: "bread",
+        name: "Heel of Bread",
+        sprite: "items/bread",
+        description: "Stale, but it is food. Restores 1 health.",
+        kind: Consumable(effects: [Heal(1)]),
     ),
 ]

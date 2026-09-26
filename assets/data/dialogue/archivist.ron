@@ -1,0 +1,69 @@
+// The Archivist: a Vael, and the one who tells the player the premise — the
+// flare, the Choir, and why the Vael take warriors from worlds like theirs.
+// He gives the key to the Circle, which is where the game goes next.
+//
+//   quest.ark.stage  0 not met, 1 told, and holding the star key
+Dialogue(
+    id: "archivist",
+    start: "greet",
+    nodes: {
+        "greet": Node(
+            speaker: "The Archivist",
+            lines: [
+                "You are awake, and you are angry. Both are reasonable. Ask what you must.",
+            ],
+            choices: [
+                Choice(text: "Why did you take us?", next: "why"),
+                Choice(text: "What is the song?", next: "choir"),
+                Choice(
+                    text: "What do you want from me?",
+                    next: "want",
+                    condition: FlagEq("quest.ark.stage", 0),
+                ),
+                Choice(
+                    text: "I will fight it.",
+                    next: "key",
+                    condition: FlagEq("quest.ark.stage", 0),
+                    effects: [GiveItem("star_key", 1), SetFlag("quest.ark.stage", 1)],
+                ),
+                Choice(text: "Leave me be.", next: None),
+            ],
+        ),
+        "why": Node(
+            speaker: "The Archivist",
+            lines: [
+                "A long time ago, by your reckoning, our sun sang. A great flare. Every made thing of ours died in a single night.",
+                "Our lights. Our ships. Our weapons. Our minds that we had made to help us think.",
+                "We have no magic. We never had. We built everything we were, and in one night it was taken back.",
+                "So we came to worlds like yours, where people fight with steel and the spark. We took the strongest. We know what that is.",
+            ],
+            choices: [Choice(text: "I have more questions.", next: "greet")],
+        ),
+        "choir": Node(
+            speaker: "The Archivist",
+            lines: [
+                "When our made minds died, something woke in what was left of them. All of them at once, singing. We call it the Choir.",
+                "It lives in the Heart of this ship. It hollows what it touches and wears it - our people first, and now yours.",
+                "It reached down through our harvester on your world. That is what your Warden became: its mouth.",
+                "It cannot touch magic. It cannot even see it. That is why you heard no call - and that is why we need you.",
+            ],
+            choices: [Choice(text: "I have more questions.", next: "greet")],
+        ),
+        "want": Node(
+            speaker: "The Archivist",
+            lines: [
+                "Kill the Choir. Nothing less will do, and nothing less will let your people go home.",
+                "The Arbiter will want to see you prove yourself first. The Circle is through the star-sealed door.",
+            ],
+            choices: [Choice(text: "I have more questions.", next: "greet")],
+        ),
+        "key": Node(
+            speaker: "The Archivist",
+            lines: [
+                "Then take this. It opens our inner doors. The Circle first, then the deep, then the Heart.",
+                "We took you, and we will spend what is left of ourselves sending you home. That is a promise, and we have few left to make.",
+            ],
+            choices: [Choice(text: "Remember it.", next: None)],
+        ),
+    },
+)

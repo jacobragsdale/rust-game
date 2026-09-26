@@ -1,0 +1,41 @@
+// The Beacon: the castle's stone (see castle.ron — the same atlas, the same
+// tiles, the same props) under a cold moon, on a hill where the sky comes
+// down to take people.
+Tileset(
+    image: "tile_castle",
+    tile_size: 32,
+    columns: 15,
+    transparent_color: None,
+    rules: Rules(
+        solid_top_left: 4,
+        solid_top: 5,
+        solid_top_right: 6,
+        solid_left: 32,
+        solid_fill: 31,
+        solid_right: 30,
+        platform: 196,
+        background: [151, 152, 153],
+    ),
+    // Named pieces of the atlas, as (column, row, width, height) in tiles.
+    // A prop stands on the floor of the cell it is placed in and grows up and
+    // to the right from there. Doors are two tiles wide and three tall, and
+    // the door a `Door(...)` draws unless it says otherwise is `door`.
+    props: {
+        "door": (13, 11, 2, 3),
+        "archway": (9, 11, 2, 3),
+        "portcullis": (11, 11, 2, 3),
+        "window": (0, 11, 1, 1),
+        "window_lit": (1, 11, 1, 1),
+        "porthole": (2, 11, 1, 1),
+        "porthole_barred": (3, 11, 1, 1),
+        "porthole_lit": (5, 11, 1, 1),
+        "fence": (9, 14, 1, 1),
+        "crate": (10, 14, 1, 1),
+        "barrel": (11, 14, 1, 1),
+        "torch": (12, 14, 1, 1),
+        "lantern": (14, 14, 1, 1),
+    },
+    // Moonlight on old stone.
+    tint: (178, 190, 226),
+    clear: (8, 10, 24),
+)

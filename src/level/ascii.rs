@@ -8,6 +8,8 @@
 //!   `.` / ` ` empty    `P` player spawn        `K` knight (entity)
 //!   `F` fire (a hazard on the default cycle; author the timing with a
 //!       `Fire(cell: (x, y), period: …, duty: …, phase: …)` entry instead)
+//!   `%` false wall — drawn exactly as `#` is, and not there at all: the way
+//!       into a secret. Nothing tells it from stone but walking into it.
 //!
 //! Geometry that moves has no grid character, because a character can say where
 //! something is but not where it goes. A moving platform is a
@@ -15,8 +17,34 @@
 //! swinging hazard is a `Swing(anchor: (x, y), …)` entry — a character could
 //! name the cell the chain hangs from, but not how long the chain is or how
 //! far it swings, which is all of what makes the arc.
+//!
+//! Everything else a level is furnished with is an entry too. Cells are
+//! `(column, row)`; a thing "in" a cell stands on that cell's floor.
+//!
+//! ```ron
+//! Npc(kind: "villager", cell: (11, 10), dialogue: "smith", flag: "quest.x.dead")
+//! Door(cell: (38, 9), to: "maps/dungeon.ron", at: "gate", id: "east",
+//!      locked: "iron_key", keep_key: false, art: "door")
+//! Exit(cell: (39, 7), size: (1, 3), to: "maps/dungeon.ron", at: "west")
+//! Spawn(id: "west", cell: (2, 9))
+//! Chest(cell: (20, 9), items: [("coin", 10), ("minor_potion", 1)], id: "c1")
+//! Item(cell: (5, 9), item: "coin", count: 3)
+//! Checkpoint(cell: (30, 9))
+//! Sign(cell: (4, 9), dialogue: "sign_welcome")
+//! Lever(cell: (12, 9), flag: "quest.crypt.gate")
+//! Gate(cell: (16, 8), height: 2, flag: "quest.crypt.gate")
+//! Decor(cell: (7, 6), prop: "torch")
+//! Trigger(cell: (3, 7), size: (1, 3), dialogue: "intro", when: "quest.x")
+//! ```
+//!
+//! `to:` is a map path relative to `assets/`, and `at:` names a `Spawn` or a
+//! `Door` id on that map; `tests/data.rs` checks every one resolves. What a
+//! chest, an item, a lever or a door has done is remembered in a `world.` flag
+//! — `world.<map>.<id>`, where an unnamed prop's id is its kind and cell,
+//! `chest_20_9` — so it stays done across a load and across leaving and coming
+//! back, and a tape can assert it. A map's `name:` is what the screen calls it
+//! on arrival.
 
-use std::fs;
 use std::path::Path;
 
 use anyhow::Context as _;
@@ -24,13 +52,19 @@ use ggez::glam::Vec2;
 use serde::Deserialize;
 
 use crate::assets::{Assets, AutotileRules, StatTable};
-use crate::level::{merge_runs, EntitySpawn, FireSpawn, LevelData, MoverSpawn, PendulumSpawn};
+use crate::level::{
+    merge_runs, DecorSpawn, EntitySpawn, FireSpawn, LevelData, MoverSpawn, PendulumSpawn, PropKind,
+    PropSpawn,
+};
 
 /// Spelled `Level(...)` in the map files.
 #[derive(Debug, Deserialize)]
 #[serde(rename = "Level")]
 struct LevelDef {
     tileset: String,
+    /// What the screen calls this place on arrival.
+    #[serde(default)]
+    name: Option<String>,
     grid: Vec<String>,
     #[serde(default)]
     entities: Vec<EntityDef>,
@@ -41,10 +75,84 @@ enum EntityDef {
     Npc {
         kind: String,
         cell: (u32, u32),
+        #[serde(default)]
+        dialogue: Option<String>,
+        #[serde(default)]
+        flag: Option<String>,
     },
     Door {
         cell: (u32, u32),
         to: String,
+        at: String,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        locked: Option<String>,
+        #[serde(default)]
+        keep_key: bool,
+        #[serde(default)]
+        art: Option<String>,
+    },
+    Exit {
+        cell: (u32, u32),
+        #[serde(default = "default_exit_size")]
+        size: (u32, u32),
+        to: String,
+        at: String,
+    },
+    Spawn {
+        id: String,
+        cell: (u32, u32),
+    },
+    Chest {
+        cell: (u32, u32),
+        items: Vec<(String, u32)>,
+        #[serde(default)]
+        id: Option<String>,
+    },
+    Item {
+        cell: (u32, u32),
+        item: String,
+        #[serde(default = "default_count")]
+        count: u32,
+        #[serde(default)]
+        id: Option<String>,
+    },
+    Checkpoint {
+        cell: (u32, u32),
+    },
+    Sign {
+        cell: (u32, u32),
+        dialogue: String,
+    },
+    Lever {
+        cell: (u32, u32),
+        flag: String,
+        #[serde(default)]
+        id: Option<String>,
+    },
+    Gate {
+        cell: (u32, u32),
+        flag: String,
+        #[serde(default = "default_gate_height")]
+        height: u32,
+    },
+    Decor {
+        cell: (u32, u32),
+        prop: String,
+    },
+    /// A region that opens a conversation the first time the player walks
+    /// into it — once `when` is set, if it names a flag. The same default
+    /// size as an exit: a doorway you cannot jump over.
+    Trigger {
+        cell: (u32, u32),
+        #[serde(default = "default_exit_size")]
+        size: (u32, u32),
+        dialogue: String,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        when: Option<String>,
     },
     /// A fire with authored timing. Every field but the cell defaults to what
     /// the grid's `F` uses, so `Fire(cell: (3, 5), phase: 60)` is enough to
@@ -99,6 +207,22 @@ enum EntityDef {
     },
 }
 
+/// One tile wide and three tall: a doorway at the edge of the map that a
+/// body cannot jump over.
+fn default_exit_size() -> (u32, u32) {
+    (1, 3)
+}
+
+fn default_count() -> u32 {
+    1
+}
+
+/// Two tiles: taller than the player, so a closed gate cannot be walked
+/// under or stood in.
+fn default_gate_height() -> u32 {
+    2
+}
+
 fn default_fire_period() -> u32 {
     crate::systems::hazard::FIRE_PERIOD
 }
@@ -148,10 +272,9 @@ fn default_swing_radius() -> f32 {
 /// resolver needs and which no entity exists yet to supply — see
 /// [`crate::level::LevelData::load`].
 pub fn load(path: &Path, assets: &mut Assets, player: Vec2) -> anyhow::Result<LevelData> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let def: LevelDef =
-        ron::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))?;
+    // The same parser every other content file goes through, `implicit_some`
+    // included, so a map writes `name: "The Village"` like everything else.
+    let def: LevelDef = crate::assets::load_ron(path)?;
     let tileset = assets.tileset(&def.tileset)?;
     build(def, tileset.tile_size as f32, &tileset.rules, player)
         .with_context(|| format!("invalid map {}", path.display()))
@@ -185,6 +308,7 @@ const FIXTURE_RULES: AutotileRules = AutotileRules {
 pub fn from_grid(grid: &[&str]) -> anyhow::Result<LevelData> {
     let def = LevelDef {
         tileset: "fixture".to_string(),
+        name: None,
         grid: grid.iter().map(|row| row.to_string()).collect(),
         entities: Vec::new(),
     };
@@ -196,8 +320,19 @@ pub fn from_grid(grid: &[&str]) -> anyhow::Result<LevelData> {
 enum Cell {
     Empty,
     Solid,
+    /// Looks solid, is empty: `%`.
+    False,
     Platform,
     Hazard,
+}
+
+impl Cell {
+    /// Whether it is drawn as stone. A false wall is — that is the point of
+    /// it — so its neighbours tile as if it were there, and nothing about the
+    /// wall around it gives it away.
+    fn looks_solid(self) -> bool {
+        matches!(self, Cell::Solid | Cell::False)
+    }
 }
 
 fn build(
@@ -209,6 +344,25 @@ fn build(
     let height = def.grid.len() as u32;
     anyhow::ensure!(height > 0, "map grid is empty");
     let width = def.grid.iter().map(|r| r.chars().count()).max().unwrap() as u32;
+    // Every row the same width. A short row used to be padded with empty
+    // cells, which quietly deleted whatever wall its missing characters were
+    // meant to be — a map is a rectangle, and a ragged one is a typo.
+    for (y, row) in def.grid.iter().enumerate() {
+        let len = row.chars().count() as u32;
+        anyhow::ensure!(
+            len == width,
+            "row {y} is {len} cells wide but the map is {width}: {row:?}"
+        );
+    }
+    // A cell an entity names has to be on the map. Off it, a platform runs
+    // through nothing, an NPC falls forever, and nothing says why.
+    let on_map = |what: &str, cell: (u32, u32)| -> anyhow::Result<()> {
+        anyhow::ensure!(
+            cell.0 < width && cell.1 < height,
+            "{what} at cell {cell:?} is off the {width}x{height} map"
+        );
+        Ok(())
+    };
 
     let mut cells = vec![Cell::Empty; (width * height) as usize];
     let mut player_spawn = None;
@@ -216,6 +370,9 @@ fn build(
     let mut fires = Vec::new();
     let mut movers = Vec::new();
     let mut pendulums = Vec::new();
+    let mut props = Vec::new();
+    let mut spawns: Vec<(String, Vec2)> = Vec::new();
+    let mut decor = Vec::new();
 
     for (y, row) in def.grid.iter().enumerate() {
         for (x, ch) in row.chars().enumerate() {
@@ -223,6 +380,7 @@ fn build(
             let index = (y32 * width + x32) as usize;
             match ch {
                 '#' => cells[index] = Cell::Solid,
+                '%' => cells[index] = Cell::False,
                 '=' => cells[index] = Cell::Platform,
                 '^' => cells[index] = Cell::Hazard,
                 '.' | ' ' => {}
@@ -233,6 +391,7 @@ fn build(
                 'K' => entities.push(EntitySpawn {
                     kind: "knight".to_string(),
                     pos: Vec2::new(x as f32 * tile_size, y as f32 * tile_size),
+                    ..Default::default()
                 }),
                 'F' => fires.push(FireSpawn {
                     cell: Vec2::new(x as f32 * tile_size, y as f32 * tile_size),
@@ -245,18 +404,162 @@ fn build(
         }
     }
 
-    let player_spawn = player_spawn.context("map has no player spawn (P)")?;
+    let corner = |c: (u32, u32)| Vec2::new(c.0 as f32 * tile_size, c.1 as f32 * tile_size);
 
     for entity in &def.entities {
         match entity {
-            EntityDef::Npc { kind, cell } => entities.push(EntitySpawn {
+            EntityDef::Npc { cell, .. }
+            | EntityDef::Door { cell, .. }
+            | EntityDef::Fire { cell, .. }
+            | EntityDef::Exit { cell, .. }
+            | EntityDef::Spawn { cell, .. }
+            | EntityDef::Chest { cell, .. }
+            | EntityDef::Item { cell, .. }
+            | EntityDef::Checkpoint { cell }
+            | EntityDef::Sign { cell, .. }
+            | EntityDef::Lever { cell, .. }
+            | EntityDef::Gate { cell, .. }
+            | EntityDef::Decor { cell, .. }
+            | EntityDef::Trigger { cell, .. } => {
+                on_map("an entity", *cell)?;
+            }
+            EntityDef::Platform { from, to, .. } => {
+                on_map("a platform's `from`", *from)?;
+                on_map("a platform's `to`", *to)?;
+            }
+            EntityDef::Swing { anchor, .. } => on_map("a swing's anchor", *anchor)?,
+        }
+        match entity {
+            EntityDef::Npc {
+                kind,
+                cell,
+                dialogue,
+                flag,
+            } => entities.push(EntitySpawn {
                 kind: kind.clone(),
-                pos: Vec2::new(cell.0 as f32 * tile_size, cell.1 as f32 * tile_size),
+                pos: corner(*cell),
+                dialogue: dialogue.clone(),
+                flag: flag.clone(),
             }),
-            EntityDef::Door { cell, to } => entities.push(EntitySpawn {
-                kind: format!("door:{to}"),
-                pos: Vec2::new(cell.0 as f32 * tile_size, cell.1 as f32 * tile_size),
+            EntityDef::Door {
+                cell,
+                to,
+                at,
+                id,
+                locked,
+                keep_key,
+                art,
+            } => props.push(PropSpawn {
+                cell: corner(*cell),
+                at: *cell,
+                kind: PropKind::Door {
+                    id: id.clone(),
+                    to: to.clone(),
+                    at: at.clone(),
+                    locked: locked.clone(),
+                    keep_key: *keep_key,
+                    art: art.clone(),
+                },
             }),
+            EntityDef::Exit { cell, size, to, at } => {
+                anyhow::ensure!(size.0 > 0 && size.1 > 0, "an exit must have a size");
+                props.push(PropSpawn {
+                    cell: corner(*cell),
+                    at: *cell,
+                    kind: PropKind::Exit {
+                        size: *size,
+                        to: to.clone(),
+                        at: at.clone(),
+                    },
+                });
+            }
+            EntityDef::Spawn { id, cell } => {
+                anyhow::ensure!(
+                    !spawns.iter().any(|(other, _)| other == id),
+                    "two spawns are called `{id}`"
+                );
+                let foot = cell_floor_pos(cell.0, cell.1, tile_size, player.x, player.y);
+                spawns.push((id.clone(), foot));
+            }
+            EntityDef::Chest { cell, items, id } => props.push(PropSpawn {
+                cell: corner(*cell),
+                at: *cell,
+                kind: PropKind::Chest {
+                    id: id.clone(),
+                    items: items.clone(),
+                },
+            }),
+            EntityDef::Item {
+                cell,
+                item,
+                count,
+                id,
+            } => {
+                anyhow::ensure!(*count > 0, "an item must be at least one of something");
+                props.push(PropSpawn {
+                    cell: corner(*cell),
+                    at: *cell,
+                    kind: PropKind::Item {
+                        id: id.clone(),
+                        item: item.clone(),
+                        count: *count,
+                    },
+                });
+            }
+            EntityDef::Checkpoint { cell } => props.push(PropSpawn {
+                cell: corner(*cell),
+                at: *cell,
+                kind: PropKind::Checkpoint,
+            }),
+            EntityDef::Sign { cell, dialogue } => props.push(PropSpawn {
+                cell: corner(*cell),
+                at: *cell,
+                kind: PropKind::Sign {
+                    dialogue: dialogue.clone(),
+                },
+            }),
+            EntityDef::Lever { cell, flag, id } => props.push(PropSpawn {
+                cell: corner(*cell),
+                at: *cell,
+                kind: PropKind::Lever {
+                    id: id.clone(),
+                    flag: flag.clone(),
+                },
+            }),
+            EntityDef::Gate { cell, flag, height } => {
+                anyhow::ensure!(*height > 0, "a gate must be at least one tile tall");
+                props.push(PropSpawn {
+                    cell: corner(*cell),
+                    at: *cell,
+                    kind: PropKind::Gate {
+                        flag: flag.clone(),
+                        height: *height,
+                    },
+                });
+            }
+            EntityDef::Decor { cell, prop } => decor.push(DecorSpawn {
+                cell: corner(*cell),
+                prop: prop.clone(),
+            }),
+            EntityDef::Trigger {
+                cell,
+                size,
+                dialogue,
+                id,
+                when,
+            } => {
+                anyhow::ensure!(size.0 > 0 && size.1 > 0, "a trigger must have a size");
+                props.push(PropSpawn {
+                    cell: corner(*cell),
+                    at: *cell,
+                    kind: PropKind::Trigger {
+                        id: id.clone(),
+                        size: *size,
+                        dialogue: dialogue.clone(),
+                        when: when.clone(),
+                    },
+                });
+            }
             EntityDef::Fire {
                 cell,
                 period,
@@ -349,10 +652,10 @@ fn build(
         for x in 0..width as i64 {
             let index = (y as u32 * width + x as u32) as usize;
             match at(x, y) {
-                Cell::Solid => {
-                    let open_up = at(x, y - 1) != Cell::Solid;
-                    let open_left = at(x - 1, y) != Cell::Solid;
-                    let open_right = at(x + 1, y) != Cell::Solid;
+                Cell::Solid | Cell::False => {
+                    let open_up = !at(x, y - 1).looks_solid();
+                    let open_left = !at(x - 1, y).looks_solid();
+                    let open_right = !at(x + 1, y).looks_solid();
                     tiles[index] = Some(match (open_up, open_left, open_right) {
                         (true, true, _) => rules.solid_top_left,
                         (true, _, true) => rules.solid_top_right,
@@ -367,7 +670,7 @@ fn build(
                 }
                 Cell::Empty | Cell::Hazard => {}
             }
-            if at(x, y) != Cell::Solid && !rules.background.is_empty() {
+            if !at(x, y).looks_solid() && !rules.background.is_empty() {
                 // deterministic variety, stable across loads
                 let variant = (x as usize * 7 + y as usize * 13) % rules.background.len();
                 background[index] = Some(rules.background[variant]);
@@ -378,6 +681,20 @@ fn build(
     let solid_flags: Vec<bool> = cells.iter().map(|c| *c == Cell::Solid).collect();
     let platform_flags: Vec<bool> = cells.iter().map(|c| *c == Cell::Platform).collect();
     let hazard_flags: Vec<bool> = cells.iter().map(|c| *c == Cell::Hazard).collect();
+
+    // A map reached only through its doors has no `P`, and needs none: where
+    // a new game would start is its first named arrival point.
+    let player_spawn = player_spawn
+        .or_else(|| spawns.first().map(|(_, at)| *at))
+        .context("map has no player spawn (a P, or at least one Spawn)")?;
+
+    // Two things answering to one name would make `at:` ambiguous and give two
+    // props one world flag, which is two chests that open as one.
+    let mut names: Vec<String> = props.iter().map(PropSpawn::name).collect();
+    names.sort();
+    if let Some(pair) = names.windows(2).find(|pair| pair[0] == pair[1]) {
+        anyhow::bail!("two props are called `{}`: give one an `id`", pair[0]);
+    }
 
     Ok(LevelData {
         tileset: def.tileset,
@@ -412,6 +729,10 @@ fn build(
         pendulums,
         player_spawn,
         entities,
+        props,
+        spawns,
+        decor,
+        title: def.name,
     })
 }
 
@@ -454,10 +775,27 @@ mod tests {
     fn parse(grid: &[&str]) -> LevelData {
         let def = LevelDef {
             tileset: "test".to_string(),
+            name: None,
             grid: grid.iter().map(|s| s.to_string()).collect(),
             entities: vec![],
         };
         build(def, 32.0, &rules(), player()).unwrap()
+    }
+
+    /// A false wall is drawn as the stone around it — with the tile the stone
+    /// would have had — and collides with nothing.
+    #[test]
+    fn a_false_wall_looks_like_stone_and_is_not_there() {
+        let real = parse(&["P....", "#####", "#####"]);
+        let fake = parse(&["P....", "##%##", "##%##"]);
+        assert_eq!(real.tiles, fake.tiles, "not one tile tells them apart");
+        assert_eq!(real.background, fake.background);
+        let hole = Aabb::new(64.0, 32.0, 32.0, 64.0);
+        assert!(real.solids.iter().any(|s| s.overlaps(&hole)));
+        assert!(
+            !fake.solids.iter().any(|s| s.overlaps(&hole)),
+            "walk into it"
+        );
     }
 
     #[test]
@@ -540,6 +878,7 @@ mod tests {
     fn fires_come_from_the_grid_and_from_the_entity_list() {
         let def = LevelDef {
             tileset: "test".to_string(),
+            name: None,
             grid: vec!["P.F..".to_string(), "#####".to_string()],
             entities: vec![EntityDef::Fire {
                 cell: (4, 0),
@@ -728,10 +1067,43 @@ mod tests {
         }
     }
 
+    /// A short row used to be padded with empty cells, which silently deleted
+    /// whatever wall its missing characters were meant to be.
+    #[test]
+    fn a_ragged_grid_is_rejected_naming_the_row() {
+        let def = LevelDef {
+            tileset: "test".to_string(),
+            name: None,
+            grid: vec!["#####".to_string(), "#P..".to_string(), "#####".to_string()],
+            entities: vec![],
+        };
+        let err = format!("{:#}", build(def, 32.0, &rules(), player()).unwrap_err());
+        assert!(err.contains("row 1"), "{err}");
+    }
+
+    #[test]
+    fn an_entity_off_the_map_is_rejected() {
+        for entity in [
+            "Npc(kind: \"knight\", cell: (9, 0))",
+            "Fire(cell: (0, 7))",
+            "Platform(from: (1, 0), to: (30, 0))",
+            "Swing(anchor: (5, 2))",
+        ] {
+            let def: LevelDef = ron::from_str(&format!(
+                r#"Level(tileset: "test", grid: ["P....", "....."], entities: [{entity}])"#
+            ))
+            .expect("parses");
+            let err = build(def, 32.0, &rules(), player())
+                .expect_err(&format!("{entity} is off a 5x2 map"));
+            assert!(format!("{err:#}").contains("off the 5x2 map"), "{err:#}");
+        }
+    }
+
     #[test]
     fn unknown_characters_are_rejected() {
         let def = LevelDef {
             tileset: "test".to_string(),
+            name: None,
             grid: vec!["P?#".to_string()],
             entities: vec![],
         };
@@ -762,6 +1134,7 @@ mod tests {
     fn missing_spawn_is_rejected() {
         let def = LevelDef {
             tileset: "test".to_string(),
+            name: None,
             grid: vec!["###".to_string()],
             entities: vec![],
         };

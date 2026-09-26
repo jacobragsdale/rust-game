@@ -179,6 +179,13 @@ impl Frame {
 /// only a naming convention that every flag in the game already follows.
 pub const FLAG_ROOT: &str = "quest";
 
+/// The other reserved root: flags the *world* keeps about itself — a chest
+/// opened, an item taken, a door unlocked — filed as `world.<map>.<name>` by
+/// [`crate::systems::props`]. Separate from `quest.` because nothing in a
+/// quest writes them and nothing but the map reads them, and a tape asserts
+/// them the same way: `assert world.crypt.chest_12_9 == 1`.
+pub const WORLD_ROOT: &str = "world";
+
 /// A parsed assertion path.
 pub enum ProbePath<'a> {
     Player(&'a str),
@@ -213,7 +220,9 @@ impl<'a> ProbePath<'a> {
             // Before the NPC arm too, and for a stronger reason: a flag path
             // has no fixed number of segments, so it has to be recognized by
             // its root before anything tries to read a segment as an index.
-            [root, rest @ ..] if *root == FLAG_ROOT && !rest.is_empty() => {
+            [root, rest @ ..]
+                if (*root == FLAG_ROOT || *root == WORLD_ROOT) && !rest.is_empty() =>
+            {
                 Some(ProbePath::Flag(path))
             }
             [kind, index, name] => Some(ProbePath::Npc {
@@ -271,7 +280,7 @@ impl<'a> ProbePath<'a> {
             ProbePath::Npc { .. } => NpcProbe::known_names(),
             ProbePath::Item { .. } => ItemProbe::known_names(),
             ProbePath::Flag(_) => format!(
-                "a `{FLAG_ROOT}.` path is a quest flag: a whole number, unset is 0, \
+                "a `{FLAG_ROOT}.` or `{WORLD_ROOT}.` path is a flag: a whole number, unset is 0, \
                  compared with == < > and so on"
             ),
         }

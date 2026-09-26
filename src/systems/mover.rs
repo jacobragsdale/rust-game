@@ -207,10 +207,11 @@ pub fn advance(world: &mut World, tick: u64) {
 
     for (_, (pos, vel, size, body)) in world.query_mut::<(&mut Position, &Velocity, &Size, &Body)>()
     {
-        // A frozen body did not move and must not be moved; a body that is not
-        // grounded is not standing on anything; a body with upward velocity has
-        // jumped and is no longer a passenger (see decision 3 above).
-        if body.frozen || !body.grounded || vel.0.y < 0.0 {
+        // A frozen body did not move and must not be moved; a body with upward
+        // velocity has jumped and is no longer a passenger (see decision 3
+        // above). A body in the air is not *standing* on anything — but see
+        // `caught` below for the one way it can still become a passenger.
+        if body.frozen || vel.0.y < 0.0 {
             continue;
         }
 
@@ -226,7 +227,17 @@ pub fn advance(world: &mut World, tick: u64) {
             // the tick. `Body::prev_pos` answers the same question about the
             // tick *before* this one, which is one tick too late — `Position`
             // has not been touched yet, so it is the start-of-tick value here.
-            (feet - platform.was.y).abs() <= RIDE_TOLERANCE
+            let resting = body.grounded && (feet - platform.was.y).abs() <= RIDE_TOLERANCE;
+            // A top rising past the feet of something falling onto it scoops
+            // it up. Without this the rider test only knew about bodies that
+            // were already standing, and collision checks "landed from above"
+            // against the platform's *new* top — so a body whose feet the top
+            // overtook inside one tick fell straight through a one-way lift
+            // (52 drop heights in 192 did), and off the edge of a solid one.
+            let caught = platform.delta.y < 0.0
+                && feet > platform.was.y + platform.delta.y
+                && feet <= platform.was.y + RIDE_TOLERANCE;
+            (resting || caught)
                 && pos.0.x < platform.was.right()
                 && pos.0.x + size.0.x > platform.was.x
         });

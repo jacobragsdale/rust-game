@@ -1,0 +1,26 @@
+// An item icon: thrall mail. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/thrall_mail
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (90, 94, 120),
+        'c': (150, 156, 180),
+    },
+    frames: [
+        [
+            "..aa....aa..",
+            ".acca..acca.",
+            "acbccaaccbca",
+            "acbcbccbcbca",
+            ".abcbcbcbca.",
+            "..acbcbcbca.",
+            "..abcbcbcba.",
+            "..acbcbcbca.",
+            "..abcbcbcba.",
+            "..accccccca.",
+            "..aaaaaaaaa.",
+            "............",
+        ],
+    ],
+)

@@ -30,8 +30,9 @@ use crate::assets::{
     StatTable,
 };
 use crate::ecs::components::{
-    AnimationState, Attacking, Avatar, Body, Casting, Equipment, Health, InteractTarget, Inventory,
-    Kind, Mana, Patrol, Position, Size, Sprite, Velocity,
+    AnimationState, Attacking, Avatar, Body, Brain, Casting, Chest, Door, Equipment, Exit, Health,
+    InteractTarget, Interactable, Inventory, Kind, Lever, Mana, Position, Size, Sprite, Trigger,
+    Velocity,
 };
 use crate::ecs::spawn;
 use crate::level::LevelData;
@@ -106,6 +107,27 @@ pub struct Sim {
     /// Nothing in the tick reads it; it is here because a save has to say what
     /// to rebuild, and the level itself does not remember where it came from.
     pub map: Option<String>,
+    /// Where the player comes back after dying.
+    ///
+    /// The map's `P` to begin with; then the last checkpoint touched, or the
+    /// door the player came in by. On `Sim` rather than on the level, because
+    /// the level is what the map *says* and this is what the run has *done*.
+    respawn: Vec2,
+    /// Where content is read from, so that going through a door can load the
+    /// map on the other side of it. `assets/` for everything but a test that
+    /// points the loaders somewhere else.
+    assets_dir: std::path::PathBuf,
+    /// The exit the player is standing in, if any. Exits fire on the way *in*:
+    /// arriving on a map inside one — or standing in one while a menu is open —
+    /// must not send you straight back.
+    inside_exit: Option<hecs::Entity>,
+    /// An exit walked into this tick, taken once the tick has finished — a
+    /// walk-in is found in the resolve phase, and the world it would replace is
+    /// still in the middle of its tick there.
+    pending_travel: Option<(String, String)>,
+    /// A conversation a trigger started this tick, opened once the tick has
+    /// finished — found in the resolve phase, like an exit walked into.
+    pending_dialogue: Option<String>,
     /// Everything a body can collide with: the level's solids and one-way
     /// platforms, plus whatever colliders entities own this tick. Rebuilt at
     /// one point per tick — see [`Sim::step`].
@@ -150,6 +172,24 @@ pub struct Sim {
     /// clock, and one. A load that guessed would hand a rider four ticks of
     /// platform travel in a single tick; see [`Sim::resume_at`].
     decided_tick: u64,
+    /// Ticks the world has sat out behind a modal screen — every tick spent
+    /// with the inventory or a conversation open, including the tick it
+    /// opened on and the tick it closed on.
+    ///
+    /// Fires, platforms and swinging hazards are closed-form functions of a
+    /// clock, and it cannot be [`Sim::tick`], which keeps counting through a
+    /// menu so that a trace stays aligned with wall-clock time. Driven off
+    /// `tick`, a platform snapped across the whole detour the moment the bag
+    /// closed — 122px in one tick after a two-second look at the inventory —
+    /// and holding the bag open was a way to wait out a fire's lit phase
+    /// without standing in it. [`Sim::world_tick`] is `tick` minus this, which
+    /// is the number of ticks the world has actually been allowed to run, and
+    /// it is what everything tick-driven reads.
+    ///
+    /// Hitstop is deliberately *not* counted here: a four-tick freeze is part
+    /// of the fight, and the world catching up across it in one step is the
+    /// documented behaviour of [`mover`]. A menu is not part of anything.
+    paused: u64,
     /// What the simulation is doing: running the world, or holding it still
     /// while a modal screen is up. Private, because every transition emits a
     /// [`GameEvent::ModeChanged`] and a mode set behind the event's back would
@@ -206,6 +246,15 @@ pub struct Sim {
     /// weighs something — the blow reads as landing rather than as a number
     /// changing. Input is still read, so it never feels like a stall.
     hitstop: u32,
+    /// One-shot presses made during a freeze, held for the first tick the
+    /// world runs again.
+    ///
+    /// A hit is exactly when a player presses attack again to chain the next
+    /// link, and every hit that lands opens a four-tick freeze. Without this,
+    /// a press on any of those ticks was simply lost — the combo dropped, and
+    /// so did a jump or a cast — because nothing in the world reads input
+    /// while it is frozen.
+    held_presses: ActionSet,
     /// What happened during the most recent [`Sim::step`]. Cleared at the
     /// start of each tick, so this is never a running log — the tape runner
     /// and the trace are what accumulate.
@@ -216,24 +265,22 @@ impl Sim {
     /// Load a map (path relative to the assets directory), spawn the player,
     /// and spawn everything the map places.
     pub fn load(assets: &mut Assets, map: &str) -> anyhow::Result<Self> {
-        let map_path = assets.base_dir().join(map);
-        let level = LevelData::load(&map_path, assets)?;
+        Self::load_with_flags(assets, map, BTreeMap::new())
+    }
 
-        // One clip set per kind actually present, so a map that places no
-        // knights does not need the knight art to exist.
-        let mut clip_sets: HashMap<String, Arc<ClipSet>> = HashMap::new();
-        clip_sets.insert("player".to_string(), assets.clip_set("player")?);
-        for placement in &level.entities {
-            if let hash_map::Entry::Vacant(slot) = clip_sets.entry(placement.kind.clone()) {
-                slot.insert(assets.clip_set(&placement.kind).with_context(|| {
-                    format!(
-                        "map places `{}` but its clip set is missing",
-                        placement.kind
-                    )
-                })?);
-            }
-        }
-
+    /// [`Sim::load`], with `flags` already true of the world.
+    ///
+    /// The flags go in *before* anything is spawned, because the map is built
+    /// from them: a chest whose `world.` flag is set is spawned open, an item
+    /// that has been taken is not placed, a guard whose death flag is set lies
+    /// where it fell. A save is restored through here for exactly that reason —
+    /// setting the flags after the map was built left every chest in it shut.
+    pub(crate) fn load_with_flags(
+        assets: &mut Assets,
+        map: &str,
+        flags: BTreeMap<String, i64>,
+    ) -> anyhow::Result<Self> {
+        let (level, clip_sets) = read_map(assets, map)?;
         let attacks = assets.attacks()?;
         let stats = assets.stats()?;
         // Loaded through the cache here so a broken `spells.ron`, item file or
@@ -243,11 +290,16 @@ impl Sim {
         assets.spells()?;
         assets.items()?;
         assets.dialogue()?;
-        let mut sim = Self::new(level, &clip_sets, attacks, stats, rng::DEFAULT_SEED);
-        // What to rebuild from, for a save. The level itself does not remember
-        // where it was loaded from.
-        sim.map = Some(map.to_string());
-        Ok(sim)
+        Ok(Self::build(
+            level,
+            &clip_sets,
+            attacks,
+            stats,
+            rng::DEFAULT_SEED,
+            Some(map.to_string()),
+            flags,
+            assets.base_dir().clone(),
+        ))
     }
 
     /// A sim built from an inline ASCII grid, with placeholder animation
@@ -307,49 +359,39 @@ impl Sim {
         stats: Arc<StatTable>,
         seed: u64,
     ) -> Self {
+        Self::build(
+            level,
+            clip_sets,
+            attacks,
+            stats,
+            seed,
+            None,
+            BTreeMap::new(),
+            Assets::new().base_dir().clone(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        level: LevelData,
+        clip_sets: &HashMap<String, Arc<ClipSet>>,
+        attacks: Arc<AttackTable>,
+        stats: Arc<StatTable>,
+        seed: u64,
+        map: Option<String>,
+        flags: BTreeMap<String, i64>,
+        assets_dir: std::path::PathBuf,
+    ) -> Self {
         let geometry = Geometry::from_level(&level.solids, &level.one_way, &level.hazards);
-
-        let clips_for = |kind: &str| -> Arc<ClipSet> {
-            clip_sets
-                .get(kind)
-                .unwrap_or_else(|| panic!("no clip set loaded for `{kind}`"))
-                .clone()
-        };
-        let stats_for = |kind: &str| stats.get(kind).unwrap_or_else(|e| panic!("{e:#}"));
-
-        let mut world = World::new();
-        spawn::player(
-            &mut world,
-            level.player_spawn,
-            clips_for("player"),
-            stats_for("player"),
-        );
-
-        // Map order, which is the grid scanned top-left to bottom-right and
-        // then the explicit entity list. Spawn order decides `npc.<n>` in
-        // traces and tape assertions, so it has to be a property of the map
-        // rather than of iteration luck.
-        for placement in &level.entities {
-            spawn::entity(
-                &mut world,
-                placement,
-                level.tile_size,
-                clips_for(&placement.kind),
-                stats_for(&placement.kind),
-            )
-            .expect("level entities were validated on load");
-        }
-        // Fires and platforms last, so adding one to a map cannot renumber the
-        // NPCs that tapes and traces address by spawn index.
-        crate::systems::hazard::spawn_fires(&mut world, &level);
-        crate::systems::mover::spawn_movers(&mut world, &level);
-        crate::systems::pendulum::spawn_pendulums(&mut world, &level);
+        let level_spawn = level.player_spawn;
+        let world = populate(&level, clip_sets, &stats, &flags, map_stem(map.as_deref()));
 
         let mut sim = Sim {
             world,
             level,
-            // Set by `Sim::load`, which is the only caller that has one.
-            map: None,
+            map,
+            assets_dir,
+            respawn: level_spawn,
             geometry,
             attacks,
             spells: SpellTable::shipped(),
@@ -358,28 +400,212 @@ impl Sim {
             dialogues: DialogueTable::shipped(),
             rng: Rng::new(seed),
             tick: 0,
-            // The spawn helpers above placed every fire, platform and ball
-            // where tick 0 says it is, so that is the tick this world is
-            // current for before a single step.
+            // The spawn helpers placed every fire, platform and ball where
+            // tick 0 says it is, so that is the tick this world is current for
+            // before a single step.
             decided_tick: 0,
+            paused: 0,
             mode: Mode::Playing,
             screen: inventory::Screen::default(),
             conversation: None,
             prompt: None,
-            flags: BTreeMap::new(),
+            flags,
             prev_held: ActionSet::EMPTY,
             hitstop: 0,
+            held_presses: ActionSet::EMPTY,
+            inside_exit: None,
+            pending_travel: None,
+            pending_dialogue: None,
             events: Vec::new(),
         };
         // Colliders the map placed exist from tick 0, not from the first
         // rebuild inside `step` — otherwise the first tick's controllers probe
-        // a world with holes in it.
+        // a world with holes in it. Gates are opened or shut first, by the
+        // flags they were built with.
+        crate::systems::props::tick_gates(&mut sim.world, &sim.flags);
         body::rebuild_geometry(&mut sim.geometry, &sim.world);
         // ...and the same for the prompt: standing next to someone at the
         // spawn point should offer the conversation on tick 0 rather than one
         // tick later, which is what a map with an NPC by the door looks like.
         sim.prompt = dialogue::nearest_interactable(&sim.world);
+        // A player who starts inside an exit has not walked into it.
+        sim.inside_exit = sim.exit_under_player();
         sim
+    }
+
+    /// Where the player comes back after dying — see the field.
+    pub fn respawn_point(&self) -> Vec2 {
+        self.respawn
+    }
+
+    /// Move where the player comes back to.
+    pub(crate) fn set_respawn(&mut self, at: Vec2) {
+        self.respawn = at;
+    }
+
+    /// The map's short name — `dungeon` for `maps/dungeon.ron` — or `fixture`
+    /// for a sim built from an inline grid. What world flags are filed under
+    /// and what a tape asserts: `assert map == dungeon`.
+    pub fn map_name(&self) -> &str {
+        map_stem(self.map.as_deref())
+    }
+
+    /// The player's box, while they are alive — what touches exits and
+    /// checkpoints.
+    pub fn player_box(&self) -> Option<Aabb> {
+        let mut query = self
+            .world
+            .query::<(&Position, &Size, &Health)>()
+            .with::<&Avatar>()
+            .without::<&Brain>();
+        let (_, (pos, size, health)) = query.iter().next()?;
+        if health.dead() {
+            return None;
+        }
+        Some(Aabb::new(pos.0.x, pos.0.y, size.0.x, size.0.y))
+    }
+
+    /// The exit the player is standing in right now.
+    fn exit_under_player(&self) -> Option<hecs::Entity> {
+        self.player_box()
+            .and_then(|body| crate::systems::props::exit_at(&self.world, body))
+    }
+
+    /// Go through a door: unlock it if it is locked and the player has its
+    /// key, then travel. Returns whether the player left the map.
+    fn use_door(&mut self, door: hecs::Entity) -> bool {
+        let Ok(spec) = self.world.get::<&Door>(door).map(|d| Door::clone(&d)) else {
+            return false;
+        };
+        if let Some(key) = &spec.locked {
+            if self.flag(&spec.flag) == 0 {
+                let holder = inventory::holder(&self.world);
+                let has = holder.map_or(0, |h| inventory::owned(&self.world, h, key));
+                if has == 0 {
+                    self.events.push(GameEvent::Locked { key: key.clone() });
+                    return false;
+                }
+                if !spec.keep_key {
+                    if let Some(holder) = holder {
+                        inventory::take_item(&mut self.world, holder, key, 1, &mut self.events);
+                    }
+                }
+                self.flags.insert(spec.flag.clone(), 1);
+                self.events.push(GameEvent::Unlocked { key: key.clone() });
+                if let Ok(mut offer) = self.world.get::<&mut Interactable>(door) {
+                    offer.prompt = "enter".to_string();
+                }
+            }
+        }
+        self.travel(&spec.to, &spec.at)
+    }
+
+    /// Take everything out of a chest — all of it or none of it: a bag with no
+    /// room for one of the things inside says so and leaves the chest shut,
+    /// rather than handing over half and losing the rest.
+    fn open_chest(&mut self, chest: hecs::Entity) {
+        let Ok(spec) = self.world.get::<&Chest>(chest).map(|c| Chest::clone(&c)) else {
+            return;
+        };
+        let Some(holder) = inventory::holder(&self.world) else {
+            return;
+        };
+        let Ok(mut trial) = self
+            .world
+            .get::<&Inventory>(holder)
+            .map(|bag| Inventory::clone(&bag))
+        else {
+            return;
+        };
+        for (item, count) in &spec.items {
+            if !trial.add(item, *count) {
+                self.events
+                    .push(GameEvent::InventoryFull { item: item.clone() });
+                return;
+            }
+        }
+        for (item, count) in &spec.items {
+            if self.items.get(item).is_some() {
+                inventory::give_item(&mut self.world, holder, item, *count, &mut self.events);
+            }
+        }
+        self.flags.insert(spec.flag.clone(), 1);
+        let _ = self.world.remove_one::<Interactable>(chest);
+        self.events.push(GameEvent::ChestOpened);
+    }
+
+    /// Throw a lever: its flag goes to 1, and it is not a lever any more.
+    fn pull_lever(&mut self, lever: hecs::Entity) {
+        let Ok(flag) = self.world.get::<&Lever>(lever).map(|l| l.flag.clone()) else {
+            return;
+        };
+        self.flags.insert(flag.clone(), 1);
+        let _ = self.world.remove_one::<Interactable>(lever);
+        self.events.push(GameEvent::LeverPulled { flag });
+    }
+
+    /// Leave for `at` on the map `to`, or say why not.
+    fn travel(&mut self, to: &str, at: &str) -> bool {
+        match self.enter_map(to, at) {
+            Ok(()) => true,
+            Err(_) => {
+                self.events.push(GameEvent::TravelFailed {
+                    map: map_stem(Some(to)).to_string(),
+                });
+                false
+            }
+        }
+    }
+
+    /// Replace this world with the map `to`, the player arriving at `at`.
+    ///
+    /// **What crosses a door is the player, and nothing else.** Their health,
+    /// their mana, their bag and what they are wearing come through; the map
+    /// they left does not — it is rebuilt from its file and its flags the next
+    /// time they walk into it, which is the same "you come back to the map's
+    /// spawn state" a save has always meant. The run's clock, its randomness
+    /// and its flags carry on untouched: they belong to the run, not the map.
+    fn enter_map(&mut self, to: &str, at: &str) -> anyhow::Result<()> {
+        let mut assets = Assets::rooted(self.assets_dir.clone());
+        let (level, clip_sets) = read_map(&mut assets, to)?;
+        let player = self.stats.get("player")?.size();
+        let arrival = level
+            .arrival(at, player)
+            .with_context(|| format!("`{to}` has no spawn or door called `{at}`"))?;
+
+        let carried = Carried::take(&self.world);
+        let mut world = populate(
+            &level,
+            &clip_sets,
+            &self.stats,
+            &self.flags,
+            map_stem(Some(to)),
+        );
+        carried.give(&mut world, arrival);
+
+        self.geometry = Geometry::from_level(&level.solids, &level.one_way, &level.hazards);
+        self.level = level;
+        self.world = world;
+        self.map = Some(to.to_string());
+        self.respawn = arrival;
+        self.conversation = None;
+        self.pending_travel = None;
+        self.pending_dialogue = None;
+        self.held_presses = ActionSet::EMPTY;
+        // Everything on the new map that runs on the world's clock is put where
+        // the clock says, and the new world's geometry is built around it.
+        let now = self.world_tick();
+        self.resume_at(self.tick, self.paused, 0, now);
+        crate::systems::props::tick_gates(&mut self.world, &self.flags);
+        body::rebuild_geometry(&mut self.geometry, &self.world);
+        inventory::derive_stats(&mut self.world, &self.items);
+        self.prompt = dialogue::nearest_interactable(&self.world);
+        self.inside_exit = self.exit_under_player();
+        self.events.push(GameEvent::Traveled {
+            map: self.map_name().to_string(),
+            at: at.to_string(),
+        });
+        Ok(())
     }
 
     /// The seed this run's randomness started from.
@@ -402,9 +628,31 @@ impl Sim {
         self.hitstop
     }
 
+    /// Presses made during a freeze and not yet acted on — see the field.
+    pub fn held_presses(&self) -> ActionSet {
+        self.held_presses
+    }
+
+    /// Put back presses a save says were waiting out a freeze.
+    pub(crate) fn hold_presses(&mut self, presses: ActionSet) {
+        self.held_presses = presses;
+    }
+
     /// The tick this world's geometry is current for — see the field.
     pub fn decided_tick(&self) -> u64 {
         self.decided_tick
+    }
+
+    /// Ticks spent behind a modal screen — see the field.
+    pub fn paused(&self) -> u64 {
+        self.paused
+    }
+
+    /// The clock the world runs on: [`Sim::tick`] less every tick spent with a
+    /// menu or a conversation open. Every fire, platform and swinging hazard is
+    /// a function of this, never of `tick`.
+    pub fn world_tick(&self) -> u64 {
+        self.tick - self.paused
     }
 
     /// Put the clock back where a save left it — and, with it, everything that
@@ -421,13 +669,15 @@ impl Sim {
     /// hands that difference to its riders — see [`mover::place`]. So the clock
     /// and the world it drives move together, here and nowhere else.
     ///
-    /// Three numbers rather than one, because the clock is genuinely three
-    /// things. `tick` is where the run is; `hitstop` is how much of it is still
-    /// frozen; `decided_tick` is where the *world* is, which a freeze makes a
-    /// different number from the first and which no arithmetic on the other two
-    /// can recover — see [`Sim::decided_tick`].
-    pub(crate) fn resume_at(&mut self, tick: u64, hitstop: u32, decided_tick: u64) {
+    /// Four numbers rather than one, because the clock is genuinely four
+    /// things. `tick` is where the run is; `paused` is how much of it was spent
+    /// in a menu, which the world did not see; `hitstop` is how much of it is
+    /// still frozen; `decided_tick` is where the *world* is, which a freeze
+    /// makes a different number from the others and which no arithmetic on
+    /// them can recover — see [`Sim::decided_tick`].
+    pub(crate) fn resume_at(&mut self, tick: u64, paused: u64, hitstop: u32, decided_tick: u64) {
         self.tick = tick;
+        self.paused = paused.min(tick);
         self.hitstop = hitstop;
         self.decided_tick = decided_tick;
 
@@ -523,6 +773,9 @@ impl Sim {
         // Taken once, here, so every mode reads the same answer.
         let newly_held = input.held_set().newly_set(self.prev_held);
 
+        // Whether the world sat this tick out behind a screen: every tick that
+        // starts in a modal mode, and the tick one is opened on.
+        let modal = self.mode.is_modal();
         match self.mode {
             Mode::Playing => self.step_playing(input),
             Mode::Inventory => {
@@ -574,6 +827,9 @@ impl Sim {
         // every read site assumes.
         inventory::derive_stats(&mut self.world, &self.items);
 
+        if modal || self.mode.is_modal() {
+            self.paused += 1;
+        }
         self.prev_held = input.held_set();
         self.tick += 1;
 
@@ -671,7 +927,12 @@ impl Sim {
         // it happens on is already a frozen one. That is what makes a detour
         // through the inventory cost the world exactly nothing: the same
         // number of ticks are spent running it either way.
-        if input.pressed(Action::Inventory) {
+        //
+        // Not while dead: the bag is simulation, and a corpse drinking its
+        // potions during the death freeze spends them for nothing — respawn
+        // refills health anyway.
+        let alive = !self.player_dead();
+        if alive && input.pressed(Action::Inventory) {
             self.set_mode(Mode::Inventory);
             return;
         }
@@ -681,15 +942,28 @@ impl Sim {
         // tick, from where the bodies actually ended it. Pressing the key with
         // nothing in reach does nothing at all and emits nothing, so a trace
         // never has to be read to find out whether a press meant anything.
-        if input.pressed(Action::Interact) {
+        if alive && input.pressed(Action::Interact) {
             if let Some(prompt) = self.prompt.clone() {
                 self.events.push(GameEvent::Interacted {
                     target: prompt.target.label().to_string(),
                 });
                 match &prompt.target {
-                    InteractTarget::Dialogue(graph) => self.begin_dialogue(graph),
+                    InteractTarget::Dialogue(graph) => {
+                        self.begin_dialogue(graph);
+                        return;
+                    }
+                    // Going through a door is the whole tick: the world it
+                    // would have run is not there any more.
+                    InteractTarget::Door => {
+                        if self.use_door(prompt.entity) {
+                            return;
+                        }
+                    }
+                    // A chest or a lever is a moment, not a scene: the world
+                    // carries on around it this tick.
+                    InteractTarget::Chest => self.open_chest(prompt.entity),
+                    InteractTarget::Lever => self.pull_lever(prompt.entity),
                 }
-                return;
             }
         }
 
@@ -698,14 +972,17 @@ impl Sim {
         // with wall-clock time and a frozen frame is visible as one.
         if self.hitstop > 0 {
             self.hitstop -= 1;
+            self.held_presses = self.held_presses.union(input.pressed_set());
             return;
         }
+        let input = input.with_pressed(std::mem::take(&mut self.held_presses));
 
         // Past every early return, so the world genuinely runs from here: this
         // is the tick its geometry will be current for once the decide phase
         // below has placed everything. Recorded rather than worked out later —
         // see the field.
-        self.decided_tick = self.tick;
+        let now = self.world_tick();
+        self.decided_tick = now;
 
         // Combat timers first, so a controller asking "am I stunned?" reads
         // this tick's answer rather than last tick's.
@@ -722,12 +999,18 @@ impl Sim {
         // angle puts it, and the rebuild below picks both up this tick. Only
         // `mover::advance` needs a more particular slot, because only it has
         // riders to carry.
-        crate::systems::hazard::tick_schedules(&mut self.world, self.tick);
-        crate::systems::pendulum::advance(&mut self.world, self.tick);
+        crate::systems::hazard::tick_schedules(&mut self.world, now);
+        crate::systems::pendulum::advance(&mut self.world, now);
+        // Gates open and shut on flags the same way fires light on a clock.
+        crate::systems::props::tick_gates(&mut self.world, &self.flags);
+
+        // A rival's brain decides here, beside the player's keys, and its
+        // avatar is steered by the same controller from what it chose.
+        crate::systems::brain::think(&mut self.world, &self.attacks, &self.spells);
 
         avatar::control(
             &mut self.world,
-            &self.level,
+            self.respawn,
             &self.geometry,
             &self.attacks,
             &self.spells,
@@ -735,11 +1018,16 @@ impl Sim {
             TICK,
             &mut self.events,
         );
-        npc::think(&mut self.world, &self.geometry, &mut self.events);
+        npc::think(
+            &mut self.world,
+            &self.geometry,
+            &self.spells,
+            &mut self.events,
+        );
 
         // Last decision of the tick: platforms go where this tick puts them and
         // take their riders with them. Ordered here deliberately — see above.
-        mover::advance(&mut self.world, self.tick);
+        mover::advance(&mut self.world, now);
 
         // The one point in the tick where the world's geometry changes.
         body::rebuild_geometry(&mut self.geometry, &self.world);
@@ -751,6 +1039,14 @@ impl Sim {
             input,
             &mut self.events,
         );
+        // The same hazards and the same bottom of the world, for everything
+        // else that walks.
+        combat::environmental_deaths(
+            &mut self.world,
+            &self.geometry,
+            self.level.fall_limit(),
+            &mut self.events,
+        );
 
         // Hitboxes are tested once everything has finished moving, so a swing
         // connects where the bodies actually ended the tick.
@@ -760,18 +1056,30 @@ impl Sim {
         // Both are done before `settle_dead`, so whatever either of them
         // killed stops moving on the tick it died.
         spell::resolve_projectiles(&mut self.world, &self.geometry, &mut self.events);
+        // And touching: a bite is a hitbox the size of the biter.
+        combat::contact_hits(&mut self.world, &mut self.events);
         // Beside them, and tested at final positions for the same reason:
         // walking over something is contact, and contact is decided once
         // everything has stopped moving.
-        inventory::collect_pickups(&mut self.world, &mut self.events);
+        // An item the map placed is remembered as taken, so it is not placed
+        // again the next time the map is built.
+        for taken in inventory::collect_pickups(&mut self.world, &mut self.events) {
+            self.flags.insert(taken, 1);
+        }
+        inventory::cull_fallen(&mut self.world, self.level.fall_limit());
         // Standing next to something is the same kind of question as walking
         // over it, so it is answered in the same place: after everything has
         // moved, from the boxes as they finally are.
         self.update_prompt();
         combat::settle_dead(&mut self.world);
+        // A death that matters to the rest of the game says so in a flag.
+        for flag in combat::death_flags(&self.world) {
+            self.flags.entry(flag).or_insert(1);
+        }
+        self.touch_props();
         // On the tick the corpse died, so a kill and its drops are one frame
         // of the trace rather than two.
-        inventory::drop_loot(&mut self.world, &mut self.rng);
+        inventory::drop_loot(&mut self.world, &self.geometry, &mut self.rng);
         if self
             .events
             .iter()
@@ -781,8 +1089,84 @@ impl Sim {
         }
 
         animation::select_avatar_clip(&mut self.world, &self.attacks, &self.spells);
-        animation::select_patrol_clip(&mut self.world);
+        animation::select_patrol_clip(&mut self.world, &self.attacks, &self.spells);
         animation::advance(&mut self.world, TICK);
+
+        // Last of all: an exit walked into this tick. The world this tick ran
+        // in is finished with, so replacing it cannot interrupt anything.
+        if let Some((to, at)) = self.pending_travel.take() {
+            self.travel(&to, &at);
+        }
+        // ...and a story a trigger has to tell, which freezes the world from
+        // the next tick on, exactly as talking to someone does.
+        if let Some(graph) = self.pending_dialogue.take() {
+            self.begin_dialogue(&graph);
+        }
+    }
+
+    /// Exits and checkpoints: things the player acts on by touching them.
+    /// Tested at final positions, with the pickups and the prompt.
+    fn touch_props(&mut self) {
+        let Some(body) = self.player_box() else {
+            return;
+        };
+
+        // An exit fires on the tick the player walks *into* it — not every
+        // tick they are in it, and not when they arrive in one.
+        let exit = crate::systems::props::exit_at(&self.world, body);
+        if exit.is_some() && exit != self.inside_exit {
+            if let Some(spec) =
+                exit.and_then(|e| self.world.get::<&Exit>(e).ok().map(|x| Exit::clone(&x)))
+            {
+                self.pending_travel = Some((spec.to, spec.at));
+            }
+        }
+        self.inside_exit = exit;
+
+        // A trigger tells its story the first time you walk into it, and only
+        // once the flag it waits on is set.
+        if let Some(spec) = crate::systems::props::trigger_at(&self.world, body).and_then(|t| {
+            self.world
+                .get::<&Trigger>(t)
+                .ok()
+                .map(|t| Trigger::clone(&t))
+        }) {
+            let ready = spec.when.as_ref().is_none_or(|when| self.flag(when) != 0);
+            if ready && self.flag(&spec.flag) == 0 {
+                self.flags.insert(spec.flag, 1);
+                self.pending_dialogue = Some(spec.dialogue);
+            }
+        }
+
+        // A checkpoint becomes where you come back to, and — once, as it
+        // lights — sees you back to full health and mana.
+        let Some(checkpoint) = crate::systems::props::checkpoint_at(&self.world, body) else {
+            return;
+        };
+        let (Ok(pos), Ok(size)) = (
+            self.world.get::<&Position>(checkpoint).map(|p| p.0),
+            self.world.get::<&Size>(checkpoint).map(|s| s.0),
+        ) else {
+            return;
+        };
+        let spot = Vec2::new(pos.x + size.x / 2.0 - body.w / 2.0, pos.y + size.y - body.h);
+        if spot == self.respawn {
+            return;
+        }
+        self.respawn = spot;
+        for (_, (health, mana)) in self
+            .world
+            .query_mut::<(&mut Health, Option<&mut Mana>)>()
+            .with::<&Avatar>()
+            .without::<&Brain>()
+        {
+            health.current = health.max;
+            if let Some(mana) = mana {
+                mana.current = mana.max;
+                mana.partial = 0;
+            }
+        }
+        self.events.push(GameEvent::Checkpoint);
     }
 
     /// Work out what is in reach, announcing it when the answer changes.
@@ -803,6 +1187,17 @@ impl Sim {
             }
         }
         self.prompt = found;
+    }
+
+    /// Whether the player is dead — in the freeze between dying and
+    /// respawning.
+    fn player_dead(&self) -> bool {
+        self.world
+            .query::<&Health>()
+            .with::<&Avatar>()
+            .without::<&Brain>()
+            .iter()
+            .any(|(_, health)| health.dead())
     }
 
     /// What happened during the most recent [`Sim::step`].
@@ -826,10 +1221,14 @@ impl Sim {
     /// component at runtime — a stun, a damage flash — query order reshuffles.
     /// `npc.0` in a tape has to keep meaning the same knight, so the ordering
     /// is made explicit here instead of being inherited from iteration luck.
+    ///
+    /// An NPC is anything a map placed by kind — a walker, a flyer, or a rival
+    /// with the player's own kit — which is exactly what carries a [`Kind`].
+    /// The player has none, and neither does a bolt or a dropped item.
     pub fn npcs(&self) -> Vec<hecs::Entity> {
         let mut entities: Vec<hecs::Entity> = self
             .world
-            .query::<&Patrol>()
+            .query::<&Kind>()
             .iter()
             .map(|(entity, _)| entity)
             .collect();
@@ -844,24 +1243,24 @@ impl Sim {
             .filter_map(|entity| {
                 let mut query = self
                     .world
-                    .query_one::<(
-                        &Kind,
-                        &Patrol,
-                        &Position,
-                        &Velocity,
-                        &Body,
-                        &Health,
-                        &AnimationState,
-                    )>(entity)
+                    .query_one::<(&Kind, &Position, &Velocity, &Body, &Health, &AnimationState)>(
+                        entity,
+                    )
                     .ok()?;
-                let (kind, patrol, pos, vel, body, health, anim) = query.get()?;
+                let (kind, pos, vel, body, health, anim) = query.get()?;
                 Some(NpcProbe {
                     kind: kind.0.clone(),
                     x: pos.0.x,
                     y: pos.0.y,
                     vx: vel.0.x,
                     vy: vel.0.y,
-                    dir: patrol.dir,
+                    // Whichever brain it has — a walker's route, or the
+                    // facing of an avatar a rival is flying.
+                    dir: if combat::facing_right(&self.world, entity) {
+                        1.0
+                    } else {
+                        -1.0
+                    },
                     grounded: body.grounded,
                     hp: health.current,
                     hitstun: health.hitstun,
@@ -936,7 +1335,7 @@ impl Sim {
     /// Snapshot the player's state for tracing and assertions.
     pub fn probe(&self) -> Probe {
         #[allow(clippy::type_complexity)]
-        let mut query = self.world.query::<(
+        let query = self.world.query::<(
             &Avatar,
             &Body,
             &Health,
@@ -948,9 +1347,10 @@ impl Sim {
             Option<&Casting>,
             Option<&Inventory>,
         )>();
+        let mut query = query.without::<&Brain>();
         let (_, (avatar, body, health, attacking, pos, vel, anim, mana, casting, bag)) =
             query.iter().next().expect("sim has no avatar to probe");
-        Probe::new(
+        let mut probe = Probe::new(
             self.tick,
             self.mode,
             avatar,
@@ -972,7 +1372,9 @@ impl Sim {
             &self.screen,
             self.prompt.as_ref(),
             self.conversation.as_ref(),
-        )
+        );
+        probe.map = self.map_name().to_string();
+        probe
     }
 
     /// Things that must be true at the end of every tick. Debug builds only,
@@ -1023,19 +1425,200 @@ impl Sim {
     }
 }
 
+/// A map's short name from its path: `dungeon` for `maps/dungeon.ron`, and
+/// `fixture` for a sim with no file behind it.
+fn map_stem(map: Option<&str>) -> &str {
+    map.and_then(|path| std::path::Path::new(path).file_stem())
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("fixture")
+}
+
+/// Read a map and the clip set of every kind it places.
+///
+/// One clip set per kind actually present, so a map that places no knights
+/// does not need the knight art to exist. A kind is checked for everything it
+/// needs — art, numbers, and a way to be spawned — here, where the error can
+/// name the map, rather than as a panic halfway through building the world.
+fn read_map(
+    assets: &mut Assets,
+    map: &str,
+) -> anyhow::Result<(LevelData, HashMap<String, Arc<ClipSet>>)> {
+    let map_path = assets.base_dir().join(map);
+    let level = LevelData::load(&map_path, assets)?;
+    let stats = assets.stats()?;
+
+    let mut clip_sets: HashMap<String, Arc<ClipSet>> = HashMap::new();
+    clip_sets.insert("player".to_string(), assets.clip_set("player")?);
+    for placement in &level.entities {
+        let kind = placement.kind.as_str();
+        stats
+            .get(kind)
+            .and_then(|block| spawn::placeable(kind, &block))
+            .with_context(|| format!("{map} places `{kind}`"))?;
+        if let hash_map::Entry::Vacant(slot) = clip_sets.entry(kind.to_string()) {
+            slot.insert(
+                assets.clip_set(kind).with_context(|| {
+                    format!("{map} places `{kind}` but its clip set is missing")
+                })?,
+            );
+        }
+    }
+    Ok((level, clip_sets))
+}
+
+/// Build a map's world: the player, every NPC in map order, then everything
+/// else — fires, platforms, swings and the level's furniture — as `flags` say
+/// it now stands.
+///
+/// Map order for the NPCs, which is the grid scanned top-left to bottom-right
+/// and then the explicit entity list: spawn order decides `knight.<n>` in
+/// traces and tape assertions, so it has to be a property of the map rather
+/// than of iteration luck. Everything that is not an NPC comes after, so
+/// adding one to a map cannot renumber them.
+fn populate(
+    level: &LevelData,
+    clip_sets: &HashMap<String, Arc<ClipSet>>,
+    stats: &StatTable,
+    flags: &BTreeMap<String, i64>,
+    map: &str,
+) -> World {
+    let clips_for = |kind: &str| -> Arc<ClipSet> {
+        clip_sets
+            .get(kind)
+            .unwrap_or_else(|| panic!("no clip set loaded for `{kind}`"))
+            .clone()
+    };
+    let stats_for = |kind: &str| stats.get(kind).unwrap_or_else(|e| panic!("{e:#}"));
+
+    let mut world = World::new();
+    let player = stats_for("player");
+    spawn::player(
+        &mut world,
+        level.player_spawn,
+        clips_for("player"),
+        player.clone(),
+    );
+    for placement in &level.entities {
+        let entity = spawn::entity(
+            &mut world,
+            placement,
+            level.tile_size,
+            clips_for(&placement.kind),
+            stats_for(&placement.kind),
+        )
+        .expect("level entities were validated on load");
+        spawn::customise(&mut world, entity, placement, flags);
+    }
+    crate::systems::hazard::spawn_fires(&mut world, level);
+    crate::systems::mover::spawn_movers(&mut world, level);
+    crate::systems::pendulum::spawn_pendulums(&mut world, level);
+    crate::systems::props::spawn_props(
+        &mut world,
+        level,
+        flags,
+        map,
+        player.gravity,
+        player.max_fall,
+    );
+    world
+}
+
+/// What of the player goes through a door with them: health, mana, the bag,
+/// what they are wearing, and which way they face. Everything else — speed,
+/// timers, a swing half-thrown — is left on the map they walked off.
+struct Carried {
+    health: Option<i32>,
+    mana: Option<(i32, u32)>,
+    bag: Option<Vec<crate::ecs::components::ItemStack>>,
+    gear: Option<BTreeMap<crate::assets::Slot, String>>,
+    facing_right: bool,
+}
+
+impl Carried {
+    fn take(world: &World) -> Carried {
+        let Some(player) = avatar::player(world) else {
+            return Carried {
+                health: None,
+                mana: None,
+                bag: None,
+                gear: None,
+                facing_right: true,
+            };
+        };
+        Carried {
+            health: world.get::<&Health>(player).ok().map(|h| h.current),
+            mana: world
+                .get::<&Mana>(player)
+                .ok()
+                .map(|m| (m.current, m.partial)),
+            bag: world
+                .get::<&Inventory>(player)
+                .ok()
+                .map(|b| b.slots.clone()),
+            gear: world
+                .get::<&Equipment>(player)
+                .ok()
+                .map(|g| g.slots.clone()),
+            facing_right: world
+                .get::<&Avatar>(player)
+                .map(|a| a.facing_right)
+                .unwrap_or(true),
+        }
+    }
+
+    /// Stand the new world's player at `at` with everything carried.
+    fn give(self, world: &mut World, at: Vec2) {
+        let Some(player) = avatar::player(world) else {
+            return;
+        };
+        if let Ok(mut pos) = world.get::<&mut Position>(player) {
+            pos.0 = at;
+        }
+        if let Ok(mut body) = world.get::<&mut Body>(player) {
+            body.prev_pos = at;
+        }
+        if let Ok(mut avatar) = world.get::<&mut Avatar>(player) {
+            avatar.facing_right = self.facing_right;
+        }
+        if let (Some(current), Ok(mut health)) = (self.health, world.get::<&mut Health>(player)) {
+            health.current = current;
+        }
+        if let (Some((current, partial)), Ok(mut mana)) =
+            (self.mana, world.get::<&mut Mana>(player))
+        {
+            mana.current = current;
+            mana.partial = partial;
+        }
+        if let (Some(slots), Ok(mut bag)) = (self.bag, world.get::<&mut Inventory>(player)) {
+            bag.slots = slots;
+        }
+        if let (Some(slots), Ok(mut gear)) = (self.gear, world.get::<&mut Equipment>(player)) {
+            gear.slots = slots;
+        }
+    }
+}
+
 /// Placeholder clips for [`Sim::fixture`]: every clip any selector can ask
 /// for, each two frames at 10 fps on a sheet that does not exist.
 ///
 /// One set serves every entity kind, since nothing headless reads the pixels.
 /// `Sim::check_invariants` fails loudly if a selector ever reaches a name that
 /// is missing here, which is what keeps the clip lists honest.
-/// The placeholder clip set, registered under every kind a map can place.
-pub(crate) fn fixture_clip_sets() -> HashMap<String, Arc<ClipSet>> {
+/// The placeholder clip set, registered under every kind a map can place —
+/// public so an integration test can build a [`Sim::new`] from level data it
+/// wrote itself.
+pub fn fixture_clip_sets() -> HashMap<String, Arc<ClipSet>> {
     let stub = Arc::new(fixture_clips());
-    std::iter::once("player")
-        .chain(spawn::KINDS.iter().copied())
+    StatTable::shipped()
+        .kinds()
+        .into_iter()
         .map(|kind| (kind.to_string(), stub.clone()))
         .collect()
+}
+
+/// One placeholder clip set, for a test that spawns an entity by hand.
+pub fn fixture_clips_for_kind() -> ClipSet {
+    fixture_clips()
 }
 
 pub(crate) fn fixture_clips() -> ClipSet {
@@ -1068,6 +1651,7 @@ pub(crate) fn fixture_clips() -> ClipSet {
                     looping: true,
                     sheet: None,
                     frame_size: None,
+                    offset: None,
                 },
             )
         })
@@ -1076,6 +1660,8 @@ pub(crate) fn fixture_clips() -> ClipSet {
         sheet: Some("fixture".to_string()),
         frame_size: Some((50.0, 37.0)),
         offset: None,
+        tint: None,
+        base: None,
         clips,
     }
 }
@@ -1627,7 +2213,7 @@ mod tests {
         assert_eq!(
             sim.events(),
             [GameEvent::Attacked {
-                attack: stats.attack.clone()
+                attack: stats.attack.clone().unwrap()
             }]
         );
 
@@ -1911,6 +2497,48 @@ mod tests {
         assert_ne!(a.tick, b.tick, "but the clock did keep running");
     }
 
+    /// The same claim on a map whose geometry runs on a clock. A platform and
+    /// the rider on it are where they would have been without the detour, and
+    /// the first tick back moves the platform one tick's worth — not the whole
+    /// time the bag was open in one lurch.
+    #[test]
+    fn a_detour_through_a_menu_stops_the_clock_that_platforms_run_on() {
+        let map = "maps/testbed_mover.ron";
+        let mut plain = Sim::load(&mut Assets::new(), map).unwrap();
+        let mut detoured = Sim::load(&mut Assets::new(), map).unwrap();
+        for _ in 0..50 {
+            plain.step(PlayerInput::default());
+            detoured.step(PlayerInput::default());
+        }
+
+        detoured.step(OPEN_BAG);
+        for _ in 0..77 {
+            detoured.step(PlayerInput::default());
+        }
+        let parked = platform_x(&detoured);
+        detoured.step(OPEN_BAG);
+        assert_eq!(detoured.mode(), Mode::Playing);
+        assert_eq!(
+            platform_x(&detoured),
+            parked,
+            "still parked on the tick it closed"
+        );
+        assert_eq!(detoured.paused(), 79, "open tick, 77 inside, close tick");
+
+        for _ in 0..30 {
+            plain.step(PlayerInput::default());
+            detoured.step(PlayerInput::default());
+            assert_eq!(platform_x(&detoured), platform_x(&plain));
+            assert_eq!(detoured.world_tick(), plain.world_tick());
+        }
+        assert_eq!(detoured.probe().x, plain.probe().x);
+
+        // ...and a save taken after the detour comes back on the same clock.
+        let reloaded = Sim::load_save(&mut Assets::new(), &detoured.save().unwrap()).unwrap();
+        assert_eq!(reloaded.world_tick(), detoured.world_tick());
+        assert_eq!(platform_x(&reloaded), platform_x(&detoured));
+    }
+
     /// Nothing enters dialogue mode yet, and it must not be a trap for the
     /// ticket that does.
     #[test]
@@ -1962,5 +2590,145 @@ mod tests {
             sim.step(JUMP);
         }
         assert_eq!(sim.rng, before, "a system started rolling dice");
+    }
+
+    // --- the fixes from the M8 review --------------------------------------
+
+    fn player_entity(sim: &Sim) -> hecs::Entity {
+        sim.world
+            .query::<&Avatar>()
+            .iter()
+            .map(|(e, _)| e)
+            .next()
+            .expect("the fixture has a player")
+    }
+
+    /// A hit mid-plunge used to leave gravity at the plunge's zero for the
+    /// whole stun, floating the player up in a straight line. The stun restates
+    /// the body's knobs, so knockback arcs and falls like any other.
+    #[test]
+    fn a_hit_mid_plunge_arcs_and_falls_rather_than_floating() {
+        let mut sim = casting_sim();
+        sim.step(JUMP);
+        for _ in 0..6 {
+            sim.step(PlayerInput::default());
+        }
+        sim.step(PlayerInput::from_actions(&[Action::Down, Action::Attack]));
+        assert!(sim.probe().plunging);
+
+        let player = player_entity(&sim);
+        sim.world.get::<&mut Health>(player).unwrap().hitstun = 17;
+        sim.world.get::<&mut Velocity>(player).unwrap().0 = Vec2::new(0.0, -140.0);
+        sim.step(PlayerInput::default());
+        let first = sim.probe().vy;
+        for _ in 0..5 {
+            sim.step(PlayerInput::default());
+        }
+        assert!(
+            sim.probe().vy > first + 50.0,
+            "gravity pulled the knockback down: {first} -> {}",
+            sim.probe().vy
+        );
+    }
+
+    /// Every hit that lands opens a four-tick freeze, and pressing attack
+    /// again is exactly what a player does at that moment. The press is held
+    /// for the first live tick rather than thrown away.
+    #[test]
+    fn a_press_made_during_hitstop_is_acted_on_when_the_world_resumes() {
+        let mut sim = casting_sim();
+        sim.step(PlayerInput::from_actions(&[Action::Attack]));
+        let slash = sim.probe().attacking;
+        assert!(slash);
+
+        // A blow lands: the world freezes for four ticks, and attack is pressed
+        // on the second of them — inside the chain window of the swing.
+        for _ in 0..6 {
+            sim.step(PlayerInput::default());
+        }
+        sim.hitstop = HITSTOP_TICKS;
+        sim.step(PlayerInput::default());
+        sim.step(PlayerInput::from_actions(&[Action::Attack]));
+        let mut chained = false;
+        for _ in 0..40 {
+            sim.step(PlayerInput::default());
+            chained |= sim
+                .events()
+                .iter()
+                .any(|e| matches!(e, GameEvent::Attacked { attack } if attack == "player_slash2"));
+        }
+        assert!(chained, "the press made during the freeze was dropped");
+    }
+
+    /// A cast is a commitment: it roots you on the ground and nothing else
+    /// starts until it is done.
+    #[test]
+    fn casting_roots_the_player_and_blocks_a_swing() {
+        let mut sim = casting_sim();
+        sim.step(CAST);
+        assert!(sim.probe().casting);
+        let x = sim.probe().x;
+        for _ in 0..5 {
+            sim.step(PlayerInput::from_actions(&[Action::Right, Action::Attack]));
+            sim.step(PlayerInput::holding(&[Action::Right]));
+        }
+        assert_eq!(sim.probe().x, x, "held still through the cast");
+        assert!(!sim.probe().attacking, "and no swing started inside it");
+    }
+
+    /// A swing is aimed by the way you face, so facing is locked until it is
+    /// over: turning mid-swing used to throw the hitbox behind you.
+    #[test]
+    fn facing_is_locked_while_a_swing_runs() {
+        let mut sim = casting_sim();
+        assert!(sim.probe().facing_right);
+        sim.step(PlayerInput::from_actions(&[Action::Attack]));
+        for _ in 0..8 {
+            sim.step(PlayerInput::holding(&[Action::Left]));
+            assert!(sim.probe().facing_right, "turned mid-swing");
+        }
+    }
+
+    /// A slide starts faster than a run and bleeds down to one; it used to be
+    /// a flat slide speed for its whole length.
+    #[test]
+    fn a_slide_bleeds_from_slide_speed_to_run_speed() {
+        let mv = player_stats().avatar().clone();
+        let mut sim = running_sim();
+        for _ in 0..30 {
+            sim.step(PlayerInput::holding(&[Action::Right]));
+        }
+        sim.step(PlayerInput::from_actions(&[
+            Action::Right,
+            Action::Down,
+            Action::Jump,
+        ]));
+        let start = sim.probe().vx;
+        let mut last = start;
+        for _ in 1..mv.slide_ticks {
+            sim.step(PlayerInput::holding(&[Action::Right, Action::Down]));
+            assert!(sim.probe().vx <= last, "sped up mid-slide");
+            last = sim.probe().vx;
+        }
+        assert!(start > player_stats().run_speed);
+        assert!(
+            (last - player_stats().run_speed).abs() < 10.0,
+            "ended the slide at {last}, not near a run"
+        );
+    }
+
+    /// A fresh swing of the same attack plays from its first frame, rather than
+    /// freezing on the last frame of the one before.
+    #[test]
+    fn a_repeated_swing_restarts_its_clip() {
+        let mut sim = casting_sim();
+        sim.step(PlayerInput::from_actions(&[Action::Attack]));
+        let player = player_entity(&sim);
+        // End the swing by hand on the tick a new press arrives.
+        sim.world.get::<&mut AnimationState>(player).unwrap().frame = 3;
+        sim.world.get::<&mut Attacking>(player).unwrap().stop();
+        sim.step(PlayerInput::from_actions(&[Action::Attack]));
+        assert_eq!(sim.probe().clip, "attack1");
+        assert_eq!(sim.probe().frame, 0, "the new swing starts at the top");
     }
 }

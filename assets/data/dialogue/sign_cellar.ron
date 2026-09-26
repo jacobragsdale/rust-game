@@ -1,0 +1,14 @@
+// The castle's secret: a note in the captain's cellar.
+Dialogue(
+    id: "sign_cellar",
+    start: "read",
+    nodes: {
+        "read": Node(
+            speaker: "Scratched into the cellar wall",
+            lines: [
+                "THE CALL IS IN MY HEAD. IT SAYS COME DOWN. IT SAYS IT IS NOT FAR.",
+                "IF I GO, DO NOT FOLLOW. MY RING IS UNDER THE STONE - THE LAST HONEST THING I OWN. - HALE, CAPTAIN OF THE WATCH",
+            ],
+        ),
+    },
+)

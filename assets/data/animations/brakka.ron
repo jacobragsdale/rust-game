@@ -1,0 +1,7 @@
+// Brakka the Unbroken — a champion of the Proving Circle, in the player's own
+// art (a rival animates through the player's selector) gone ruddy.
+ClipSet(
+    base: "player",
+    tint: (236, 144, 112),
+    clips: {},
+)

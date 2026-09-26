@@ -20,7 +20,8 @@ use hecs::World;
 
 use crate::assets::{AttackDef, AttackTable, SpellTable, StatBlock};
 use crate::ecs::components::{
-    Attacking, Avatar, Body, Casting, DerivedStats, Health, Mana, Plunge, Position, Size, Velocity,
+    Attacking, Avatar, Body, Brain, Casting, DerivedStats, Health, Kind, Mana, Plunge, Position,
+    Size, Velocity,
 };
 use crate::level::LevelData;
 use crate::physics::{self, Aabb, HazardQuery, SolidQuery};
@@ -28,11 +29,29 @@ use crate::sim::event::{DeathCause, GameEvent};
 use crate::systems::input::{Action, PlayerInput};
 use crate::systems::spell;
 
+/// The player's avatar: the one with no [`Brain`] at its controls. Lowest id,
+/// so the answer is a fact about the world rather than about the order hecs
+/// happens to store it in.
+pub fn player(world: &World) -> Option<hecs::Entity> {
+    world
+        .query::<()>()
+        .with::<&Avatar>()
+        .without::<&Brain>()
+        .iter()
+        .map(|(entity, _)| entity)
+        .min_by_key(|entity| entity.id())
+}
+
 /// Phase 1: turn this tick's input into a velocity and body settings.
+///
+/// `input` is the player's — the keyboard's, or a tape's. An avatar with a
+/// [`Brain`] at its controls reads what the brain chose instead, through
+/// exactly the same code below, so a rival can do everything the player can
+/// and nothing more.
 #[allow(clippy::too_many_arguments)]
 pub fn control<Q: SolidQuery + ?Sized>(
     world: &mut World,
-    level: &LevelData,
+    respawn_at: Vec2,
     geometry: &Q,
     attacks: &AttackTable,
     spells: &SpellTable,
@@ -41,7 +60,7 @@ pub fn control<Q: SolidQuery + ?Sized>(
     events: &mut Vec<GameEvent>,
 ) {
     #[allow(clippy::type_complexity)]
-    for (_, (avatar, pos, vel, size, body, health, attacking, stats, casting, mana)) in world
+    for (_, (avatar, pos, vel, size, body, health, attacking, stats, casting, mana, brain)) in world
         .query_mut::<(
             &mut Avatar,
             &mut Position,
@@ -53,9 +72,11 @@ pub fn control<Q: SolidQuery + ?Sized>(
             &DerivedStats,
             Option<&mut Casting>,
             Option<&mut Mana>,
+            Option<&Brain>,
         )>()
     {
         let (mut casting, mut mana) = (casting, mana);
+        let input = brain.map_or(input, |brain| brain.input);
         // Everything below reads its numbers from here: `stats` is the
         // *derived* block — the one `assets/data/stats.ron` holds for this
         // entity's kind plus whatever it is wearing, recomputed from the base
@@ -65,6 +86,11 @@ pub fn control<Q: SolidQuery + ?Sized>(
         let mv = stats.avatar();
 
         let stunned = health.hitstun > 0;
+        // Only the player gets up again. A rival that is down stays down.
+        if avatar.dead() && brain.is_some() {
+            body.frozen = true;
+            continue;
+        }
         if avatar.dead() {
             avatar.dead_ticks -= 1;
             if avatar.dead_ticks == 0 {
@@ -78,7 +104,7 @@ pub fn control<Q: SolidQuery + ?Sized>(
                     mana.as_deref_mut(),
                     casting.as_deref_mut(),
                     stats,
-                    level.player_spawn,
+                    respawn_at,
                 );
                 events.push(GameEvent::Respawned);
             }
@@ -99,6 +125,33 @@ pub fn control<Q: SolidQuery + ?Sized>(
             // being knocked out of the air leaves a live hitbox stuck to a
             // player who is no longer plunging.
             avatar.cancel_plunge();
+            // So is everything else the controller was in the middle of. The
+            // body knobs are restated rather than left as the last tick set
+            // them: a hit mid-plunge used to keep gravity at zero and float the
+            // player up in a straight line for the whole stun, a hit mid-slide
+            // resumed the slide when the stun ended, and a hit off a wall kept
+            // the wall-slide fall cap on a body nowhere near a wall.
+            avatar.slide_ticks = 0;
+            avatar.drop_ticks = 0;
+            avatar.wall_sliding = false;
+            // A hit is not a ledge to walk off or a wall to kick from: both
+            // grace windows are shut until the next real landing or touch,
+            // the same way a jump shuts them.
+            avatar.coyote_ticks = avatar.coyote_ticks.max(mv.coyote_ticks + 1);
+            avatar.wall_coyote_ticks = u32::MAX - 1;
+            body.gravity = stats.gravity;
+            body.max_fall = stats.max_fall;
+            body.fall_cap = None;
+            body.ignore_one_way = false;
+            // Refused loudly, like every other cast that does not happen.
+            if input.pressed(Action::Cast) {
+                if let Some(spell) = &stats.spell {
+                    events.push(GameEvent::CastFailed {
+                        spell: spell.clone(),
+                        reason: crate::sim::event::CastFailure::Busy,
+                    });
+                }
+            }
             continue;
         }
 
@@ -125,11 +178,15 @@ pub fn control<Q: SolidQuery + ?Sized>(
         // attack alone, and from the ground combo, which is attack on the
         // floor with or without down. Once started it owns the avatar: no
         // steering, no jump, no second attack and no cast until it is over.
+        // A cast is a commitment exactly as a swing is: nothing else starts
+        // while one is running, and on the ground it roots you.
+        let casting_now = casting.as_ref().is_some_and(|c| c.busy());
         let plunge_start = input.attack_pressed()
             && input.down()
             && !body.grounded
             && !avatar.plunging()
             && !attacking.busy()
+            && !casting_now
             && !avatar.sliding();
         if plunge_start {
             avatar.plunge = Plunge::Ready;
@@ -180,7 +237,7 @@ pub fn control<Q: SolidQuery + ?Sized>(
         // is a single cheaper swing. Which link comes next is data: pressing
         // during the current attack's chain window buffers its successor, and
         // `combat::advance_attacks` starts it when this animation ends.
-        if input.attack_pressed() && !avatar.sliding() && !avatar.plunging() {
+        if input.attack_pressed() && !avatar.sliding() && !avatar.plunging() && !casting_now {
             match current_attack(attacking, attacks) {
                 Some(def) if def.chains() => {
                     attacking.chained = def.chain.clone();
@@ -188,14 +245,16 @@ pub fn control<Q: SolidQuery + ?Sized>(
                 Some(_) => {}
                 None => {
                     let attack = if body.grounded {
-                        stats.attack.as_str()
+                        stats.attack.as_deref()
                     } else {
-                        mv.air_attack.as_str()
+                        Some(mv.air_attack.as_str())
                     };
-                    attacking.start(attack);
-                    events.push(GameEvent::Attacked {
-                        attack: attack.to_string(),
-                    });
+                    if let Some(attack) = attack {
+                        attacking.start(attack);
+                        events.push(GameEvent::Attacked {
+                            attack: attack.to_string(),
+                        });
+                    }
                 }
             }
         }
@@ -266,6 +325,7 @@ pub fn control<Q: SolidQuery + ?Sized>(
             && dir != 0.0
             && avatar.slide_cooldown == 0
             && !attacking.busy()
+            && !casting_now
         {
             avatar.slide_ticks = mv.slide_ticks;
             avatar.slide_cooldown = mv.slide_ticks + mv.slide_cooldown;
@@ -281,27 +341,33 @@ pub fn control<Q: SolidQuery + ?Sized>(
         // something. Air momentum is left alone -- stopping dead mid-jump
         // reads as a bug rather than as commitment. A slide overrides both:
         // it carries its own speed and bleeds off on its own.
+        let committed = (attacking.busy() || casting_now) && body.grounded;
         let target = if avatar.sliding() {
+            // Aimed at a run, from the slide's own faster start: the rate
+            // below bleeds the one into the other across the slide's length.
+            // Aiming at slide speed itself made the slide a flat 300 px/s for
+            // all twenty ticks and the bleed a no-op.
             avatar.facing_right as u8 as f32 * 2.0 - 1.0
-        } else if attacking.busy() && body.grounded {
+        } else if committed {
             0.0
         } else {
             dir
-        } * if avatar.sliding() {
-            mv.slide_speed
-        } else {
-            stats.run_speed
-        };
+        } * stats.run_speed;
         let rate = if avatar.sliding() {
-            // Bleed from slide speed to run speed across the slide.
-            (mv.slide_speed - stats.run_speed) / (mv.slide_ticks as f32 * dt)
+            // Bleed from slide speed to run speed across the slide. `abs` so
+            // that a run speed pushed past the slide's by equipment still
+            // closes the gap rather than stepping away from it.
+            ((mv.slide_speed - stats.run_speed) / (mv.slide_ticks as f32 * dt)).abs()
         } else if dir != 0.0 {
             mv.accel
         } else {
             mv.decel
         };
         vel.0.x = move_toward(vel.0.x, target, rate * dt);
-        if !avatar.sliding() {
+        // Facing is locked while committed: a swing's hitbox and knockback are
+        // aimed by it, so turning mid-swing used to flip a slash started at a
+        // knight on the right onto whatever was on the left.
+        if !avatar.sliding() && !attacking.busy() && !casting_now {
             if dir > 0.0 {
                 avatar.facing_right = true;
             } else if dir < 0.0 {
@@ -345,7 +411,11 @@ pub fn control<Q: SolidQuery + ?Sized>(
             avatar.drop_ticks = mv.drop_ticks;
             avatar.jump_buffer = 0;
             events.push(GameEvent::DroppedThrough);
-        } else if avatar.jump_buffer > 0 {
+        } else if avatar.jump_buffer > 0 && !committed {
+            // Not while rooted in a swing or a cast: jumping out of one kept
+            // its hitbox live in the air and made the root meaningless. The
+            // press stays buffered, so a jump pressed at the end of a swing
+            // still comes out the moment the swing lets go.
             let can_ground_jump = avatar.coyote_ticks <= mv.coyote_ticks;
             let can_wall_jump = avatar.wall_coyote_ticks <= mv.wall_coyote_ticks;
 
@@ -408,9 +478,8 @@ pub fn after_move<H: HazardQuery + ?Sized>(
     input: PlayerInput,
     events: &mut Vec<GameEvent>,
 ) {
-    let dir = input.dir();
-
-    for (_, (avatar, pos, vel, size, body, health, stats)) in world.query_mut::<(
+    #[allow(clippy::type_complexity)]
+    for (_, (avatar, pos, vel, size, body, health, stats, brain, kind)) in world.query_mut::<(
         &mut Avatar,
         &mut Position,
         &mut Velocity,
@@ -418,7 +487,11 @@ pub fn after_move<H: HazardQuery + ?Sized>(
         &Body,
         &mut Health,
         &DerivedStats,
+        Option<&Brain>,
+        Option<&Kind>,
     )>() {
+        let input = brain.map_or(input, |brain| brain.input);
+        let dir = input.dir();
         let mv = stats.0.avatar();
 
         // Frozen bodies did not move, so there is no new contact to read and
@@ -467,14 +540,17 @@ pub fn after_move<H: HazardQuery + ?Sized>(
         // already emitted the `Died` for it by the time this sees it.
         let hitbox = Aabb::new(pos.0.x, pos.0.y, size.0.x, size.0.y);
         let burned = hazards.hazard_overlapping(hitbox);
-        let fell_out = pos.0.y > level.pixel_height() + 100.0;
+        let fell_out = pos.0.y > level.fall_limit();
 
-        if burned || fell_out {
+        // Once. A body already cut down this tick by combat, then carried
+        // into spikes by its own knockback, died of the first thing: a second
+        // `Died` would make `expect player.died == 1` count one death twice.
+        if !health.dead() && (burned || fell_out) {
             avatar.dead_ticks = mv.death_ticks;
             health.current = 0;
             vel.0 = Vec2::ZERO;
             events.push(GameEvent::Died {
-                who: "player".to_string(),
+                who: kind.map_or("player", |k| k.0.as_str()).to_string(),
                 cause: if burned {
                     DeathCause::Hazard
                 } else {
@@ -586,7 +662,7 @@ mod tests {
         let spells = SpellTable::shipped();
         super::control(
             world,
-            level,
+            level.player_spawn,
             geometry,
             &attacks,
             &spells,
@@ -1060,6 +1136,35 @@ mod tests {
         // but the respawn itself must have happened first)
         assert_eq!(pos, level.player_spawn);
         assert_eq!(avatar.air_jumps, stats().avatar().max_air_jumps);
+    }
+
+    /// Cut down and then carried into spikes by the knockback on the next
+    /// phase: one death, not two, or `expect player.died == 1` counts one
+    /// death twice.
+    #[test]
+    fn the_already_dead_do_not_die_again_to_a_hazard() {
+        let mut level = test_level();
+        level.hazards = vec![Aabb::new(90.0, FLOOR_Y - 16.0, 64.0, 16.0)];
+        let geo = geometry(&level);
+        let mut world = World::new();
+        spawn_avatar(&mut world, level.player_spawn);
+        for (_, health) in world.query_mut::<&mut Health>() {
+            health.current = 0;
+        }
+        let mut events = Vec::new();
+        crate::systems::body::move_bodies(&mut world, geo.as_slice(), DT);
+        super::after_move(
+            &mut world,
+            &level,
+            level.hazards.as_slice(),
+            PlayerInput::default(),
+            &mut events,
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, GameEvent::Died { .. })),
+            "died a second time: {events:?}"
+        );
+        assert!(state(&mut world).0.dead(), "but is still dead");
     }
 
     #[test]

@@ -13,8 +13,15 @@
 //!
 //! ```bash
 //! cargo test --test traces              # check against the baselines
+//! TRACE_IGNORE=mana,map cargo test --test traces   # ...leaving these fields out
 //! UPDATE_TRACES=1 cargo test --test traces   # re-record them
 //! ```
+//!
+//! **Prove a change is only a new column before re-recording.** Adding a probe
+//! field rewrites every baseline, which looks exactly like the game changing.
+//! `TRACE_IGNORE` names fields — player and NPC alike — to drop from both
+//! sides before comparing; if every trace then matches, the new columns were
+//! the whole of the change, and it is safe to re-record.
 //!
 //! Re-recording is a deliberate act: the diff lands in the commit, and a
 //! reviewer (or a later you) sees precisely which ticks moved and can decide
@@ -45,6 +52,50 @@ fn tape_paths() -> Vec<PathBuf> {
 
 fn rerecording() -> bool {
     std::env::var("UPDATE_TRACES").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
+/// The fields `TRACE_IGNORE` says to leave out of the comparison.
+fn ignored() -> Vec<String> {
+    std::env::var("TRACE_IGNORE")
+        .map(|v| {
+            v.split(',')
+                .map(str::trim)
+                .filter(|f| !f.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A trace with the ignored fields taken out of every frame, and out of every
+/// NPC and item inside one, re-serialized so two can be compared as text.
+fn without(trace: &str, ignore: &[String]) -> String {
+    if ignore.is_empty() {
+        return trace.to_string();
+    }
+    fn strip(value: &mut serde_json::Value, ignore: &[String]) {
+        if let serde_json::Value::Object(map) = value {
+            map.retain(|key, _| !ignore.contains(key));
+            for nested in ["npcs", "items"] {
+                if let Some(serde_json::Value::Array(list)) = map.get_mut(nested) {
+                    list.iter_mut().for_each(|v| strip(v, ignore));
+                }
+            }
+        }
+    }
+    trace
+        .lines()
+        .map(
+            |line| match serde_json::from_str::<serde_json::Value>(line) {
+                Ok(mut value) => {
+                    strip(&mut value, ignore);
+                    value.to_string()
+                }
+                Err(_) => line.to_string(),
+            },
+        )
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Replay a tape and return the trace it produces.
@@ -162,6 +213,8 @@ fn every_tape_reproduces_its_recorded_trace() {
             continue;
         }
 
+        let ignore = ignored();
+        let (expected, actual) = (without(&expected, &ignore), without(&actual, &ignore));
         if expected != actual {
             problems.push(format!(
                 "{stem}: behavior changed\n    {}\n    If this change was intended: UPDATE_TRACES=1 cargo test --test traces",
@@ -170,6 +223,9 @@ fn every_tape_reproduces_its_recorded_trace() {
         }
     }
 
+    if !ignored().is_empty() {
+        println!("compared without: {}", ignored().join(", "));
+    }
     if !rerecorded.is_empty() {
         println!("re-recorded {} trace(s):", rerecorded.len());
         for name in &rerecorded {

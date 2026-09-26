@@ -1,0 +1,33 @@
+// The other half of testbed_world.ron: a small room to arrive in by the exit
+// and leave by the door, and the reverse.
+//
+// FROZEN like every testbed.
+//
+// 20x12 tiles. Floor surface y=320.
+//
+//   col  0   exit west     back to the Proving Hall, arriving at "east"
+//   col  2   Spawn "west"  where the hall's exit puts you
+//   cols 10-11  door       `cellar`, back to the hall's cellar door
+Level(
+    tileset: "castle",
+    name: "The Annex",
+    grid: [
+        "####################",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "...................#",
+        "...................#",
+        "...................#",
+        "####################",
+        "####################",
+    ],
+    entities: [
+        Exit(cell: (0, 7), size: (1, 3), to: "maps/testbed_world.ron", at: "east"),
+        Spawn(id: "west", cell: (2, 9)),
+        Door(cell: (10, 9), id: "cellar", to: "maps/testbed_world.ron", at: "cellar", art: "archway"),
+    ],
+)

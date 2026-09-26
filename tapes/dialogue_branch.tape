@@ -63,8 +63,8 @@ assert dialogue_node == greet
 assert dialogue_choices == 3
 
 # Three replies, and the fourth is *absent* rather than listed and refused:
-# "I brought your draught back." is gated on carrying one, and the bag is
-# empty. Ask for one instead — the second reply.
+# "I brought your draught back." is gated on having been lent one and still
+# carrying it, and neither is true yet. Ask for one instead — the second reply.
 down 1
 wait 1
 assert dialogue_selection == 1

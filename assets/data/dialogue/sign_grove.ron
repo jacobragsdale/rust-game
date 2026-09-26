@@ -1,0 +1,13 @@
+// The Thornwood's secret: what is written in the hidden grove.
+Dialogue(
+    id: "sign_grove",
+    start: "read",
+    nodes: {
+        "read": Node(
+            speaker: "Words carved in the oldest tree",
+            lines: [
+                "Here the wood keeps its heart. Take the seed that never sprouted; walk lighter for it.",
+            ],
+        ),
+    },
+)

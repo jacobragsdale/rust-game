@@ -1,0 +1,29 @@
+// An item icon: tome frost. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/tome_frost
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (44, 88, 180),
+        'c': (98, 160, 240),
+        'd': (150, 236, 255),
+        'e': (240, 246, 255),
+        'f': (255, 250, 236),
+    },
+    frames: [
+        [
+            "..aaaaaaaa..",
+            ".abbbbbbbca.",
+            ".abddbbbbca.",
+            ".abdedbbbca.",
+            ".abbdbbbbca.",
+            ".abbbbdbbca.",
+            ".abbbdedbca.",
+            ".abbbbdbbca.",
+            ".abbbbbbbca.",
+            ".affffffffa.",
+            ".aaaaaaaaaa.",
+            "............",
+        ],
+    ],
+)

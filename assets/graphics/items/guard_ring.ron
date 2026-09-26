@@ -1,0 +1,27 @@
+// An item icon: the captain's signet. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/guard_ring
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (190, 38, 51),
+        'c': (230, 170, 40),
+        'd': (254, 231, 97),
+    },
+    frames: [
+        [
+            "............",
+            "............",
+            "....aaaa....",
+            "...acddca...",
+            "..aca..aca..",
+            ".ada....aca.",
+            ".aca....aca.",
+            ".aca....aca.",
+            "..aca..aca..",
+            "...acbbca...",
+            "....aaaa....",
+            "............",
+        ],
+    ],
+)

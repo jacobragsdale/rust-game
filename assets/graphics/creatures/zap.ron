@@ -1,0 +1,32 @@
+// A drone's bolt: a bead of the Choir's violet. 8x8 frames.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image creatures/zap
+Pixels(
+    palette: {
+        'a': (130, 40, 170),
+        'b': (220, 110, 240),
+        'c': (255, 230, 255),
+    },
+    frames: [
+        [
+            "....a...",
+            ".aabbaa.",
+            ".abbbba.",
+            ".bbccbaa",
+            "abbccbba",
+            ".abbbba.",
+            ".aaaba..",
+            "...aa...",
+        ],
+        [
+            "...aa...",
+            "..abaaa.",
+            ".abbbba.",
+            "abbccbba",
+            "aabccbb.",
+            ".abbbba.",
+            ".aabbaa.",
+            "...a....",
+        ],
+    ],
+)

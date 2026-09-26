@@ -1,0 +1,29 @@
+// An item icon: maul. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/maul
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (160, 90, 40),
+        'c': (120, 132, 156),
+        'd': (230, 170, 40),
+        'e': (192, 203, 220),
+        'f': (240, 246, 255),
+    },
+    frames: [
+        [
+            "..aaaaaaaa..",
+            ".aceeeeeeca.",
+            ".aefeeeeeea.",
+            ".aceeeeeeca.",
+            "..aaaaaaaa..",
+            ".....aba....",
+            ".....aba....",
+            ".....aba....",
+            ".....aba....",
+            ".....aba....",
+            ".....ada....",
+            "......a.....",
+        ],
+    ],
+)

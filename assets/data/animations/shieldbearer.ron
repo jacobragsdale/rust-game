@@ -1,0 +1,20 @@
+// Thrall Shieldbearer — the knight's art (`base`), drained to a hollow grey,
+// with the pack's shield sheet for the one pose that matters: standing ready
+// behind it. `guard` is what the patrol selector plays for a kind with a
+// shield when it stands still, so the pose is the tell — shield up, blows
+// turn; shield down, it is swinging, and open.
+ClipSet(
+    base: "knight",
+    tint: (176, 184, 200),
+    clips: {
+        // knightShield frames 0-2: the kite shield held square in front.
+        "guard": Clip(
+            sheet: "knight/knightShield",
+            frame_size: (96.0, 64.0),
+            offset: (-2.0, 0.0),
+            frames: [(0, 0), (1, 0), (2, 0), (1, 0)],
+            fps: 6.0,
+            looping: true,
+        ),
+    },
+)

@@ -1,0 +1,56 @@
+// The Heart of the Ark — where the Choir sings, and where the game ends.
+//
+//   cols  1-6    the landing: the hatch back to the Deep, a checkpoint
+//   col   8      the threshold, under a low arch: the Choir speaks (a trigger)
+//   cols  8-40   the hall: the Choir, and two of its eyes, over four catwalks
+//                in two tiers — a fight with something that flies, so the
+//                fight goes up, and the middle stack climbs straight to it
+//   col  41      sealed: a wall down to a gate that opens on the Choir's death
+//   cols 42-52   after: the Archivist's thanks (a trigger that waits on the
+//                Choir's death flag), the last of the sleepers, and the hatch
+//                home — the long fall down to Ashford
+//
+// Tileset `ark_heart`: the Ark's plate in the Choir's violet. 54x16 tiles.
+Level(
+    tileset: "ark_heart",
+    name: "The Heart of the Ark",
+    grid: [
+        "######################################################",
+        "######################################################",
+        "#......#.................................#...........#",
+        "#......#.................................#...........#",
+        "#......#.................................#...........#",
+        "#......#.................................#...........#",
+        "#......#.................................#...........#",
+        "#......#............========.............#...........#",
+        "#......#.................................#...........#",
+        "#......#.................................#...........#",
+        "#..........======....======....======....#...........#",
+        "#....................................................#",
+        "#....................................................#",
+        "#....................................................#",
+        "######################################################",
+        "######################################################",
+    ],
+    entities: [
+        // NPCs, in the order a tape addresses them.
+        // Its death is the flag the ending is built on.
+        Npc(kind: "choir", cell: (24, 4), flag: "quest.ark.choir"),
+        Npc(kind: "drone", cell: (12, 4)),
+        Npc(kind: "drone", cell: (36, 4)),
+
+        Door(id: "entry", cell: (2, 13), to: "maps/engine_deep.ron", at: "heart_door", art: "hatch"),
+        Spawn(id: "threshold", cell: (5, 13)),
+        Checkpoint(cell: (4, 13)),
+        Trigger(id: "song", cell: (8, 11), size: (1, 3), dialogue: "choir_speaks"),
+        Gate(cell: (41, 13), height: 3, flag: "quest.ark.choir"),
+        Trigger(id: "quiet", cell: (44, 11), size: (1, 3), dialogue: "epilogue_ark", when: "quest.ark.choir"),
+        Door(id: "home", cell: (49, 13), to: "maps/village.ron", at: "sky", art: "hatch"),
+        Decor(cell: (3, 10), prop: "torch"),
+        Decor(cell: (14, 6), prop: "viewport"),
+        Decor(cell: (33, 6), prop: "viewport"),
+        Decor(cell: (44, 13), prop: "pod"),
+        Decor(cell: (46, 13), prop: "pod"),
+        Decor(cell: (52, 10), prop: "torch"),
+    ],
+)

@@ -46,6 +46,14 @@ const EVENT_NAMES: &[&str] = &[
     "dialogue_opened",
     "choice_taken",
     "dialogue_closed",
+    "traveled",
+    "travel_failed",
+    "locked",
+    "unlocked",
+    "chest_opened",
+    "lever_pulled",
+    "checkpoint",
+    "blocked",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -192,6 +200,43 @@ pub enum GameEvent {
     DialogueClosed {
         graph: String,
     },
+    /// The player went through a door or an exit and arrived on another map.
+    /// `map` is the short name — `dungeon` — and `at` where they arrived.
+    Traveled {
+        map: String,
+        at: String,
+    },
+    /// A door or an exit that leads nowhere: the map would not load, or has
+    /// no arrival point by that name. Announced rather than swallowed, for
+    /// the reason `CastFailed` is — "the door did nothing" and "the door is
+    /// broken" are otherwise the same absence. `tests/data.rs` is what keeps
+    /// shipped content from ever producing one.
+    TravelFailed {
+        map: String,
+    },
+    /// A locked door refused the player, who does not have `key`.
+    Locked {
+        key: String,
+    },
+    /// A locked door opened with `key`, for good.
+    Unlocked {
+        key: String,
+    },
+    /// A chest was opened; what came out of it is its `picked_up`s.
+    ChestOpened,
+    /// A lever was thrown, setting `flag` to 1.
+    LeverPulled {
+        flag: String,
+    },
+    /// The player touched a checkpoint that was not already the one they
+    /// would come back to.
+    Checkpoint,
+    /// A blow met a raised shield and did nothing. `who` is the one holding
+    /// it. Not decoration, for the reason `cast_failed` is not: without it, a
+    /// swing that bounced off and a swing that missed are the same absence.
+    Blocked {
+        who: String,
+    },
 }
 
 /// Where a subject's name has to come from, so that a mistyped one is a
@@ -219,6 +264,11 @@ pub enum Subject {
     Graph,
     /// A node id inside some dialogue graph.
     Node,
+    /// What an interactable offers: a dialogue graph id, or `door`, `chest`
+    /// or `lever`.
+    Target,
+    /// A map's short name, from the files in `assets/maps/`: `dungeon`.
+    Map,
 }
 
 impl Subject {
@@ -232,6 +282,8 @@ impl Subject {
             Subject::Mode => "a mode",
             Subject::Graph => "a dialogue graph id (assets/data/dialogue/)",
             Subject::Node => "a dialogue node id (assets/data/dialogue/)",
+            Subject::Target => "a dialogue graph id, or door, chest or lever",
+            Subject::Map => "a map name (assets/maps/<name>.ron)",
         }
     }
 }
@@ -248,10 +300,9 @@ pub const MODES: &[Mode] = &[Mode::Playing, Mode::Inventory, Mode::Dialogue];
 /// where that name has to come from: `knight.damaged` is a kind,
 /// `player_slash3.attacked` an attack id, `shock.spell_cast` a spell id.
 ///
-/// `interact_prompted` and `interacted` say `Graph` because what an
-/// interactable offers today is a conversation and nothing else. The day a
-/// door or a chest is interactable, that is the line to widen — and a tape
-/// naming one will be rejected here until it is, which is the point.
+/// `interact_prompted` and `interacted` say `Target`: a conversation's graph
+/// id, or `door`, `chest` or `lever` for the things a level is furnished with —
+/// `expect door.interacted == 1`.
 const SUBJECT_EVENTS: &[(&str, Subject)] = &[
     ("died", Subject::Kind),
     ("damaged", Subject::Kind),
@@ -264,11 +315,16 @@ const SUBJECT_EVENTS: &[(&str, Subject)] = &[
     ("item_used", Subject::Item),
     ("equipped", Subject::Item),
     ("unequipped", Subject::Item),
-    ("interact_prompted", Subject::Graph),
-    ("interacted", Subject::Graph),
+    ("interact_prompted", Subject::Target),
+    ("interacted", Subject::Target),
     ("dialogue_opened", Subject::Graph),
     ("choice_taken", Subject::Node),
     ("dialogue_closed", Subject::Graph),
+    ("traveled", Subject::Map),
+    ("travel_failed", Subject::Map),
+    ("locked", Subject::Item),
+    ("unlocked", Subject::Item),
+    ("blocked", Subject::Kind),
 ];
 
 impl GameEvent {
@@ -297,6 +353,9 @@ impl GameEvent {
             // is the question worth asking of a conversation, and the graph is
             // already countable through `dialogue_opened`.
             GameEvent::ChoiceTaken { node, .. } => Some(node),
+            GameEvent::Traveled { map, .. } | GameEvent::TravelFailed { map } => Some(map),
+            GameEvent::Locked { key } | GameEvent::Unlocked { key } => Some(key),
+            GameEvent::Blocked { who } => Some(who),
             _ => None,
         }
     }
@@ -349,6 +408,14 @@ impl GameEvent {
             GameEvent::DialogueOpened { .. } => "dialogue_opened",
             GameEvent::ChoiceTaken { .. } => "choice_taken",
             GameEvent::DialogueClosed { .. } => "dialogue_closed",
+            GameEvent::Traveled { .. } => "traveled",
+            GameEvent::TravelFailed { .. } => "travel_failed",
+            GameEvent::Locked { .. } => "locked",
+            GameEvent::Unlocked { .. } => "unlocked",
+            GameEvent::ChestOpened => "chest_opened",
+            GameEvent::LeverPulled { .. } => "lever_pulled",
+            GameEvent::Checkpoint => "checkpoint",
+            GameEvent::Blocked { .. } => "blocked",
         }
     }
 
@@ -480,6 +547,27 @@ mod tests {
             },
             GameEvent::DialogueClosed {
                 graph: "elder_intro".to_string(),
+            },
+            GameEvent::Traveled {
+                map: "dungeon".to_string(),
+                at: "west".to_string(),
+            },
+            GameEvent::TravelFailed {
+                map: "dungeon".to_string(),
+            },
+            GameEvent::Locked {
+                key: "iron_key".to_string(),
+            },
+            GameEvent::Unlocked {
+                key: "iron_key".to_string(),
+            },
+            GameEvent::ChestOpened,
+            GameEvent::LeverPulled {
+                flag: "quest.crypt.gate".to_string(),
+            },
+            GameEvent::Checkpoint,
+            GameEvent::Blocked {
+                who: "knight".to_string(),
             },
         ]
     }

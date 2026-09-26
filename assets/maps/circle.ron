@@ -1,0 +1,78 @@
+// The Proving Circle — where the Vael find out what a taken warrior can do.
+//
+// Three pits in a row, each walled up to the ceiling and shut by a gate that
+// opens when its champion falls (death flags: `quest.circle.<name>`). The
+// champions are rivals — avatars with the player's own kit, flown by a brain —
+// so they jump, chain combos and cast exactly as the player can, and the
+// catwalks in the pits are for them as much as for you.
+//
+//   cols  1-10   the entrance: the hatch back to the Holding, the rules on a
+//                plaque, a checkpoint. Rungs (cols 2-5) climb to the gallery
+//   cols 11-28   the first pit: Kesh of the Glass Dunes, quick. A brazier
+//                just inside each of the next two gates (cols 31 and 49) sees
+//                you back to full, so every duel starts whole
+//   cols 30-46   the second pit: Brakka the Unbroken, heavy
+//   cols 48-64   the third pit: Morwen of the Hollow Hills, spell and sword
+//   cols 66-76   the exit hall: the Arbiter, who rewards the Circle's
+//                champion, and the hatch down into the Engine Deep
+//
+//   the gallery  row 7, cols 6-28, over the entrance and the first pit. Its
+//                far end is a wall with a secret in it: col 29, rows 5-6, is
+//                false wall, and behind it — sealed over the second pit — the
+//                Nameless waits in the cell the Circle does not speak of
+//
+// Tileset `ark`. 78x18 tiles.
+Level(
+    tileset: "ark",
+    name: "The Proving Circle",
+    grid: [
+        "##############################################################################",
+        "##############################################################################",
+        "##############################################################################",
+        "#............................#...........#####################################",
+        "#............................#...........#####################################",
+        "#............................%...........#####################################",
+        "#............................%...........#####################################",
+        "#.....########################################################################",
+        "#............................#.................#.................#...........#",
+        "#.====.......................#.................#.................#...........#",
+        "#............................#.................#.................#...........#",
+        "#.====........====....====...#.................#...====...====...#...........#",
+        "#............................................................................#",
+        "#.====.......................................................................#",
+        "#............................................................................#",
+        "##############################################################################",
+        "##############################################################################",
+        "##############################################################################",
+    ],
+    entities: [
+        // NPCs, in the order a tape addresses them.
+        Npc(kind: "kesh", cell: (24, 14), flag: "quest.circle.kesh"),
+        Npc(kind: "brakka", cell: (43, 14), flag: "quest.circle.brakka"),
+        Npc(kind: "nameless", cell: (38, 6), flag: "quest.circle.nameless"),
+        Npc(kind: "morwen", cell: (61, 14), flag: "quest.circle.morwen"),
+        Npc(kind: "arbiter", cell: (70, 14)),
+
+        Door(id: "hold_door", cell: (2, 14), to: "maps/ark_hold.ron", at: "circle_door", art: "hatch"),
+        Spawn(id: "entry", cell: (6, 14)),
+        Sign(cell: (8, 14), dialogue: "sign_circle"),
+        Checkpoint(cell: (10, 14)),
+        // Each pit's gate opens on its champion's fall.
+        Gate(cell: (29, 14), height: 3, flag: "quest.circle.kesh"),
+        // Just inside each gate, a brazier: every duel starts whole.
+        Checkpoint(cell: (31, 14)),
+        Checkpoint(cell: (49, 14)),
+        Gate(cell: (47, 14), height: 3, flag: "quest.circle.brakka"),
+        Gate(cell: (65, 14), height: 3, flag: "quest.circle.morwen"),
+        // The Nameless's cell: a warning at the mouth of it.
+        Trigger(id: "warning", cell: (26, 5), size: (2, 2), dialogue: "nameless_warning"),
+        Checkpoint(cell: (68, 14)),
+        Door(id: "deep_door", cell: (74, 14), to: "maps/engine_deep.ron", at: "top", art: "hatch"),
+        Decor(cell: (12, 6), prop: "torch"),
+        Decor(cell: (20, 6), prop: "torch"),
+        Decor(cell: (33, 12), prop: "torch"),
+        Decor(cell: (55, 12), prop: "torch"),
+        Decor(cell: (72, 12), prop: "torch"),
+        Decor(cell: (16, 5), prop: "viewport"),
+    ],
+)

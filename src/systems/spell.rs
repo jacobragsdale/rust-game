@@ -134,14 +134,43 @@ pub fn advance_casts(world: &mut World, spells: &SpellTable) {
 /// event here would announce the same decision twice.
 fn release(world: &mut World, caster: hecs::Entity, def: &SpellDef) {
     match &def.effect {
-        SpellEffect::Projectile { size, .. } => {
+        SpellEffect::Projectile { size, aimed, .. } => {
             let Some((origin, facing_right, team, clips)) = launch_site(world, caster, *size)
             else {
                 return;
             };
-            spawn::projectile(world, caster, origin, facing_right, def, team, clips);
+            let centre = origin + Vec2::new(size.0, size.1) / 2.0;
+            let aim = aimed.then(|| aim_at(world, caster, team, centre)).flatten();
+            spawn::projectile(world, caster, origin, facing_right, aim, def, team, clips);
         }
     }
+}
+
+/// Which way to throw an aimed bolt from `from`: at the middle of the nearest
+/// living fighter on the other side — an avatar, or anything that hunts — or
+/// `None` with nobody there, and it flies straight.
+///
+/// Fighters only. A villager is on the player's side, but a drone has come
+/// for the player and not for the herbalist.
+fn aim_at(world: &World, caster: hecs::Entity, team: Team, from: Vec2) -> Option<Vec2> {
+    let mut best: Option<(f32, u32, Vec2)> = None;
+    for (entity, (pos, size, their, health)) in
+        world.query::<(&Position, &Size, &Team, &Health)>().iter()
+    {
+        let fighter = world.get::<&Avatar>(entity).is_ok()
+            || world
+                .get::<&crate::ecs::components::Hostile>(entity)
+                .is_ok();
+        if entity == caster || *their == team || health.dead() || !fighter {
+            continue;
+        }
+        let to = pos.0 + size.0 / 2.0 - from;
+        let key = (to.length_squared(), entity.id());
+        if best.is_none_or(|(d, id, _)| key.0 < d || (key.0 == d && key.1 < id)) {
+            best = Some((key.0, key.1, to));
+        }
+    }
+    best.and_then(|(_, _, to)| to.try_normalize())
 }
 
 /// Where a caster's projectile starts, which way it goes, whose side it is on,
@@ -159,10 +188,9 @@ fn launch_site(
     let body = world.get::<&Size>(caster).ok()?.0;
     let team = *world.get::<&Team>(caster).ok()?;
     let clips = world.get::<&Sprite>(caster).ok()?.clips.clone();
-    let facing_right = world
-        .get::<&Avatar>(caster)
-        .map(|a| a.facing_right)
-        .unwrap_or(true);
+    // The same answer a swing is aimed by, so a caster that walks a route
+    // throws the way it is walking rather than always to the right.
+    let facing_right = combat::facing_right(world, caster);
 
     let x = if facing_right {
         pos.x + body.x
@@ -188,7 +216,7 @@ pub fn resolve_projectiles<Q: SolidQuery + ?Sized>(
 ) {
     // What landed, and what is finished. Collected first, because applying
     // damage mutates the world while these queries are live.
-    let mut landed: Vec<(hecs::Entity, Vec2, i32, u32)> = Vec::new();
+    let mut landed: Vec<(hecs::Entity, hecs::Entity, Vec2, i32, u32)> = Vec::new();
     let mut expired: Vec<hecs::Entity> = Vec::new();
     let mut probe: Vec<SolidRect> = Vec::new();
 
@@ -212,7 +240,7 @@ pub fn resolve_projectiles<Q: SolidQuery + ?Sized>(
         // velocity — so a bolt that has lost its horizontal speed is a bolt
         // that hit something solid. Checked before the geometry query because
         // it is free and catches the ordinary case.
-        let blocked = vel.0.x == 0.0 || {
+        let blocked = vel.0 != bolt.launched || {
             geometry.overlapping(box_, &mut probe);
             probe.iter().any(|s| !s.one_way && box_.overlaps(&s.rect))
         };
@@ -224,6 +252,12 @@ pub fn resolve_projectiles<Q: SolidQuery + ?Sized>(
             if target == bolt.source || target_team == team || !health.vulnerable() {
                 continue;
             }
+            // Once per target per bolt, as a swing is: a piercing bolt that
+            // spends longer inside a knight than the knight's i-frames last
+            // would otherwise hit it again on the way out.
+            if bolt.hit.contains(&target) {
+                continue;
+            }
             let body = Aabb::new(
                 target_pos.0.x,
                 target_pos.0.y,
@@ -231,7 +265,7 @@ pub fn resolve_projectiles<Q: SolidQuery + ?Sized>(
                 target_size.0.y,
             );
             if box_.overlaps(&body) {
-                landed.push((target, bolt.knockback, bolt.damage, bolt.hitstun));
+                landed.push((entity, target, bolt.knockback, bolt.damage, bolt.hitstun));
                 hits += 1;
                 if !bolt.pierces {
                     break;
@@ -244,7 +278,35 @@ pub fn resolve_projectiles<Q: SolidQuery + ?Sized>(
         }
     }
 
-    for (target, knockback, damage, hitstun) in landed {
+    // Entity order, for the reason `combat::resolve` sorts: which of two
+    // bolts reaching one target on one tick lands is a fact about the world.
+    landed.sort_by_key(|(bolt, target, ..)| (target.id(), bolt.id()));
+    for (bolt, target, knockback, damage, hitstun) in landed {
+        let heading = match world.get::<&mut Projectile>(bolt) {
+            Ok(mut projectile) => {
+                projectile.hit.push(target);
+                projectile.launched
+            }
+            Err(_) => Vec2::ZERO,
+        };
+        // A bolt into a shield's face is turned like a blade is, and ends
+        // there — straight down onto one is from above, and lands.
+        let target_x = world
+            .get::<&Position>(target)
+            .map(|p| p.0.x)
+            .unwrap_or_default();
+        let from_x = target_x - heading.x.signum() * 1000.0;
+        if heading.x != 0.0 && combat::guarded(world, target, from_x) {
+            events.push(GameEvent::Blocked {
+                who: world
+                    .get::<&crate::ecs::components::Kind>(target)
+                    .map_or("player".to_string(), |k| k.0.clone()),
+            });
+            if !expired.contains(&bolt) {
+                expired.push(bolt);
+            }
+            continue;
+        }
         combat::apply_hit(world, target, damage, knockback, hitstun, events);
     }
 
@@ -393,6 +455,57 @@ mod tests {
         assert!(world.get::<&Health>(v).unwrap().hitstun > 0);
     }
 
+    /// A bolt thrown at somebody flies at them — up and across here, from a
+    /// caster below — and gets there; one thrown with nobody about flies
+    /// straight, as any other bolt does.
+    #[test]
+    fn an_aimed_bolt_flies_at_the_nearest_foe() {
+        let mut seek = shock();
+        let SpellEffect::Projectile { aimed, .. } = &mut seek.effect;
+        *aimed = true;
+        let table = SpellTable([("seek".to_string(), seek.clone())].into_iter().collect());
+
+        let mut world = World::new();
+        let c = caster(&mut world, 100.0, true);
+        let v = victim(&mut world, 180.0, 10);
+        world.get::<&mut Position>(v).unwrap().0.y = 20.0;
+        world
+            .insert_one(v, crate::ecs::components::Hostile::new(Vec2::ZERO, None))
+            .unwrap();
+        world
+            .get::<&mut Casting>(c)
+            .unwrap()
+            .start("seek", seek.cooldown);
+
+        let (mut rose, mut events) = (false, Vec::new());
+        for _ in 0..90 {
+            advance_casts(&mut world, &table);
+            for (_, (_, vel)) in world.query::<(&Projectile, &Velocity)>().iter() {
+                rose |= vel.0.y < 0.0 && vel.0.x > 0.0;
+            }
+            crate::systems::body::move_bodies(&mut world, &[], crate::sim::TICK);
+            resolve_projectiles(&mut world, &[], &mut events);
+        }
+        assert!(rose, "thrown up and across, at where the foe is");
+        assert!(hp(&world, v) < 10, "and it got there");
+
+        // Nobody left to aim at: straight ahead.
+        let _ = world.despawn(v);
+        world.get::<&mut Casting>(c).unwrap().cooldown = 0;
+        world
+            .get::<&mut Casting>(c)
+            .unwrap()
+            .start("seek", seek.cooldown);
+        for _ in 0..(seek.cast_ticks + 1) {
+            advance_casts(&mut world, &table);
+        }
+        let flat = world
+            .query::<(&Projectile, &Velocity)>()
+            .iter()
+            .all(|(_, (_, vel))| vel.0.y == 0.0 && vel.0.x > 0.0);
+        assert!(flat && projectile_count(&world) == 1);
+    }
+
     #[test]
     fn a_bolt_stops_at_a_wall() {
         let wall = [SolidRect::solid(Aabb::new(200.0, 0.0, 32.0, 300.0))];
@@ -480,6 +593,7 @@ mod tests {
             caster,
             Vec2::new(100.0, 40.0),
             true,
+            None,
             &shock(),
             Team::Player,
             clips,
@@ -513,6 +627,7 @@ mod tests {
                     c,
                     Vec2::new(start_x + 20.0, 100.0),
                     true,
+                    None,
                     &def,
                     Team::Player,
                     clips,
@@ -563,28 +678,35 @@ mod tests {
     #[test]
     fn a_projectiles_art_comes_from_a_sheet_the_caster_already_names() {
         let mut assets = crate::assets::Assets::new();
-        let player = assets
-            .clip_set("player")
-            .expect("the player's clip set loads");
-
-        for id in spells().ids() {
-            let def = spells().get(id).expect("id came from the table").clone();
+        let stats = StatTable::shipped();
+        let mut casters = 0;
+        for kind in stats.kinds() {
+            let Some(id) = stats.get(kind).unwrap().spell.clone() else {
+                continue;
+            };
+            casters += 1;
+            let set = assets.clip_set(kind).expect("every kind's clip set loads");
+            let def = spells()
+                .get(&id)
+                .expect("a kind casts a real spell")
+                .clone();
             let SpellEffect::Projectile { clip, .. } = &def.effect;
-            let bolt = player.clip(clip).unwrap_or_else(|| {
-                panic!("spell `{id}` throws clip `{clip}`, which the player's clip set lacks")
+            let bolt = set.clip(clip).unwrap_or_else(|| {
+                panic!("`{kind}` throws clip `{clip}` for `{id}`, which its clip set lacks")
             });
             // Resolving is the whole point: `sheet_of` is what the scene calls
             // when it collects textures, and it must not fall over.
             assert!(
-                !player.sheet_of(bolt).is_empty(),
-                "spell `{id}`'s bolt names no sheet"
+                !set.sheet_of(bolt).is_empty(),
+                "`{kind}`'s `{id}` bolt names no sheet"
             );
             assert!(
-                player.clip(&def.clip).is_some(),
-                "spell `{id}` casts clip `{}`, which the player's clip set lacks",
+                set.clip(&def.clip).is_some(),
+                "`{kind}` casts `{id}` with clip `{}`, which its clip set lacks",
                 def.clip
             );
         }
+        assert!(casters >= 2, "the player and at least one enemy cast");
     }
 
     /// Resting flush against a surface is not penetration; anything deeper is.
@@ -699,5 +821,76 @@ mod tests {
             world.get::<&Casting>(c).unwrap().cooldown > 0,
             "and the cooldown is still running: interrupting is not a way out"
         );
+    }
+
+    /// A piercing bolt lands once per target, the rule a swing keeps: it spends
+    /// longer inside a knight than the knight's i-frames last, and used to hit
+    /// it again on the way out.
+    #[test]
+    fn a_piercing_bolt_hits_each_target_once() {
+        let mut world = World::new();
+        let geometry: Vec<SolidRect> = Vec::new();
+        let mut spell = shock();
+        let SpellEffect::Projectile { pierces, speed, .. } = &mut spell.effect;
+        *pierces = true;
+        // Slow enough to sit inside the knight for many ticks.
+        *speed = 40.0;
+        let caster = caster(&mut world, 0.0, true);
+        let knight = victim(&mut world, 40.0, 20);
+        let clips = world.get::<&Sprite>(caster).unwrap().clips.clone();
+        spawn::projectile(
+            &mut world,
+            caster,
+            Vec2::new(22.0, 104.0),
+            true,
+            None,
+            &spell,
+            Team::Player,
+            clips,
+        );
+        let mut events = Vec::new();
+        for _ in 0..90 {
+            // The knight's own timers, which this module does not run.
+            if let Ok(mut health) = world.get::<&mut Health>(knight) {
+                health.iframes = health.iframes.saturating_sub(1);
+            }
+            tick(&mut world, &geometry, &mut events);
+        }
+        let hits = events
+            .iter()
+            .filter(|e| matches!(e, GameEvent::Damaged { .. }))
+            .count();
+        assert_eq!(hits, 1, "{events:?}");
+        assert_eq!(hp(&world, knight), 20 - spell_damage(&spell));
+    }
+
+    fn spell_damage(spell: &SpellDef) -> i32 {
+        let SpellEffect::Projectile { damage, .. } = &spell.effect;
+        *damage
+    }
+
+    /// A caster that walks a route throws the way it walks — the facing a
+    /// swing is aimed by — rather than always to the right.
+    #[test]
+    fn a_patrolling_caster_throws_the_way_it_faces() {
+        let mut world = World::new();
+        let caster = caster(&mut world, 200.0, true);
+        world.remove_one::<Avatar>(caster).unwrap();
+        world
+            .insert_one(caster, crate::ecs::components::Patrol::new(-1.0, 40.0))
+            .unwrap();
+        world.get::<&mut Casting>(caster).unwrap().start("shock", 0);
+        let geometry: Vec<SolidRect> = Vec::new();
+        let mut events = Vec::new();
+        for _ in 0..shock().cast_ticks {
+            tick(&mut world, &geometry, &mut events);
+        }
+        let vx: Vec<f32> = world
+            .query::<(&Projectile, &Velocity)>()
+            .iter()
+            .map(|(_, (_, v))| v.0.x)
+            .collect();
+        assert_eq!(vx.len(), 1, "one bolt");
+        assert!(vx[0] < 0.0, "thrown left, the way it faces: {vx:?}");
     }
 }

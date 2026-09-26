@@ -133,6 +133,39 @@ fn every_spawn_point_is_clear_of_solid_geometry() {
     assert!(problems.is_empty(), "{}", problems.join("\n  "));
 }
 
+/// NPCs are held to the same rule as the player's spawn: one authored into a
+/// wall is shoved out by depenetration on its first tick — or, in a debug
+/// build, trips the penetration check and panics with a message about the
+/// *avatar*, which points at entirely the wrong thing.
+#[test]
+fn every_npc_spawns_clear_of_solid_geometry() {
+    let mut assets = Assets::new();
+    let stats = StatTable::shipped();
+    let mut problems: Vec<String> = Vec::new();
+
+    for path in map_paths() {
+        let level = LevelData::load(&path, &mut assets)
+            .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        for placement in &level.entities {
+            let Ok(block) = stats.get(&placement.kind) else {
+                continue; // an unknown kind is tests/data.rs's to report
+            };
+            let at =
+                supergame::ecs::spawn::stand_in_cell(placement.pos, level.tile_size, block.size());
+            let occupied = Aabb::new(at.x, at.y, block.width, block.height);
+            if let Some(hit) = level.solids.iter().find(|s| occupied.overlaps(s)) {
+                problems.push(format!(
+                    "{name}: {} at ({:.0}, {:.0}) spawns inside solid {hit:?}",
+                    placement.kind, at.x, at.y
+                ));
+            }
+        }
+    }
+
+    assert!(problems.is_empty(), "{}", problems.join("\n  "));
+}
+
 /// A moving platform whose path runs into the level — or runs *nearly* into
 /// it — is the map-authoring bug that reads as a physics bug.
 ///
@@ -186,10 +219,17 @@ fn every_spawn_point_is_clear_of_solid_geometry() {
 /// an exemption nothing exercises is worse than a rule that is slightly too
 /// strict.
 ///
-/// A gap *across* the direction of travel is not this rule's business: it never
-/// changes as the platform moves, so nothing can be pinched in it. Too little
-/// headroom over a ride scrapes a passenger off backwards, which is survivable
-/// and visible; a shut slot is neither.
+/// A gap *across* the direction of travel is not the pinch rule's business: it
+/// never changes as the platform moves, so nothing can be pinched in it.
+///
+/// **Headroom over a sideways ride is**, though, and for a different reason. A
+/// ceiling lower than a player over the path used to be waved through as
+/// "scrapes a passenger off backwards" — which is true while the platform's
+/// step per tick is smaller than the rider's head overlap, and false above
+/// about 120 px/s, where the platform carries the rider into the block, the
+/// block pushes them down into the platform, and a debug build panics on the
+/// penetration check. So a ceiling over a horizontal ride must be flush with
+/// the platform or at least a player tall above it, never in between.
 ///
 /// The path is sampled rather than bounded by the union of its ends, so a
 /// diagonal path is checked where it actually goes rather than over the whole
@@ -228,6 +268,31 @@ fn every_moving_platform_has_a_path_clear_of_the_level() {
                         mover.from.x, mover.from.y, mover.to.x, mover.to.y, at.x, at.y
                     ));
                     break;
+                }
+
+                if travel.0 {
+                    let low = level.solids.iter().find(|s| {
+                        let above =
+                            s.bottom() <= box_.y && s.x < box_.right() && s.right() > box_.x;
+                        let headroom = box_.y - s.bottom();
+                        above && headroom > 0.0 && headroom < body.y
+                    });
+                    if let Some(hit) = low {
+                        problems.push(format!(
+                            "{name}: platform {index} ({:.0}, {:.0}) -> ({:.0}, {:.0}) rides \
+                             under solid {hit:?} with {:.1}px of headroom at ({:.0}, {:.0}) \
+                             — a player is {:.0} tall, so the ride drags them into it",
+                            mover.from.x,
+                            mover.from.y,
+                            mover.to.x,
+                            mover.to.y,
+                            box_.y - hit.bottom(),
+                            at.x,
+                            at.y,
+                            body.y
+                        ));
+                        break;
+                    }
                 }
 
                 if let Some((hit, axis, gap)) = level

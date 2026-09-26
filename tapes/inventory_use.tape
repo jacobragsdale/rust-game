@@ -15,10 +15,9 @@ map maps/testbed_arena.ron
 # second half of this file could exist.
 #
 # The fight is `knight_kill.tape`'s, unchanged: six passes of step in, chain
-# all three swings, back out. Melee on purpose — the knockback drops the
-# knight onto the player, so the drops land underfoot and the run costs the
-# player four of their five health, which is what gives the potion something
-# to heal. (`loot.tape` kills at range instead, so that the walking-over is
+# all three swings, back out. Melee on purpose — the drops land a step in front
+# of the player rather than across the room, and the run costs the player four
+# of their five health, which is what gives the potion something to heal. (`loot.tape` kills at range instead, so that the walking-over is
 # tested somewhere too.)
 #
 #   room    x 32..288, floor top y=128
@@ -85,6 +84,11 @@ attack 1
 wait 24
 left 26
 wait 28
+
+# The killing blow throws the knight back a couple of body widths, and its
+# drops land where it died, a step in front of the player. Walk over them.
+right 24
+wait 16
 
 # Dead knight, drops collected, and a player who badly wants that potion.
 assert knight.0.dead

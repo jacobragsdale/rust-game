@@ -30,9 +30,30 @@ interaction and dialogue, quest flags with save/load, and live map geometry
 (fire, moving platforms, swinging hazards). Cross-cutting: CI, and a root
 `CLAUDE.md` indexing the invariants.
 
-Not done: M8's remaining content — the "advanced world" and the story — and the
-polish list (audio, particles, transitions). `TICKETS.md` carries the per-ticket
-status.
+Also done, in a review-and-foundations pass after M8 (workstream **F** in
+`TICKETS.md`): a bug sweep across movement, combat, AI, inventory, dialogue and
+saves; drawing as data, with a CPU backend and `cargo run --bin render` so any
+tick of any tape can be looked at; pixel art authored as text; the level's
+furniture — doors and exits between maps, chests, keys, checkpoints, signs,
+levers and gates — remembered as flags; enemies that are only data (a flyer, a
+caster, and a boss that is both, with no code of their own); effects,
+fades, toasts and map titles; and a first slice of connected world — castle,
+village, dungeon and a new crypt joined by doors, with a shop in the village —
+walked end to end by `tapes/crypt_run.tape`.
+
+Also done (workstream **G** in `TICKETS.md`): the rest of M8 — a whole game
+around that slice. A prologue in the castle barracks; Act II east of the village
+(the Thornwood and the Beacon); Act III aboard the Vael's Ark (the Holding, the
+Proving Circle, the Engine Deep, the Heart); an ending back in Ashford. On the
+engine side: rivals — single-player duels against champions who fight with the
+player's own controller and kit, flown by a brain — shields, heavies that
+cannot be staggered, aimed bolts, tomes in a Spell slot, walk-in story triggers,
+false walls, and re-lit tilesets; nineteen new kinds (ten enemies, five
+people, four rivals) and twenty-four items. Every new map is walked by a tape, all seven new tapes have golden
+traces, and every fight in them was recorded with `sim --fight`.
+
+Not done: audio, and anybody playing it. `TICKETS.md` carries the per-ticket
+status, and G-6 what is next.
 
 ## The organizing principle
 
@@ -393,9 +414,9 @@ Notes from rider carry, for anything else that owns a collider:
   `tests/levels.rs` refuses to ship a map whose platform path dead-ends into
   geometry, which is the only way an author reaches that state on purpose.
 
-## M8 — Content: new maps
+## M8 — Content: new maps ✅ done
 
-**Size:** ongoing. **Depends on:** M2 for spawns; benefits from everything.
+**Size:** ongoing, then done in G. **Depends on:** M2 for spawns; benefits from everything.
 
 The village hub, the dungeon, the "advanced world" — plus the story from the
 SuperGame premise. Mostly authoring, not engineering, which is the goal.
@@ -420,19 +441,41 @@ and its hazards survivable with correct play. The "advanced world" and the story
 are the part still open, which is why this milestone stays `ongoing` rather than
 closing.
 
+Since then (F-5, F-6): the four adventure maps are one world — the castle's way
+out is a door at the foot of the chimney, the village is the hub with the stair
+down, and the dungeon's last pit is the stair to the crypt. The crypt is the
+first map built for the enemies that are only data: bats in the cavern, a mage
+on the ledge, the Warden behind a lever-operated gate, and a second gate that
+opens on its death flag. Brann the Pedlar in the village is a shop made of one
+dialogue file. `tapes/crypt_run.tape` walks all of it.
+
+Then workstream G finished it: the story from the premise, told by walk-in
+triggers and the people along the way, over three acts and eight more maps —
+the barracks, the Thornwood, the Beacon, the Ark's Holding, the Proving Circle,
+the Engine Deep and the Heart, and the village again at the end. The
+per-ticket account is in `TICKETS.md`; the map files' header comments say what
+each stretch of a map is for.
+
 ---
 
 ## Cross-cutting
 
 Work that does not belong to one milestone.
 
-**Renderer.** ✅ mostly done in M2. `Sprite` carries a clip set that names its
-own sheet, and `AdventureScene` uploads every distinct sheet the world
-references once at level load, keyed by name — which is also why a projectile's
-art is a clip on its *caster's* set rather than a PNG named in `spells.ron`: a
-bolt does not exist yet when the textures go up. Still outstanding: explicit
-z-layers for draw order, and item art (inventory rows are coloured quads keyed
-off the item's kind today).
+**Renderer.** ✅ done. `Sprite` carries a clip set that names its own sheet, and
+a projectile's art is a clip on its *caster's* set rather than a PNG named in
+`spells.ron`. Since F-2 every screen is built as a draw list (`src/render/`)
+with no graphics context, drawn by the GPU backend in the window and by a CPU
+backend headlessly — `cargo run --bin render` draws any tick of any tape, and
+`tests/render.rs` draws every map and menu on every `cargo test`. Item icons
+and prop art exist, authored as text-based pixel art. Draw order is the order
+`view::world` issues commands in; explicit z-layers have not been needed.
+
+**Presentation.** ✅ done in F-4, except audio. Particles (`assets/data/effects.ron`),
+screen shake, fades on travel and death, toasts and a map's title are in
+`src/view/fx.rs`, derived from events and from diffing the world between ticks,
+so none of it can reach a trace. Audio is not started: nothing in the repo is
+sound, and ggez's audio is the obvious route when there is.
 
 **Save system.** ✅ done in Q-3/Q-3b. PLAN.md specifies rusqlite; what shipped
 is a serde `SaveState` behind a `SaveStore` trait with a RON file backend, and
@@ -451,8 +494,9 @@ on its own, as planned.
 points at where each one's reasoning already lives — the strict-overlap comment
 on `Aabb::overlaps` in `physics.rs`, the `InputLatch` rationale in `input.rs`,
 the frozen-fixture rule for testbed maps, the tick's one geometry-rebuild point.
-It is a map, not a manual: it defers to
-`.claude/skills/supergame-dev/SKILL.md` for workflow and does not restate it.
+It is a map, not a manual — and since the `supergame-dev` skill was retired,
+it also carries the workflow: the verification tools, the trace rule, and what
+done means.
 
 ## Harness capability by milestone
 
@@ -469,6 +513,8 @@ serves, not after.
 | ~~M6 Quests~~ | ~~quest flags as snapshot globals~~ (`quest.<name>.<field>` paths, a `flags` key omitted when empty, and the same map in `SaveState`) |
 | ~~M7 Map features~~ | ~~property tests for dynamic geometry and rider carry~~ (six sweeps in `tests/physics_diagnostics.rs`) |
 | ~~M8 Content~~ | ~~`tests/data.rs` cross-reference validation, per-map smoke tapes~~ (18 cross-reference tests; `castle_spawn`, `village_smoke`, `dungeon_run`) |
+| ~~F Foundations~~ | ~~seeing a frame without a window; saves inside a tape; fights a tape can be written through~~ (`render` and `tests/render.rs`; the `reload` directive; `sim --fight`; `TRACE_IGNORE`; 29 cross-reference tests) |
+| ~~G The game~~ | ~~fights against things that fight like the player; secrets a test can find~~ (`sim --fight` flies the player with the rivals' brain; the `blocked` event; triggers and false walls in `tests/world.rs` over `testbed_secrets.ron`; trigger dialogues and `when` flags in the cross-reference tests) |
 
 ## Known drift in PLAN.md
 
@@ -505,9 +551,11 @@ ways. Its designs are still good; its status claims are not.
   and `src/systems/spell.rs` and `src/systems/inventory.rs` say why they are
   different.
 - **Its `NpcDef` per file under `data/npcs/` never happened.** Per-kind numbers
-  are one `assets/data/stats.ron` table keyed by kind, with `ecs/spawn.rs`'s
-  `KINDS` as the registry — one file to open when tuning, and `tests/data.rs`
-  cross-references it against the clip sets and the maps.
+  are one `assets/data/stats.ron` table keyed by kind, and the table *is* the
+  registry: every kind in it but the player can be placed by a map, and what a
+  kind is — friendly, armed, casting, flying, biting — follows from what its
+  block has (`spawn::entity`). One file to open when tuning or adding an enemy,
+  and `tests/data.rs` cross-references it against the clip sets and the maps.
 - Its generic `Cooldowns` component (rule 5) was not needed: the timers that
   exist are typed fields on `Attacking`, `Casting` and `Health`, which the probe
   can name individually. `Casting::cooldown`'s doc names the day that changes —
@@ -515,10 +563,22 @@ ways. Its designs are still good; its status claims are not.
 
 ## Open questions
 
+- ~~**Save-scumming is a loot farm** (R-3).~~ Decided: a save holds the player
+  and the flags, so an ordinary enemy is back after a load, loot and all — the
+  same as leaving a map and returning. What must stay dead carries a death
+  flag, which is also how a boss stays beaten.
+
 - **Movement feel has never been play-tested.** The harness proves correctness
   and cannot say anything about feel. The constants in `ecs/components.rs` are
   unjudged, and M3 is a natural moment to tune them — ideally before combat
   timing is balanced against them.
+- **Balance has only been judged by a bot.** Every fight was recorded by the
+  rivals' brain with instant reactions, which is a floor for "winnable", not a
+  measure of fun. The recordings that show strain: all three of the Circle's
+  duels are won with one heart left, and the Choir costs the bot four deaths
+  with five health and no potions (`engine_deep_run.tape` bounds it at that). A person with the
+  armour and potions the world hands out should do better; whether they enjoy
+  it is the question.
 - **Asset licensing** for the itch.io packs (Adventurer sprite, knight pack,
   castle tiles) is still unverified. Blocking for public distribution only.
 - ~~**Scope of the RPG layer.** PLAN.md's item/equipment system is fairly deep.

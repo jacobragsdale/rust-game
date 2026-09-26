@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use ggez::glam::Vec2;
 
-use crate::assets::{AvatarStats, ClipSet, LootDrop, Slot, StatBlock};
+use crate::assets::{AvatarStats, Clip, ClipSet, LootDrop, Slot, StatBlock};
 use crate::physics::{Aabb, SolidRect};
 
 /// What this entity's kind is worth, numerically: the block
@@ -96,7 +96,9 @@ impl Inventory {
             return true;
         }
         if let Some(stack) = self.slots.iter_mut().find(|stack| stack.id == id) {
-            stack.count += count;
+            // Saturating: an absurd count in content is a very large stack,
+            // not a panic in a debug build.
+            stack.count = stack.count.saturating_add(count);
             return true;
         }
         if self.is_full() {
@@ -171,25 +173,116 @@ pub struct Interactable {
 
 /// What interacting with something does.
 ///
-/// One variant today. An enum from the start because PLAN.md names doors and
-/// chests next, and because the alternative — a bare `dialogue: String` on
-/// [`Interactable`] — would have to be widened into exactly this the first time
-/// a door existed, by which point every map naming one would need rewriting.
+/// An enum from the start, which is what let doors, chests and levers arrive as
+/// variants rather than as a rewrite of every map that names a conversation.
+/// What each one does with the press is [`crate::sim::Sim`]'s — the component
+/// only says which kind of thing is there, and the thing's own component
+/// ([`Door`], [`Chest`], [`Lever`]) holds the rest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InteractTarget {
-    /// Open this dialogue graph, from `assets/data/dialogue/`.
+    /// Open this dialogue graph, from `assets/data/dialogue/` — an NPC, or a
+    /// sign.
     Dialogue(String),
+    /// Go through to another map.
+    Door,
+    /// Take what is inside.
+    Chest,
+    /// Throw it.
+    Lever,
 }
 
 impl InteractTarget {
-    /// What an event and a tape call this target: the graph id, so
-    /// `expect elder_intro.dialogue_opened == 1` reads.
+    /// What an event and a tape call this target: the graph id for a
+    /// conversation, so `expect elder_intro.dialogue_opened == 1` reads, and
+    /// the kind of thing for everything else — `expect door.interacted`.
     pub fn label(&self) -> &str {
         match self {
             InteractTarget::Dialogue(graph) => graph,
+            InteractTarget::Door => "door",
+            InteractTarget::Chest => "chest",
+            InteractTarget::Lever => "lever",
         }
     }
 }
+
+/// A way through to another map, on the far side of a press of `interact`.
+///
+/// Its box is two tiles wide and two tall standing on its cell — the part of a
+/// doorway a player can stand in front of — whatever the art is.
+#[derive(Clone, Debug)]
+pub struct Door {
+    /// The map it leads to, relative to `assets/`.
+    pub to: String,
+    /// Where on that map: a `Spawn` or a door id.
+    pub at: String,
+    /// The item that opens it, if it is locked.
+    pub locked: Option<String>,
+    /// Keep the key after unlocking, rather than leaving it in the lock.
+    pub keep_key: bool,
+    /// The world flag that remembers it has been unlocked.
+    pub flag: String,
+    /// The tileset prop it is drawn with.
+    pub art: String,
+}
+
+/// A region you go through to another map by walking into — the edge of a
+/// map. Invisible; what shows the way is the level art around it.
+#[derive(Clone, Debug)]
+pub struct Exit {
+    pub to: String,
+    pub at: String,
+}
+
+/// A chest, and what is in it. Opened is a world flag rather than a field, so
+/// it stays opened across a load and across leaving and coming back.
+#[derive(Clone, Debug)]
+pub struct Chest {
+    pub items: Vec<(String, u32)>,
+    pub flag: String,
+}
+
+/// Touch it and it is where you come back to.
+#[derive(Clone, Copy, Debug)]
+pub struct Checkpoint;
+
+/// Walk into it and a conversation opens — once, which its world flag
+/// remembers, and not before `when` is set if it names a flag. Invisible; the
+/// story it tells is the only sign it was there.
+#[derive(Clone, Debug)]
+pub struct Trigger {
+    pub dialogue: String,
+    pub flag: String,
+    pub when: Option<String>,
+}
+
+/// Something to read. What it says is the dialogue graph on its
+/// [`Interactable`]; this only marks what to draw.
+#[derive(Clone, Copy, Debug)]
+pub struct Sign;
+
+/// A switch: throwing it sets `flag` to 1, for good. Thrown is the flag
+/// itself, so two levers wired to one gate both show it.
+#[derive(Clone, Debug)]
+pub struct Lever {
+    pub flag: String,
+}
+
+/// A barrier that is solid while `flag` is 0 — a portcullis a lever raises, a
+/// door that opens when the guard is dead.
+///
+/// Like a fire, the [`Collider`] it carries while closed *is* its closedness:
+/// there is no second field that could disagree with the geometry.
+#[derive(Clone, Debug)]
+pub struct Gate {
+    pub flag: String,
+    /// Its box while closed, relative to its `Position`.
+    pub collider: Collider,
+}
+
+/// A flag set to 1 when this entity dies. See
+/// [`crate::level::EntitySpawn::flag`].
+#[derive(Clone, Debug)]
+pub struct DeathFlag(pub String);
 
 /// An item lying in the world, waiting to be walked over.
 ///
@@ -207,6 +300,10 @@ pub struct Pickup {
     /// standing on an item you have no room for emits an event every tick for
     /// as long as you stand there, and a trace becomes unreadable.
     pub refused: bool,
+    /// The world flag that remembers it was taken, for an item a map placed:
+    /// set when it is picked up, and read when the map is built so it is not
+    /// placed again. `None` for loot, which is gone with the fight it came from.
+    pub flag: Option<String>,
 }
 
 /// What an entity leaves behind when it dies.
@@ -719,7 +816,7 @@ impl Casting {
 /// Everything about a hit is carried here rather than looked up from the spell
 /// that made it, so a bolt already in the air is unaffected by the table being
 /// reloaded, and so the projectile system needs no access to `spells.ron`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Projectile {
     pub damage: i32,
     /// Impulse applied to what it hits, in its direction of travel.
@@ -730,6 +827,12 @@ pub struct Projectile {
     /// Who threw it. Kept so a projectile can never hit its own caster even
     /// if teams are ever allowed to overlap, and so an event could name them.
     pub source: hecs::Entity,
+    /// Everything it has already hit, so a bolt that pierces lands once per
+    /// target — the same rule `Attacking::hit` keeps for a swing.
+    pub hit: Vec<hecs::Entity>,
+    /// The velocity it was launched at. Nothing in the tick steers a bolt, so
+    /// a velocity that is no longer this one is a bolt the level stopped.
+    pub launched: Vec2,
 }
 
 /// Ticks an entity has left before it removes itself.
@@ -780,24 +883,58 @@ pub enum Stance {
 #[derive(Clone, Debug)]
 pub struct Hostile {
     pub stance: Stance,
-    /// Where it spawned. It walks back here after losing the player, so a
-    /// chase does not permanently relocate every enemy on the map.
-    pub home: f32,
-    /// Ticks until it may swing again.
+    /// Where it spawned. It goes back here after losing the player, so a
+    /// chase does not permanently relocate every enemy on the map. A walker
+    /// only ever uses the `x`; a flyer returns to the height too.
+    pub home: Vec2,
+    /// Ticks until it may swing, or bite, again.
     pub cooldown: u32,
-    /// Which attack it throws, from `assets/data/attacks.ron`.
-    pub attack: String,
+    /// Which attack it throws, from `assets/data/attacks.ron` — `None` for a
+    /// kind with no swing, which fights with a spell or by touch.
+    pub attack: Option<String>,
 }
 
 impl Hostile {
-    pub fn new(home: f32, attack: &str) -> Self {
+    pub fn new(home: Vec2, attack: Option<String>) -> Self {
         Hostile {
             stance: Stance::Patrol,
             home,
             cooldown: 0,
-            attack: attack.to_string(),
+            attack,
         }
     }
+}
+
+/// A hit dealt by touching: see [`crate::assets::ContactDef`].
+#[derive(Clone, Debug)]
+pub struct Contact(pub crate::assets::ContactDef);
+
+/// A brain at an [`Avatar`]'s controls in place of the player: a rival
+/// champion, fighting with the player's own kit. The deciding is
+/// [`crate::systems::brain`]'s; the numbers it decides with are the kind's
+/// `brain` group in `assets/data/stats.ron`.
+///
+/// **An avatar without one is the player's** — the one a tape drives, the
+/// camera follows, a checkpoint heals and every "the player" in the code
+/// means. That is a rule about absence on purpose: every avatar that existed
+/// before rivals did is still the player's without a change to how it was
+/// built.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Brain {
+    /// What it decided to press this tick, written before the controllers run
+    /// and read by [`crate::systems::avatar`] exactly where it would read the
+    /// keyboard.
+    pub input: crate::systems::input::PlayerInput,
+    /// Has it seen anyone worth fighting yet. Until then it stands where it
+    /// was put, which is what makes a duel start when you walk into it.
+    pub awake: bool,
+    /// Ticks until it next makes up its mind. Between decisions it keeps
+    /// holding what it chose — which is what a reaction time *is*.
+    pub wait: u32,
+    /// What it is holding, and what it held the tick before: a press is the
+    /// difference, as it is for a tape.
+    pub held: crate::systems::input::ActionSet,
+    pub prev: crate::systems::input::ActionSet,
 }
 
 /// Walks back and forth, turning at walls and at the edges of what it is
@@ -830,21 +967,26 @@ impl Patrol {
 #[derive(Clone, Debug)]
 pub struct Sprite {
     pub clips: Arc<ClipSet>,
-    /// Adjustment on top of the default placement, for art that is not
-    /// centred in its own frame. Usually zero.
+    /// A nudge for this one entity, on top of the offsets its art declares —
+    /// a projectile centres its art on its box with this. Not mirrored.
     pub offset: Vec2,
 }
 
 impl Sprite {
-    /// Where to draw a `frame`-sized image for a body at `pos` with a
-    /// `collider`-sized box.
+    /// Where to draw a frame of `clip` for a body at `pos` with a
+    /// `collider`-sized box, facing the given way.
     ///
     /// Sprites are centred horizontally on the collider and stand on its
-    /// bottom edge. Computing this per frame rather than storing it is what
-    /// lets one entity mix clips of different frame sizes without its feet
-    /// sliding around.
-    pub fn draw_origin(&self, pos: Vec2, collider: Vec2, frame: (f32, f32)) -> Vec2 {
-        pos + Vec2::new((collider.x - frame.0) / 2.0, collider.y - frame.1) + self.offset
+    /// bottom edge, then nudged by the art's own offsets — the set's and the
+    /// clip's, mirrored when facing left, since an offset that moves art
+    /// forward has to move it forward whichever way forward is. Computing this
+    /// per frame rather than storing it is what lets one entity mix clips of
+    /// different frame sizes without its feet sliding around.
+    pub fn draw_origin(&self, pos: Vec2, collider: Vec2, clip: &Clip, facing_right: bool) -> Vec2 {
+        let (fw, fh) = self.clips.frame_size_of(clip);
+        let (ox, oy) = self.clips.offset_of(clip);
+        let ox = if facing_right { ox } else { -ox };
+        pos + Vec2::new((collider.x - fw) / 2.0 + ox, collider.y - fh + oy) + self.offset
     }
 }
 
@@ -867,10 +1009,16 @@ impl AnimationState {
 
     pub fn switch_to(&mut self, clip: &str) {
         if self.clip != clip {
-            self.clip = clip.to_string();
-            self.frame = 0;
-            self.elapsed = 0.0;
+            self.restart(clip);
         }
+    }
+
+    /// Play `clip` from its first frame, even if it is the one already
+    /// playing.
+    pub fn restart(&mut self, clip: &str) {
+        self.clip = clip.to_string();
+        self.frame = 0;
+        self.elapsed = 0.0;
     }
 }
 

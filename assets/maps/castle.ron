@@ -12,6 +12,7 @@
 // see src/level/validate.rs.
 Level(
     tileset: "castle",
+    name: "The Castle",
     grid: [
         "############################################################",
         "#..........................................................#",
@@ -24,11 +25,26 @@ Level(
         "#...................................................#...#..#",
         "#.......====..................====......................#..#",
         "#..P..................................K.................#..#",
-        "########....##################....##########....############",
-        "########....##################....##########....############",
-        "########....##################....##########....############",
+        "#%######....##################....##########....############",
+        "#%%%%%%#....##################....##########....############",
+        "#%%%%%%#....##################....##########....############",
         "########^^^^##################^^^^##########^^^^############",
         "############################################################",
     ],
-    entities: [],
+    entities: [
+        // Where the barracks lets out, beside the map's own `P`. A new game
+        // starts in the barracks (assets/maps/keep.ron) and arrives here; the
+        // castle's tapes start at `P` as they always have.
+        Spawn(id: "keep", cell: (2, 10)),
+        // The way out: at the bottom of the shaft on the far side of the
+        // chimney, so leaving the castle is the wall-jump climb. Down into the
+        // village.
+        Door(id: "shaft", cell: (57, 10), to: "maps/village.ron", at: "castle_gate", art: "archway"),
+        // The captain's cellar: behind where a new game starts, under the
+        // floor. The floor tile in the corner (col 1) is false wall and so is
+        // the cellar under it (cols 1-6, rows 12-13) — walk into the corner
+        // and you drop in. The chest and the note show through the stone.
+        Chest(id: "secret_cellar", cell: (5, 13), items: [("guard_ring", 1), ("coin", 5)]),
+        Sign(cell: (3, 13), dialogue: "sign_cellar"),
+    ],
 )

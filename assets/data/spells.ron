@@ -55,4 +55,169 @@ Spells({
             hitstun: 10,
         ),
     ),
+    // --- the ember ---------------------------------------------------------
+    //
+    // What enemies throw. Everything about it is built to be answered: at
+    // 180 px/s it is slower than the player runs, it flies at chest height so
+    // a jump clears it, and a third of a second of wind-up is the tell. Two
+    // on a caster's pool of four, and the cooldown means a second one is not
+    // on its way before the first has landed or missed.
+    "ember": SpellDef(
+        clip: "cast",
+        cost: 2,
+        cooldown: 80,
+        cast_ticks: 20,
+        recovery: 10,
+        effect: Projectile(
+            speed: 180.0,
+            damage: 1,
+            // Two seconds at 180 px/s: 360 px, a little over half a screen.
+            lifetime: 120,
+            size: (8.0, 6.0),
+            clip: "ember_bolt",
+            knockback: (150.0, -90.0),
+            hitstun: 12,
+        ),
+    ),
+    // --- tomes: the spells a player can learn ------------------------------
+    //
+    // Worn in the Spell slot, a tome replaces the spell the player was born
+    // with (see items/tomes.ron) — so learning one is a choice about how to
+    // fight, not a number going up.
+
+    // Frost lance, the hermit's: slower than shock and it goes *through*
+    // everything in a line, holding each thing it passes a long moment in
+    // hitstun. The spell for a corridor full of brigands.
+    "frost": SpellDef(
+        clip: "cast",
+        cost: 2,
+        cooldown: 60,
+        cast_ticks: 14,
+        recovery: 8,
+        effect: Projectile(
+            speed: 260.0,
+            damage: 2,
+            lifetime: 90,
+            size: (18.0, 8.0),
+            clip: "frost_bolt",
+            knockback: (80.0, -30.0),
+            hitstun: 22,
+            pierces: true,
+        ),
+    ),
+    // Fireball, from the engine deep: the most damage any bolt does and the
+    // hardest throw, for most of the pool and a long wind-up.
+    "fireball": SpellDef(
+        clip: "cast",
+        cost: 3,
+        cooldown: 75,
+        cast_ticks: 18,
+        recovery: 10,
+        effect: Projectile(
+            speed: 220.0,
+            damage: 4,
+            lifetime: 90,
+            size: (16.0, 12.0),
+            clip: "fire_bolt",
+            knockback: (260.0, -160.0),
+            hitstun: 20,
+        ),
+    ),
+    // Seeker, Morwen's: a star that flies at the nearest foe wherever it is —
+    // above you, behind you, on a ledge you cannot reach. Weaker than shock,
+    // and it never misses a target it can reach.
+    "seeker": SpellDef(
+        clip: "cast",
+        cost: 2,
+        cooldown: 45,
+        cast_ticks: 12,
+        recovery: 6,
+        effect: Projectile(
+            speed: 240.0,
+            damage: 2,
+            lifetime: 100,
+            size: (10.0, 10.0),
+            clip: "seeker_bolt",
+            knockback: (120.0, -60.0),
+            hitstun: 10,
+            aimed: true,
+        ),
+    ),
+    // --- what enemies throw ----------------------------------------------------
+
+    // A brigand archer's arrow: fast and cheap, so they come often, but it
+    // flies flat at chest height and a jump takes you over it.
+    "arrow": SpellDef(
+        clip: "cast",
+        cost: 1,
+        cooldown: 70,
+        cast_ticks: 18,
+        recovery: 8,
+        effect: Projectile(
+            speed: 300.0,
+            damage: 1,
+            lifetime: 60,
+            size: (12.0, 4.0),
+            clip: "arrow_bolt",
+            knockback: (120.0, -40.0),
+            hitstun: 10,
+        ),
+    ),
+    // Morwen's hex: shock by another name, in her own colour — her clip set
+    // tints everything she throws.
+    "hex": SpellDef(
+        clip: "cast",
+        cost: 2,
+        cooldown: 50,
+        cast_ticks: 12,
+        recovery: 6,
+        effect: Projectile(
+            speed: 300.0,
+            damage: 2,
+            lifetime: 80,
+            size: (26.0, 14.0),
+            clip: "shock_bolt",
+            knockback: (110.0, -50.0),
+            hitstun: 10,
+        ),
+    ),
+    // A drone's zap: aimed at you from wherever it hangs, and slow — the
+    // answer is to move, not to jump.
+    "zap": SpellDef(
+        clip: "cast",
+        cost: 2,
+        cooldown: 80,
+        cast_ticks: 24,
+        recovery: 10,
+        effect: Projectile(
+            speed: 150.0,
+            damage: 1,
+            lifetime: 150,
+            size: (6.0, 6.0),
+            clip: "zap_bolt",
+            knockback: (120.0, -60.0),
+            hitstun: 10,
+            aimed: true,
+        ),
+    ),
+    // The Choir's judgement: the drone's bolt grown up — faster, and thrown
+    // more often. No heavier: it comes at you on a catwalk from close enough
+    // that it is hard to step out of, so a hit is one heart, not two.
+    "judgement": SpellDef(
+        clip: "cast",
+        cost: 2,
+        cooldown: 60,
+        cast_ticks: 20,
+        recovery: 8,
+        effect: Projectile(
+            speed: 190.0,
+            damage: 1,
+            lifetime: 180,
+            size: (10.0, 10.0),
+            clip: "judgement_bolt",
+            knockback: (180.0, -100.0),
+            hitstun: 14,
+            aimed: true,
+        ),
+    ),
 })

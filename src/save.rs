@@ -241,6 +241,23 @@ pub struct SaveState {
     /// all; `None` means exactly that, and [`restore`] fills it in.
     #[serde(default)]
     pub decided_tick: Option<u64>,
+    /// Ticks spent behind a modal screen, which the world's clock does not
+    /// count — see `Sim::paused`. Additive, so an older save reads as a run
+    /// that never opened one, which is the only kind the build that wrote it
+    /// could describe correctly.
+    #[serde(default)]
+    pub paused: u64,
+    /// Presses made during a freeze that the first live tick will act on,
+    /// by action name — see `Sim::held_presses`. A save taken mid-freeze
+    /// without them would drop a combo the run it came from would have
+    /// continued.
+    #[serde(default)]
+    pub held_presses: Vec<String>,
+    /// Where the player comes back after dying: the last checkpoint touched,
+    /// or the door they came in by. Additive — an older save respawns at the
+    /// map's `P`, which is all a build without checkpoints could have meant.
+    #[serde(default)]
+    pub respawn: Option<(f32, f32)>,
     pub rng: RngSave,
     pub player: PlayerSave,
     /// Quest flags, by name.
@@ -434,6 +451,13 @@ impl SaveState {
             tick: sim.tick,
             hitstop: sim.hitstop(),
             decided_tick: Some(sim.decided_tick()),
+            paused: sim.paused(),
+            respawn: Some((sim.respawn_point().x, sim.respawn_point().y)),
+            held_presses: sim
+                .held_presses()
+                .iter()
+                .map(|action| action.name().to_string())
+                .collect(),
             rng: RngSave {
                 seed: sim.rng.seed(),
                 position: sim.rng.position(),
@@ -543,11 +567,32 @@ impl SaveState {
     }
 
     /// Decode from RON, checking the version.
+    ///
+    /// The version is read on its own first, so a save from a build whose
+    /// format has since changed is reported as the version mismatch it is
+    /// rather than as whatever field the new schema happens to miss first —
+    /// "corrupt" and "from another version" are the two answers the error
+    /// type exists to tell apart.
     pub fn from_ron(slot: &str, text: &str) -> Result<SaveState, SaveError> {
-        let state: SaveState = ron::from_str(text).map_err(|e| SaveError::Corrupt {
+        #[derive(Deserialize)]
+        #[serde(rename = "SaveState")]
+        struct Header {
+            version: u32,
+        }
+        let corrupt = |e: ron::error::SpannedError| SaveError::Corrupt {
             slot: slot.to_string(),
             detail: e.to_string(),
-        })?;
+        };
+        // Unknown fields are skipped, so this reads the version out of any
+        // save that is well-formed RON, whatever else its schema holds.
+        let header: Header = ron::from_str(text).map_err(corrupt)?;
+        if header.version != SAVE_VERSION {
+            return Err(SaveError::Version {
+                found: header.version,
+                expected: SAVE_VERSION,
+            });
+        }
+        let state: SaveState = ron::from_str(text).map_err(corrupt)?;
         state.check_version()?;
         Ok(state)
     }
@@ -571,18 +616,29 @@ impl SaveState {
 pub fn restore(assets: &mut Assets, save: &SaveState) -> anyhow::Result<Sim> {
     save.check_version()?;
 
-    let mut sim = Sim::load(assets, &save.map)?;
+    // The flags first, because the map is built from them: a chest a save
+    // says was opened has to be spawned open, not closed and then flagged.
+    let mut sim = Sim::load_with_flags(assets, &save.map, save.flags.clone())?;
     sim.resume_at(
         save.tick,
+        save.paused,
         save.hitstop,
         // A save from before the field existed had no freeze to be out of step
         // with, so its world was current for the tick before the one it names.
         save.decided_tick
-            .unwrap_or_else(|| save.tick.saturating_sub(1)),
+            .unwrap_or_else(|| save.tick.saturating_sub(save.paused).saturating_sub(1)),
     );
     sim.rng = Rng::resume(save.rng.seed, save.rng.position);
-    for (name, value) in &save.flags {
-        sim.set_flag(name, *value);
+    let mut presses = crate::systems::input::ActionSet::EMPTY;
+    for name in &save.held_presses {
+        let action = crate::systems::input::Action::from_name(name).ok_or_else(|| {
+            anyhow::anyhow!("the save holds a press of `{name}`, which is not an action")
+        })?;
+        presses.insert(action);
+    }
+    sim.hold_presses(presses);
+    if let Some((x, y)) = save.respawn {
+        sim.set_respawn(Vec2::new(x, y));
     }
 
     let entity = player_entity(&sim.world)
@@ -716,11 +772,7 @@ pub fn restore(assets: &mut Assets, save: &SaveState) -> anyhow::Result<Sim> {
 /// The player entity: the lowest-id thing with an [`Avatar`], so the answer is
 /// stable rather than whatever hecs iterated first.
 fn player_entity(world: &World) -> Option<hecs::Entity> {
-    world
-        .query::<&Avatar>()
-        .iter()
-        .map(|(entity, _)| entity)
-        .min_by_key(|entity| entity.id())
+    crate::systems::avatar::player(world)
 }
 
 // ---------------------------------------------------------------------------
@@ -821,11 +873,18 @@ impl FileStore {
 }
 
 impl SaveStore for FileStore {
+    /// Written to a temporary file beside the slot and renamed over it, so a
+    /// crash or a full disk mid-write leaves the previous save intact rather
+    /// than truncated — `std::fs::write` empties the file before it fills it,
+    /// and the only slot there is would be gone. A rename within one directory
+    /// is atomic, and `slots` lists only `.ron`, so the temporary never shows.
     fn write(&self, slot: &str, state: &SaveState) -> Result<(), SaveError> {
         let path = self.path(slot)?;
         let text = state.to_ron()?;
         std::fs::create_dir_all(&self.dir).map_err(|e| FileStore::io(&self.dir, e))?;
-        std::fs::write(&path, text).map_err(|e| FileStore::io(&path, e))
+        let temp = self.dir.join(format!("{slot}.ron.tmp"));
+        std::fs::write(&temp, text).map_err(|e| FileStore::io(&temp, e))?;
+        std::fs::rename(&temp, &path).map_err(|e| FileStore::io(&path, e))
     }
 
     fn read(&self, slot: &str) -> Result<SaveState, SaveError> {
@@ -859,6 +918,9 @@ impl SaveStore for FileStore {
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
             .filter(|path| path.extension().is_some_and(|e| e == "ron"))
             .filter_map(|path| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            // Only names `read` would accept, so a menu never lists a file it
+            // then cannot open.
+            .filter(|slot| check_slot(slot).is_ok())
             .collect();
         slots.sort();
         Ok(slots)
@@ -1010,7 +1072,14 @@ mod tests {
     /// *fourth* field rather than for these three.
     #[test]
     fn a_save_written_before_flags_existed_still_loads() {
-        const ADDED: [&str; 3] = ["flags", "hitstop", "decided_tick"];
+        const ADDED: [&str; 6] = [
+            "flags",
+            "hitstop",
+            "decided_tick",
+            "paused",
+            "held_presses",
+            "respawn",
+        ];
 
         let text = state().to_ron().unwrap();
         for field in ADDED {
@@ -1077,7 +1146,7 @@ mod tests {
         // is exactly why this field went unsaved for a milestone without any
         // test noticing. The clock reads 90 while the world stands at 86: four
         // ticks of freeze, one of them already spent.
-        sim.resume_at(90, 3, 86);
+        sim.resume_at(90, 0, 3, 86);
         let state = sim.save().unwrap();
         assert_eq!(state.hitstop, 3);
         assert_eq!(state.tick, 90);
@@ -1231,6 +1300,23 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("version 2"), "{message}");
         assert!(message.contains("different version"), "{message}");
+    }
+
+    /// A newer build's save is usually a newer *shape* as well as a newer
+    /// number, and it has to be reported as the version it is rather than as
+    /// whichever field this build's schema misses first.
+    #[test]
+    fn a_save_from_a_build_with_a_different_schema_is_a_version_error_not_corruption() {
+        let text = state()
+            .to_ron()
+            .unwrap()
+            .replace(&format!("version: {SAVE_VERSION}"), "version: 7")
+            .replace("health:", "vitality:");
+        let err = SaveState::from_ron("slot1", &text).unwrap_err();
+        assert!(matches!(err, SaveError::Version { found: 7, .. }), "{err}");
+
+        let err = SaveState::from_ron("slot1", "not a save at all").unwrap_err();
+        assert!(matches!(err, SaveError::Corrupt { .. }), "{err}");
     }
 
     /// ...and it is refused on every path in, not only through a store.

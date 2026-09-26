@@ -1,0 +1,14 @@
+// An arc wisp. Its own pixel art: assets/graphics/creatures/wisp.ron — three
+// crackles and spent, 14x14.
+ClipSet(
+    sheet: "creatures/wisp",
+    frame_size: (14.0, 14.0),
+    clips: {
+        "idle": Clip(frames: [(0, 0), (1, 0), (2, 0)], fps: 14.0, looping: true),
+        "run": Clip(frames: [(0, 0), (1, 0), (2, 0)], fps: 16.0, looping: true),
+        "jump": Clip(frames: [(0, 0), (1, 0), (2, 0)], fps: 16.0, looping: true),
+        "fall": Clip(frames: [(0, 0), (1, 0), (2, 0)], fps: 14.0, looping: true),
+        "attack": Clip(frames: [(0, 0)], fps: 1.0, looping: false),
+        "death": Clip(frames: [(3, 0)], fps: 1.0, looping: false),
+    },
+)

@@ -130,4 +130,316 @@ Attacks({
         knockback: (200.0, -140.0),
         hitstun: 18,
     ),
+    // --- weapon styles ----------------------------------------------------
+    //
+    // A weapon names the opener of a chain here, and the chain is its style:
+    // the same three swings off the player's sheet, with other timing, reach
+    // and weight. The Proving Circle's champions fight with these same
+    // entries, so what a champion leaves behind is the style it fought you
+    // with — and the fight was the lesson in using it.
+    //
+    // A style faster than its clip cuts the clip short rather than slowing the
+    // blow down; a slower one holds the last frame as a follow-through. Both
+    // read fine, and the timing is what matters.
+
+    // The glass saber — Kesh's. Three quick, light cuts: the plain combo's
+    // damage in two thirds of the time, and less of you committed to each.
+    "saber_1": AttackDef(
+        clip: "attack1",
+        duration: 14,
+        active: (3, 8),
+        recovery: 2,
+        chain: "saber_2",
+        offset: (14.0, 2.0),
+        size: (24.0, 24.0),
+        damage: 1,
+        knockback: (110.0, -60.0),
+        hitstun: 12,
+    ),
+    "saber_2": AttackDef(
+        clip: "attack2",
+        duration: 14,
+        active: (4, 9),
+        recovery: 2,
+        chain: "saber_3",
+        offset: (14.0, 2.0),
+        size: (26.0, 24.0),
+        damage: 1,
+        knockback: (120.0, -60.0),
+        hitstun: 12,
+    ),
+    "saber_3": AttackDef(
+        clip: "attack3",
+        duration: 18,
+        active: (4, 10),
+        recovery: 6,
+        offset: (16.0, 2.0),
+        size: (30.0, 22.0),
+        damage: 2,
+        knockback: (210.0, -100.0),
+        hitstun: 16,
+    ),
+
+
+    // The hunting spear. Reach is the whole of it: a thrust that lands half a
+    // tile further out than a sword does, so a wolf or a brigand meets the
+    // point before it meets you. Two thrusts and a wide sweep; light damage.
+    "spear_1": AttackDef(
+        clip: "attack3",
+        duration: 20,
+        active: (6, 12),
+        recovery: 4,
+        chain: "spear_2",
+        offset: (12.0, 6.0),
+        size: (46.0, 14.0),
+        damage: 1,
+        knockback: (170.0, -50.0),
+        hitstun: 12,
+    ),
+    "spear_2": AttackDef(
+        clip: "attack3",
+        duration: 20,
+        active: (6, 12),
+        recovery: 4,
+        chain: "spear_3",
+        offset: (12.0, 6.0),
+        size: (46.0, 14.0),
+        damage: 1,
+        knockback: (170.0, -50.0),
+        hitstun: 12,
+    ),
+    "spear_3": AttackDef(
+        clip: "attack2",
+        duration: 20,
+        active: (8, 14),
+        recovery: 8,
+        offset: (10.0, 2.0),
+        size: (44.0, 24.0),
+        damage: 2,
+        knockback: (230.0, -110.0),
+        hitstun: 18,
+    ),
+
+    // Gorran's axe. Two blows instead of three, each heavier than a sword's
+    // finisher, and a real price for missing: the longest recovery a weapon has.
+    "axe_1": AttackDef(
+        clip: "attack1",
+        duration: 24,
+        active: (8, 14),
+        recovery: 6,
+        chain: "axe_2",
+        offset: (14.0, 0.0),
+        size: (30.0, 28.0),
+        damage: 2,
+        knockback: (220.0, -120.0),
+        hitstun: 18,
+    ),
+    "axe_2": AttackDef(
+        clip: "attack3",
+        duration: 28,
+        active: (8, 16),
+        recovery: 12,
+        offset: (16.0, 0.0),
+        size: (34.0, 28.0),
+        damage: 3,
+        knockback: (320.0, -180.0),
+        hitstun: 24,
+    ),
+
+    // Brakka's maul. The slowest thing anyone swings — a long wind-up you can
+    // read from across the pit — and it throws whatever it meets across the
+    // room. The champion fights with it; so can you.
+    "maul_1": AttackDef(
+        clip: "attack2",
+        duration: 34,
+        active: (16, 24),
+        recovery: 10,
+        chain: "maul_2",
+        offset: (12.0, 0.0),
+        size: (36.0, 30.0),
+        damage: 2,
+        knockback: (320.0, -200.0),
+        hitstun: 26,
+    ),
+    "maul_2": AttackDef(
+        clip: "attack3",
+        duration: 36,
+        active: (14, 24),
+        recovery: 16,
+        offset: (14.0, -2.0),
+        size: (40.0, 32.0),
+        damage: 3,
+        knockback: (400.0, -240.0),
+        hitstun: 30,
+    ),
+
+    // The Circle's blade, the Arbiter's gift to a champion: four cuts where
+    // the plain combo has three, each a little quicker, and the blade adds to
+    // every one of them (its `damage`, in items/weapons.ron).
+    "circle_1": AttackDef(
+        clip: "attack1",
+        duration: 18,
+        active: (4, 10),
+        recovery: 2,
+        chain: "circle_2",
+        offset: (14.0, 2.0),
+        size: (26.0, 26.0),
+        damage: 1,
+        knockback: (120.0, -60.0),
+        hitstun: 12,
+    ),
+    "circle_2": AttackDef(
+        clip: "attack2",
+        duration: 18,
+        active: (6, 12),
+        recovery: 2,
+        chain: "circle_3",
+        offset: (14.0, 2.0),
+        size: (28.0, 26.0),
+        damage: 1,
+        knockback: (130.0, -60.0),
+        hitstun: 12,
+    ),
+    "circle_3": AttackDef(
+        clip: "attack1",
+        duration: 18,
+        active: (4, 10),
+        recovery: 2,
+        chain: "circle_4",
+        offset: (14.0, 2.0),
+        size: (28.0, 26.0),
+        damage: 1,
+        knockback: (130.0, -60.0),
+        hitstun: 12,
+    ),
+    "circle_4": AttackDef(
+        clip: "attack3",
+        duration: 22,
+        active: (5, 13),
+        recovery: 8,
+        offset: (16.0, 2.0),
+        size: (36.0, 24.0),
+        damage: 2,
+        knockback: (260.0, -120.0),
+        hitstun: 18,
+    ),
+
+    // Starmetal: the plain combo's timing — the one the player learned the
+    // game on — with a blade that reaches further every link. Found, not
+    // given, deep in the Ark.
+    "star_1": AttackDef(
+        clip: "attack1",
+        duration: 20,
+        active: (4, 10),
+        recovery: 4,
+        chain: "star_2",
+        offset: (14.0, 0.0),
+        size: (32.0, 28.0),
+        damage: 1,
+        knockback: (150.0, -70.0),
+        hitstun: 12,
+    ),
+    "star_2": AttackDef(
+        clip: "attack2",
+        duration: 24,
+        active: (8, 14),
+        recovery: 4,
+        chain: "star_3",
+        offset: (14.0, 0.0),
+        size: (34.0, 28.0),
+        damage: 1,
+        knockback: (160.0, -80.0),
+        hitstun: 12,
+    ),
+    "star_3": AttackDef(
+        clip: "attack3",
+        duration: 24,
+        active: (5, 13),
+        recovery: 10,
+        offset: (16.0, 0.0),
+        size: (42.0, 26.0),
+        damage: 2,
+        knockback: (280.0, -120.0),
+        hitstun: 20,
+    ),
+
+    // --- the warden -------------------------------------------------------
+    //
+    // The knight's swing, heavier: the same 36-tick commitment on the same
+    // clip, so the tell is one the player has already learned, but a longer
+    // blade (16 + 32 - 22 = 26px of reach past its body), twice the damage,
+    // and a throw that clears most of a tile.
+    "warden_slash": AttackDef(
+        clip: "attack",
+        duration: 36,
+        active: (16, 24),
+        recovery: 0,
+        offset: (16.0, 2.0),
+        size: (32.0, 24.0),
+        damage: 2,
+        knockback: (260.0, -180.0),
+        hitstun: 22,
+    ),
+
+    // --- the Thornwood ----------------------------------------------------
+    //
+    // A brigand's swing: the knight's motion, hurried. The blade is out four
+    // ticks sooner, and the whole swing is over six ticks sooner, so there is
+    // less time to read it and less time to punish it.
+    "brigand_slash": AttackDef(
+        clip: "attack",
+        duration: 30,
+        active: (12, 20),
+        recovery: 0,
+        offset: (16.0, 2.0),
+        size: (28.0, 22.0),
+        damage: 1,
+        knockback: (200.0, -140.0),
+        hitstun: 16,
+    ),
+
+    // Gorran's cleave: a long wind-up — the tell, and the only time his shield
+    // is down — then a blow that reaches further than any other enemy's and
+    // throws you most of a tile.
+    "redhand_cleave": AttackDef(
+        clip: "attack",
+        duration: 36,
+        active: (18, 27),
+        recovery: 0,
+        offset: (14.0, 0.0),
+        size: (40.0, 28.0),
+        damage: 2,
+        knockback: (300.0, -200.0),
+        hitstun: 24,
+    ),
+
+    // --- the Ark ----------------------------------------------------------
+    //
+    // A husk's rake: the quickest wind-up of any sword in the game. Light,
+    // and it never stops coming.
+    "husk_rake": AttackDef(
+        clip: "attack",
+        duration: 30,
+        active: (10, 18),
+        recovery: 0,
+        offset: (14.0, 2.0),
+        size: (26.0, 22.0),
+        damage: 1,
+        knockback: (160.0, -100.0),
+        hitstun: 14,
+    ),
+
+    // A sentinel's slam: slow, heavy, and — like Gorran's — the only time its
+    // shield is not in the way.
+    "sentinel_slam": AttackDef(
+        clip: "attack",
+        duration: 36,
+        active: (16, 26),
+        recovery: 0,
+        offset: (14.0, 0.0),
+        size: (36.0, 26.0),
+        damage: 2,
+        knockback: (280.0, -180.0),
+        hitstun: 22,
+    ),
 })

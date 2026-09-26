@@ -1,0 +1,47 @@
+// The Thornwood's tileset: pixel art rather than a PNG
+// (assets/graphics/tiles/forest.ron), 14 columns by 3 rows of 32px tiles.
+// Row 0: the ground — grass-topped earth in its six autotile shapes, then the
+// log a `=` draws. Row 1: small scenery. The big pieces — a hollow tree to
+// walk through, a mossy arch, a tree — stand three rows tall at the right.
+//
+// No background tiles: the Thornwood is outdoors, and the sky is `clear`.
+// Scenery is `Decor(...)` in a map, which is drawn behind everything that
+// moves, so a tree can stand in the way of nothing.
+//
+// The log draws all of itself in its top 8px, as `ONE_WAY_THICKNESS` requires
+// (see tests/assets.rs): what you see is exactly what you stand on.
+Tileset(
+    image: "tiles/forest",
+    tile_size: 32,
+    columns: 14,
+    transparent_color: None,
+    rules: Rules(
+        solid_top_left: 0,
+        solid_top: 1,
+        solid_top_right: 2,
+        solid_left: 3,
+        solid_fill: 4,
+        solid_right: 5,
+        platform: 6,
+        background: [],
+    ),
+    props: {
+        "bush": (0, 1, 1, 1),
+        "fern": (1, 1, 1, 1),
+        "mushroom": (2, 1, 1, 1),
+        "rock": (3, 1, 1, 1),
+        "stump": (4, 1, 1, 1),
+        // A lantern on a post, under the name every tileset's light goes by.
+        "torch": (5, 1, 1, 1),
+        "flowers": (6, 1, 1, 1),
+        "grave": (0, 2, 1, 1),
+        // The way through a great old tree — what a `Door(...)` draws here
+        // when it names no art of its own.
+        "hollow": (7, 0, 2, 3),
+        "door": (7, 0, 2, 3),
+        "archway": (9, 0, 2, 3),
+        "tree": (11, 0, 3, 3),
+    },
+    // A night sky over the wood.
+    clear: (14, 18, 36),
+)

@@ -1,0 +1,32 @@
+// Tomes: spells, worn.
+//
+// The premise of the whole game in one slot: the one thing the Vael cannot do
+// is magic, and magic is how you grow. A tome is equipment worn in the Spell
+// slot, and what it carries is `spell:` — the spell its wearer casts instead
+// of the one they were born with (`shock`, the player's own in stats.ron).
+// Taking it off gives the spark back. Nothing about it adds: it replaces, so
+// which tome to wear is a decision about how to fight rather than a number
+// that only goes up.
+[
+    ItemDef(
+        id: "tome_frost",
+        name: "Tome of Frost",
+        sprite: "items/tome_frost",
+        description: "Ossian's. A lance of ice that passes through every foe in a line.",
+        kind: Equipment(slot: Spell, modifiers: [], spell: "frost"),
+    ),
+    ItemDef(
+        id: "tome_fire",
+        name: "Tome of Embers",
+        sprite: "items/tome_fire",
+        description: "Scorched at the edges. A slow, heavy fireball: 3 mana, 4 damage.",
+        kind: Equipment(slot: Spell, modifiers: [], spell: "fireball"),
+    ),
+    ItemDef(
+        id: "tome_seeking",
+        name: "Tome of Seeking",
+        sprite: "items/tome_seeking",
+        description: "Morwen's grimoire. A star that flies at the nearest foe, wherever it is.",
+        kind: Equipment(slot: Spell, modifiers: [], spell: "seeker"),
+    ),
+]

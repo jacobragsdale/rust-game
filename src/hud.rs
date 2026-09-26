@@ -11,9 +11,11 @@
 //! have actually hit something.
 
 use ggez::glam::Vec2;
-use ggez::graphics::{Canvas, Color, DrawParam, PxScale, Quad, Text, TextFragment};
 
-use crate::ecs::components::{Avatar, Casting, Health, Mana, Position, Size, Team};
+use crate::ecs::components::{
+    Avatar, Brain, Casting, Health, Inventory, Mana, Position, Size, Team,
+};
+use crate::render::{font, Color, Frame};
 use crate::sim::Sim;
 
 const PANEL: Color = Color::new(0.05, 0.04, 0.09, 0.85);
@@ -52,19 +54,19 @@ const ENEMY_BAR_LIFT: f32 = 7.0;
 
 /// Interact prompt geometry. It sits higher than an enemy's health bar so the
 /// two never collide on something that could show both.
-const PROMPT_FONT: f32 = 9.0;
-const PROMPT_H: f32 = 10.0;
 const PROMPT_LIFT: f32 = 10.0;
-/// Rough glyph width at [`PROMPT_FONT`], for centring. The font is not
-/// monospaced, so this is an estimate; being a pixel off centre is invisible
-/// and being wrong about it costs nothing.
-const PROMPT_CHAR_W: f32 = 5.0;
 const PROMPT_TEXT: Color = Color::new(0.95, 0.93, 0.80, 1.0);
 
-pub fn draw(canvas: &mut Canvas, sim: &Sim, camera_offset: Vec2) {
-    draw_player_bars(canvas, sim);
-    draw_enemy_bars(canvas, sim, camera_offset);
-    draw_interact_prompt(canvas, sim, camera_offset);
+/// The item the purse counts. Money is an ordinary item — it stacks in the
+/// bag, a chest or a loot table hands it out, a reply can take it — and this
+/// is the one place that treats it as more: it is always on screen.
+const COIN: &str = "coin";
+
+pub fn draw(frame: &mut Frame, sim: &Sim, camera_offset: Vec2) {
+    draw_player_bars(frame, sim);
+    draw_purse(frame, sim);
+    draw_enemy_bars(frame, sim, camera_offset);
+    draw_interact_prompt(frame, sim, camera_offset);
 }
 
 /// "[E] talk", floating over whatever is in reach.
@@ -77,7 +79,7 @@ pub fn draw(canvas: &mut Canvas, sim: &Sim, camera_offset: Vec2) {
 ///
 /// Hidden while modal: a conversation is already up, and the overlay is drawn
 /// over the world the prompt would be floating in.
-fn draw_interact_prompt(canvas: &mut Canvas, sim: &Sim, camera_offset: Vec2) {
+fn draw_interact_prompt(frame: &mut Frame, sim: &Sim, camera_offset: Vec2) {
     if sim.mode().is_modal() {
         return;
     }
@@ -92,29 +94,22 @@ fn draw_interact_prompt(canvas: &mut Canvas, sim: &Sim, camera_offset: Vec2) {
     };
 
     let text = format!("[E] {}", prompt.prompt);
-    let width = text.chars().count() as f32 * PROMPT_CHAR_W;
-    let origin = Vec2::new(
+    let width = font::width(&text);
+    let origin = (Vec2::new(
         pos.0.x + size.0.x / 2.0 - width / 2.0,
-        pos.0.y - PROMPT_LIFT - PROMPT_H,
-    ) - camera_offset;
+        pos.0.y - PROMPT_LIFT - font::GLYPH_H as f32,
+    ) - camera_offset)
+        .floor();
 
-    fill(
-        canvas,
-        origin.floor() - Vec2::new(2.0, 1.0),
-        Vec2::new(width + 4.0, PROMPT_H + 2.0),
+    frame.rect(
+        origin - Vec2::new(2.0, 2.0),
+        Vec2::new(width + 4.0, font::GLYPH_H as f32 + 3.0),
         PANEL,
     );
-    canvas.draw(
-        &Text::new(
-            TextFragment::new(text)
-                .scale(PxScale::from(PROMPT_FONT))
-                .color(PROMPT_TEXT),
-        ),
-        DrawParam::default().dest(origin.floor()),
-    );
+    frame.text(origin, &text, PROMPT_TEXT);
 }
 
-fn draw_player_bars(canvas: &mut Canvas, sim: &Sim) {
+fn draw_player_bars(frame: &mut Frame, sim: &Sim) {
     let Some(health) = player_health(sim) else {
         return;
     };
@@ -123,15 +118,14 @@ fn draw_player_bars(canvas: &mut Canvas, sim: &Sim) {
     // for: the mana bar landed in space that had been reserved for it, so the
     // health bar did not move.
     let panel_h = BAR_H * 2.0 + MARGIN * 1.5;
-    fill(
-        canvas,
+    frame.rect(
         Vec2::new(MARGIN - 2.0, MARGIN - 2.0),
         Vec2::new(BAR_W + 4.0, panel_h),
         PANEL,
     );
 
     bar(
-        canvas,
+        frame,
         HEALTH_ORIGIN,
         health.fraction(),
         if health.fraction() <= LOW_FRACTION {
@@ -150,14 +144,14 @@ fn draw_player_bars(canvas: &mut Canvas, sim: &Sim) {
         return;
     }
     bar(
-        canvas,
+        frame,
         MANA_ORIGIN,
         mana.fraction(),
         if cooling { MANA_COOLING } else { MANA },
     );
 }
 
-fn draw_enemy_bars(canvas: &mut Canvas, sim: &Sim, camera_offset: Vec2) {
+fn draw_enemy_bars(frame: &mut Frame, sim: &Sim, camera_offset: Vec2) {
     for (_, (pos, size, health, team)) in sim
         .world
         .query::<(&Position, &Size, &Health, &Team)>()
@@ -170,30 +164,55 @@ fn draw_enemy_bars(canvas: &mut Canvas, sim: &Sim, camera_offset: Vec2) {
         }
 
         let centre = pos.0.x + size.0.x / 2.0;
-        let origin = Vec2::new(
+        let origin = (Vec2::new(
             centre - ENEMY_BAR_W / 2.0,
             pos.0.y - ENEMY_BAR_LIFT - ENEMY_BAR_H,
-        ) - camera_offset;
+        ) - camera_offset)
+            .floor();
 
-        fill(
-            canvas,
-            origin.floor() - Vec2::splat(1.0),
+        frame.rect(
+            origin - Vec2::splat(1.0),
             Vec2::new(ENEMY_BAR_W + 2.0, ENEMY_BAR_H + 2.0),
             PANEL,
         );
-        fill(
-            canvas,
-            origin.floor(),
-            Vec2::new(ENEMY_BAR_W, ENEMY_BAR_H),
-            EMPTY,
-        );
-        fill(
-            canvas,
-            origin.floor(),
-            Vec2::new(ENEMY_BAR_W * health.fraction(), ENEMY_BAR_H),
+        frame.rect(origin, Vec2::new(ENEMY_BAR_W, ENEMY_BAR_H), EMPTY);
+        frame.rect(
+            origin,
+            Vec2::new((ENEMY_BAR_W * health.fraction()).round(), ENEMY_BAR_H),
             ENEMY_HEALTH,
         );
     }
+}
+
+/// How many coins the player has, under the bars — and nothing at all until
+/// they have one.
+fn draw_purse(frame: &mut Frame, sim: &Sim) {
+    let mut query = sim
+        .world
+        .query::<&Inventory>()
+        .with::<&Avatar>()
+        .without::<&Brain>();
+    let coins = query
+        .iter()
+        .map(|(_, bag)| bag.count(COIN))
+        .next()
+        .unwrap_or(0);
+    if coins == 0 {
+        return;
+    }
+    let text = format!("x{coins}");
+    let icon = crate::ecs::spawn::PICKUP_SIZE;
+    frame.rect(
+        PURSE_ORIGIN - Vec2::splat(2.0),
+        Vec2::new(icon.x + font::width(&text) + 7.0, icon.y + 4.0),
+        PANEL,
+    );
+    crate::scenes::inventory::icon(frame, &sim.items, COIN, PURSE_ORIGIN);
+    frame.text(
+        PURSE_ORIGIN + Vec2::new(icon.x + 3.0, (icon.y - font::GLYPH_H as f32) / 2.0),
+        &text,
+        PROMPT_TEXT,
+    );
 }
 
 /// Where the health bar's top-left corner is. The mana bar's is
@@ -201,24 +220,23 @@ fn draw_enemy_bars(canvas: &mut Canvas, sim: &Sim, camera_offset: Vec2) {
 ///
 /// Named constants rather than literals inside `draw_player_bars` so that
 /// `the_mana_bar_did_not_move_the_health_bar` can check the layout without a
-/// graphics context — this file is otherwise untestable, and "did the health
-/// bar move?" is exactly the kind of question a screenshot answers badly.
+/// picture — and a picture can now be had too: `cargo run --bin render`.
 const HEALTH_ORIGIN: Vec2 = Vec2::new(MARGIN, MARGIN);
 const MANA_ORIGIN: Vec2 = Vec2::new(MARGIN, MARGIN + BAR_H + BAR_GAP);
+/// The purse's icon, clear below the bars' panel.
+const PURSE_ORIGIN: Vec2 = Vec2::new(MARGIN, MARGIN * 2.5 + BAR_H * 2.0 + 4.0);
 
 /// A bordered bar: border, empty track, then the filled portion.
-fn bar(canvas: &mut Canvas, origin: Vec2, fraction: f32, colour: Color) {
+fn bar(frame: &mut Frame, origin: Vec2, fraction: f32, colour: Color) {
     let size = Vec2::new(BAR_W, BAR_H);
-    fill(
-        canvas,
+    frame.rect(
         origin - Vec2::splat(BORDER_W),
         size + Vec2::splat(BORDER_W * 2.0),
         BORDER,
     );
-    fill(canvas, origin, size, EMPTY);
+    frame.rect(origin, size, EMPTY);
     if fraction > 0.0 {
-        fill(
-            canvas,
+        frame.rect(
             origin,
             Vec2::new((BAR_W * fraction).max(1.0).floor(), BAR_H),
             colour,
@@ -226,22 +244,19 @@ fn bar(canvas: &mut Canvas, origin: Vec2, fraction: f32, colour: Color) {
     }
 }
 
-fn fill(canvas: &mut Canvas, origin: Vec2, size: Vec2, colour: Color) {
-    canvas.draw(
-        &Quad,
-        DrawParam::new().dest(origin).scale(size).color(colour),
-    );
-}
-
 /// The player's own health.
 ///
 /// Keyed off [`Avatar`] rather than off `Team::Player`, and that is not a
 /// tidy-up: M5's villager is on the player's team so that friendly fire cannot
 /// touch it, which means "the first player-team thing with health" stopped
-/// being the player the day a villager stood next to one. `Avatar` is the
-/// component only the thing the player drives has.
+/// being the player the day a villager stood next to one. An `Avatar` with no
+/// [`Brain`] at its controls is the thing the player drives.
 fn player_health(sim: &Sim) -> Option<Health> {
-    let mut query = sim.world.query::<&Health>().with::<&Avatar>();
+    let mut query = sim
+        .world
+        .query::<&Health>()
+        .with::<&Avatar>()
+        .without::<&Brain>();
     query.iter().map(|(_, health)| *health).next()
 }
 
@@ -251,7 +266,8 @@ fn player_mana(sim: &Sim) -> Option<(Mana, bool)> {
     let mut query = sim
         .world
         .query::<(&Mana, Option<&Casting>)>()
-        .with::<&Avatar>();
+        .with::<&Avatar>()
+        .without::<&Brain>();
     query
         .iter()
         .map(|(_, (mana, casting))| (*mana, casting.is_some_and(|c| c.cooldown > 0)))

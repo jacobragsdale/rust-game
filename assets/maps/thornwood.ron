@@ -1,0 +1,100 @@
+// The Thornwood — east of Ashford, where the lights come down.
+//
+// Act II's first map: outdoors, quicker enemies than the dungeon's, and the
+// first person in the game who can say what is happening. Left to right:
+//
+//   cols   0-23   the west road: the gate back to Ashford, a sign, and two
+//                 wolves penned between a hill (cols 10-13) and a rock ledge
+//                 (cols 22-23) — a one-tile step is a wall to anything that
+//                 walks and nothing to anything that jumps
+//   cols  24-43   the ravine: thorns at the bottom, three logs level with the
+//                 banks, three tiles apart. The archer on the far bank shoots
+//                 flat across it at chest height, so the crossing is timed
+//                 against the arrows — or taken at a run
+//   cols  44-52   the far bank: the archer, and a brigand who will not follow
+//                 you off its edge
+//   cols  53-62   the hermit's clearing, a step up: a checkpoint, and Ossian
+//                 by his hollow tree
+//   cols  63-78   the hill: a step (floor row 8), a plateau four tiles above
+//                 it — a double jump — and steps down the far side. The grove
+//                 is *inside* it: cols 68-73, rows 6-7 are false wall (`%`)
+//                 all through, entered from the step by walking into the
+//                 hill's face. From outside it is solid earth; only the chest
+//                 and the sign, drawn over it, give it away
+//   cols  79-99   the brigands' camp: a sign, two brigands, their dog, an
+//                 archer, and the armoury chest up on the lookout (a log,
+//                 cols 90-93, two tiles up) with the hunting spear in it. A
+//                 checkpoint at the far end
+//   cols 100-111  Gorran's ring: a step in, Gorran, and his palisade — a gate
+//                 on his death flag, which is also what keeps him in the ring
+//   cols 112-121  the ridge, three steps up to the arch and the Beacon
+//
+// Legend: '#' earth  '=' a log  '^' thorns  '%' false wall. 122x14 tiles at
+// 32px; the road is row 10, surface y=320.
+Level(
+    tileset: "forest",
+    name: "The Thornwood",
+    grid: [
+        "..........................................................................................................................",
+        "..........................................................................................................................",
+        "..........................................................................................................................",
+        "..........................................................................................................................",
+        "....................................................................#######...............................................",
+        "....................................................................#######...............................................",
+        "....................................................................%%%%%%###.............................................",
+        "....................................................................%%%%%%###.........................................####",
+        "...............................................................################...........====.....................#######",
+        "..........####........##.............................##########################.........##..........#...........##########",
+        "########################...===...===...===..##############################################################################",
+        "########################....................##############################################################################",
+        "########################^^^^^^^^^^^^^^^^^^^^##############################################################################",
+        "##########################################################################################################################",
+    ],
+    entities: [
+        // NPCs, in the order a tape addresses them: wolf.0-1, archer.0,
+        // brigand.0, hermit.0, brigand.1-2, wolf.2, archer.1, gorran.0.
+        Npc(kind: "wolf", cell: (16, 9)),
+        Npc(kind: "wolf", cell: (20, 9)),
+        Npc(kind: "archer", cell: (48, 9)),
+        Npc(kind: "brigand", cell: (51, 9)),
+        Npc(kind: "hermit", cell: (60, 8)),
+        Npc(kind: "brigand", cell: (83, 9)),
+        Npc(kind: "brigand", cell: (86, 9)),
+        Npc(kind: "wolf", cell: (93, 9)),
+        Npc(kind: "archer", cell: (97, 9)),
+        // His death is the flag his palisade waits on.
+        Npc(kind: "gorran", cell: (106, 9), flag: "quest.thornwood.gorran"),
+
+        Door(id: "village_gate", cell: (1, 9), to: "maps/village.ron", at: "east_gate", art: "archway"),
+        Spawn(id: "west", cell: (4, 9)),
+        Sign(cell: (6, 9), dialogue: "sign_thornwood"),
+        Checkpoint(cell: (55, 8)),
+        // The grove: inside the hill, behind its west face at the step's height.
+        Sign(cell: (70, 7), dialogue: "sign_grove"),
+        Chest(id: "secret_grove", cell: (72, 7), items: [("wildheart_charm", 1), ("coin", 5)]),
+        Sign(cell: (81, 9), dialogue: "sign_camp"),
+        Chest(id: "armoury", cell: (91, 7), items: [("hunting_spear", 1), ("minor_potion", 1)]),
+        Checkpoint(cell: (98, 9)),
+        Gate(cell: (111, 9), height: 3, flag: "quest.thornwood.gorran"),
+        Door(id: "beacon_path", cell: (119, 6), to: "maps/beacon.ron", at: "base", art: "archway"),
+
+        // The wood itself.
+        Decor(cell: (7, 9), prop: "tree"),
+        Decor(cell: (14, 9), prop: "bush"),
+        Decor(cell: (18, 9), prop: "fern"),
+        Decor(cell: (21, 9), prop: "mushroom"),
+        Decor(cell: (45, 9), prop: "tree"),
+        Decor(cell: (52, 9), prop: "rock"),
+        Decor(cell: (54, 8), prop: "flowers"),
+        Decor(cell: (57, 8), prop: "hollow"),
+        Decor(cell: (62, 8), prop: "stump"),
+        Decor(cell: (69, 3), prop: "tree"),
+        Decor(cell: (73, 3), prop: "bush"),
+        Decor(cell: (82, 9), prop: "torch"),
+        Decor(cell: (95, 9), prop: "torch"),
+        Decor(cell: (101, 9), prop: "grave"),
+        Decor(cell: (102, 9), prop: "grave"),
+        Decor(cell: (112, 8), prop: "tree"),
+        Decor(cell: (118, 6), prop: "fern"),
+    ],
+)

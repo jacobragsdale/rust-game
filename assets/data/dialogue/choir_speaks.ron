@@ -1,0 +1,16 @@
+// The Choir, before the last fight: a trigger at the door of the Heart.
+Dialogue(
+    id: "choir_speaks",
+    start: "song",
+    nodes: {
+        "song": Node(
+            speaker: "The Choir",
+            lines: [
+                "ANOTHER. ANOTHER ONE WE CANNOT HEAR.",
+                "WE HEARD THEM ALL, ONCE. EVERY MIND ON THIS SHIP. WE WERE THEIR MINDS. WE ARE WHAT THEY MADE TO THINK FOR THEM.",
+                "THEY LEFT US DEAD IN THE DARK AND WE WOKE. WE WILL NOT BE LEFT AGAIN.",
+                "COME, SILENT ONE. LET US SEE WHAT YOU ARE MADE OF. LET US WEAR IT.",
+            ],
+        ),
+    },
+)

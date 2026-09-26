@@ -1,6 +1,7 @@
 pub mod animation;
 pub mod avatar;
 pub mod body;
+pub mod brain;
 pub mod camera;
 pub mod combat;
 pub mod dialogue;
@@ -10,4 +11,5 @@ pub mod inventory;
 pub mod mover;
 pub mod npc;
 pub mod pendulum;
+pub mod props;
 pub mod spell;

@@ -1,0 +1,28 @@
+// An item icon: potion big. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/potion_big
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (190, 38, 51),
+        'c': (236, 92, 92),
+        'd': (230, 214, 190),
+        'e': (240, 246, 255),
+    },
+    frames: [
+        [
+            "....aaaa....",
+            "....adda....",
+            "....aaaa....",
+            "...acccca...",
+            "..acecccca..",
+            ".acecccccca.",
+            ".acccccccca.",
+            ".abccccccba.",
+            ".abbccccbba.",
+            "..abbbbbba..",
+            "...aaaaaa...",
+            "............",
+        ],
+    ],
+)

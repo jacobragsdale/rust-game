@@ -1,0 +1,19 @@
+// An arrow, flying right. 14x4.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image creatures/arrow
+Pixels(
+    palette: {
+        'a': (110, 72, 48),
+        'b': (150, 104, 64),
+        'c': (200, 206, 220),
+        'd': (230, 230, 240),
+    },
+    frames: [
+        [
+            "dd............",
+            ".dbbbbbbbbbccc",
+            ".daaaaaaaaaccc",
+            "dd............",
+        ],
+    ],
+)

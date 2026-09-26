@@ -1,0 +1,27 @@
+// An item icon: pelt. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/pelt
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (120, 132, 156),
+        'c': (150, 156, 180),
+        'd': (192, 203, 220),
+    },
+    frames: [
+        [
+            "............",
+            ".a........a.",
+            "aba......aba",
+            "adbaaaaaabda",
+            ".adddddddda.",
+            "..adccccda..",
+            "..adccccda..",
+            "..addccdda..",
+            "...adddda...",
+            "....abba....",
+            ".....aa.....",
+            "............",
+        ],
+    ],
+)

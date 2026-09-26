@@ -1,0 +1,29 @@
+// An item icon: wildheart. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/wildheart
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (38, 110, 60),
+        'c': (160, 90, 40),
+        'd': (90, 190, 90),
+        'e': (230, 170, 40),
+        'f': (254, 231, 97),
+    },
+    frames: [
+        [
+            ".....aa.....",
+            "....adda....",
+            "...adbbda...",
+            "..adbddbda..",
+            "..addbbdda..",
+            "...adbbda...",
+            "....adda....",
+            ".....aa.....",
+            ".....aca....",
+            "....aacaa...",
+            "....aefea...",
+            ".....aaa....",
+        ],
+    ],
+)

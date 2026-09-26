@@ -1,0 +1,6 @@
+// A Thornwood brigand — the knight's art (`base`) in road-worn leather.
+ClipSet(
+    base: "knight",
+    tint: (206, 156, 116),
+    clips: {},
+)

@@ -1,0 +1,26 @@
+// The homecoming: a trigger where the long fall from the Ark sets you down in
+// Ashford, once the Choir is dead. Then the credits, such as they are.
+Dialogue(
+    id: "epilogue_home",
+    start: "home",
+    nodes: {
+        "home": Node(
+            speaker: "Ashford",
+            lines: [
+                "The light sets you down in the square at dusk.",
+                "There are lamps in windows that were dark a month ago. Somewhere a child is crying because it is bedtime, which is the best sound you have heard in your life.",
+                "Runa is at her door. Brann has his stall out. The taken are home.",
+            ],
+            choices: [
+                Choice(text: "...", next: "end"),
+            ],
+        ),
+        "end": Node(
+            speaker: "SuperGame",
+            lines: [
+                "THE END.",
+                "Thank you for playing. The world is still here, and so are its secrets.",
+            ],
+        ),
+    },
+)

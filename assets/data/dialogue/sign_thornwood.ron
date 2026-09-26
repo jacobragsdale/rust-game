@@ -1,0 +1,14 @@
+// The Thornwood's first sign, by the east gate.
+Dialogue(
+    id: "sign_thornwood",
+    start: "read",
+    nodes: {
+        "read": Node(
+            speaker: "A ranger's post",
+            lines: [
+                "THORNWOOD. Rangers' camp two leagues east. Beacon beyond.",
+                "Someone has scratched underneath: WOLVES. BRIGANDS. TURN BACK.",
+            ],
+        ),
+    },
+)

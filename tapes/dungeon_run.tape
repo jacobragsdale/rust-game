@@ -64,9 +64,12 @@ expect no died
 # --- knight 0, head-on -------------------------------------------------------
 #
 # Over the rubble and into its room, on its floor and inside its sight box.
-# Three passes of the full combo with a step back between them; the exact
-# ticks of each hit fall out of knockback, i-frames and its cooldown at once,
-# so what is asserted is that it died and the player did not.
+# Two passes of the full combo with a step back between them; the exact ticks
+# of each hit fall out of knockback, i-frames and its cooldown at once, so what
+# is asserted is that it died and the player did not. (Picked from a sweep of
+# 720 approach patterns, 374 of which win; this one takes no damage. A knight
+# holds its ground at sword's reach and faces you, so walking into it is how
+# you end up behind it swinging at air.)
 
 right+jump 1
 right 40
@@ -74,7 +77,7 @@ assert grounded
 assert x > 608
 wait 60
 
-right 16
+right 18
 attack 1
 wait 10
 attack 1
@@ -82,8 +85,8 @@ wait 12
 attack 1
 wait 24
 left 26
-wait 28
-right 16
+wait 14
+right 18
 attack 1
 wait 10
 attack 1
@@ -91,16 +94,7 @@ wait 12
 attack 1
 wait 24
 left 26
-wait 28
-right 16
-attack 1
-wait 10
-attack 1
-wait 12
-attack 1
-wait 24
-left 26
-wait 28
+wait 14
 
 assert knight.0.dead
 assert knight.0.hp <= 0
@@ -116,6 +110,9 @@ expect no player.died
 right 60
 assert grounded
 assert x == 908
+# ...sweeping up what knight 0 dropped on the way, which is where it fell.
+expect knight_helm.picked_up == 1
+expect minor_potion.picked_up == 1
 
 right+jump 1
 right 45
@@ -129,6 +126,9 @@ assert x < 1068
 # its far end, then ride with no input at all: everything moving the player is
 # under their feet, which is what `vx == 0` out over the pit says. `x > 1120`
 # is past the gangway entirely — on the ferry, not on the map.
+# The fight above is short, so the ferry is still out over the pit: wait for
+# it where the gangway starts rather than on the plank.
+wait 143
 right 36
 assert grounded
 assert y == 286
@@ -192,9 +192,11 @@ expect no player.damaged
 
 # --- down behind it ----------------------------------------------------------
 #
-# Straight down through the plank, landing at its back while it walks away.
-# The swings that follow land before it has any idea, which is the whole
-# difference between this fight and the last one.
+# Straight down through the plank, landing at its back while it walks away,
+# and open with the whole combo: the chain keeps it stunned from the first
+# blow to the last, so all three land before it can turn round. That is the
+# whole difference between this fight and the last one — a knight that is
+# hit does notice, but only once it can move again.
 
 down 1
 wait 30
@@ -204,61 +206,30 @@ expect dropped_through == 1
 
 left 40
 attack 1
-wait 24
-left 22
+wait 10
+attack 1
+wait 12
 attack 1
 wait 24
-left 22
-attack 1
-wait 24
-left 22
 
 assert knight.1.hp <= 4
 assert !dead
 assert hp == 5
 expect no player.damaged
 
-# It reaches the end of its pen, turns, and now it is knight 0 again — so
-# finish it the way knight 0 was finished, giving ground between passes.
-right 40
-wait 40
-
-left 10
+# Now it knows, and it is knight 0 again — so finish it the way knight 0 was
+# finished, giving ground first.
+right 26
+wait 14
+left 18
 attack 1
 wait 10
 attack 1
 wait 12
 attack 1
 wait 24
-right 20
-wait 28
-left 10
-attack 1
-wait 10
-attack 1
-wait 12
-attack 1
-wait 24
-right 20
-wait 28
-left 10
-attack 1
-wait 10
-attack 1
-wait 12
-attack 1
-wait 24
-right 20
-wait 28
-left 10
-attack 1
-wait 10
-attack 1
-wait 12
-attack 1
-wait 24
-right 20
-wait 28
+right 26
+wait 14
 
 assert knight.1.dead
 assert knight.1.hp <= 0
@@ -268,16 +239,15 @@ expect no player.died
 
 # --- what it was carrying ----------------------------------------------------
 #
-# There is no `Item(...)` entity form, so the thing at the end of the dungeon
-# is the thing the guard had on it. Its two guaranteed drops are on the floor
-# where it fell; the helm is under the player's feet already, and the potion is
-# swept up on the way out.
+# The thing at the end of the dungeon is the thing the guard had on it. Its two
+# guaranteed drops are on the floor where it fell, a step back the way the
+# fight came.
 
 left 12
 wait 20
-assert item.knight_helm.count == 1
+assert item.knight_helm.count == 2
 assert knight.1.dead
-expect knight_helm.picked_up == 1
+expect knight_helm.picked_up == 2
 
 # --- the way down ------------------------------------------------------------
 #
@@ -290,7 +260,7 @@ assert grounded
 assert x == 2124
 assert y == 318
 assert !dead
-assert item.minor_potion.count == 1
-expect minor_potion.picked_up == 1
+assert item.minor_potion.count == 2
+expect minor_potion.picked_up == 2
 expect no player.died
 expect knight.died == 2

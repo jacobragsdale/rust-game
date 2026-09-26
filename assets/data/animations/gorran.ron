@@ -1,0 +1,18 @@
+// Gorran Redhand — the knight's art gone the colour of his name, and the
+// pack's shield sheet for the one pose that matters: standing ready.
+ClipSet(
+    base: "knight",
+    tint: (226, 86, 64),
+    clips: {
+        // knightShield frames 0-2: the shield held square in front — what the
+        // patrol selector shows while a kind with `guard` stands ready.
+        "guard": Clip(
+            sheet: "knight/knightShield",
+            frame_size: (96.0, 64.0),
+            offset: (-2.0, 0.0),
+            frames: [(0, 0), (1, 0), (2, 0), (1, 0)],
+            fps: 6.0,
+            looping: true,
+        ),
+    },
+)

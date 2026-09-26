@@ -1449,3 +1449,72 @@ fn jumping_off_is_the_same_jump_whichever_way_the_platform_is_going() {
     assert_eq!(arc(1.0), still, "jumping off a platform moving right");
     assert_eq!(arc(-1.0), still, "jumping off a platform moving left");
 }
+
+// ---------------------------------------------------------------------------
+// Catching a falling body on a rising platform
+// ---------------------------------------------------------------------------
+
+/// A body dropped onto a platform that is rising lands on it, from any height,
+/// at any rise speed, whether the platform is one-way or solid.
+///
+/// The rider test used to carry only bodies that were already standing, and
+/// collision decides "landed from above" against the platform's *new* top —
+/// so a body whose feet the top overtook inside one tick was never caught: it
+/// fell through a one-way lift, and was shoved sideways off a solid one.
+#[test]
+fn a_rising_platform_catches_whatever_falls_onto_it() {
+    let mut missed = Vec::new();
+    let mut total = 0;
+    for one_way in [true, false] {
+        for (rise, leg) in [(160.0f32, 160u32), (160.0, 80), (160.0, 40)] {
+            // Across the middle of the platform, and at the very edge of it.
+            for overlap in [48.0f32, 0.25, 0.5, 2.0] {
+                for drop in 0..40 {
+                    total += 1;
+                    let height = 40.0 + drop as f32 * 1.37;
+                    let path = Mover::new(
+                        Vec2::new(100.0, 400.0),
+                        Vec2::new(100.0, 400.0 - rise),
+                        leg,
+                        0,
+                    );
+                    let mut world = World::new();
+                    let thickness = if one_way { 8.0 } else { 16.0 };
+                    let platform =
+                        spawn_platform(&mut world, path, Vec2::new(96.0, thickness), one_way);
+                    let x = 100.0 + overlap - SIZE.x;
+                    let rider = spawn_rider(&mut world, Vec2::new(x, 400.0 - SIZE.y - height));
+                    let mut geometry = Geometry::default();
+                    let mut landed = false;
+                    for tick in 0..leg as u64 {
+                        mover_tick(&mut world, &mut geometry, tick);
+                        if body_of(&world, rider).grounded {
+                            landed = true;
+                            break;
+                        }
+                        if pos_of(&world, rider).y + SIZE.y > pos_of(&world, platform).y + 8.0 {
+                            break; // below the top: fell through or off
+                        }
+                    }
+                    if !landed {
+                        missed.push(format!(
+                            "one_way={one_way} rise {rise}px/{leg}t overlap {overlap} \
+                             drop {height:.2}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        missed.is_empty(),
+        "{}/{total} drops were not caught by a rising platform:\n  {}",
+        missed.len(),
+        missed
+            .iter()
+            .take(12)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+}

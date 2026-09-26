@@ -1,0 +1,136 @@
+// Brann the Pedlar — a shop, made of nothing but dialogue.
+//
+// A price is a condition and a sale is two effects: `HasItems("coin", 3)` hides
+// the reply until you can pay, and `TakeItem` + `GiveItem` make the trade. A
+// reply is atomic — with no room in the bag for what you are buying, the whole
+// reply is refused, coins and all, and the conversation stays where it was —
+// so a shop needs no code of its own. The next shopkeeper is a copy of this
+// file with other prices.
+Dialogue(
+    id: "pedlar",
+    start: "greet",
+    nodes: {
+        "greet": Node(
+            speaker: "Brann the Pedlar",
+            lines: [
+                "Coin for comfort, friend. Honest glass, all of it.",
+            ],
+            choices: [
+                Choice(
+                    text: "A health potion. (3 coins)",
+                    next: "sold",
+                    condition: HasItems("coin", 3),
+                    effects: [TakeItem("coin", 3), GiveItem("minor_potion", 1)],
+                ),
+                Choice(
+                    text: "A mana draught. (4 coins)",
+                    next: "sold",
+                    condition: HasItems("coin", 4),
+                    effects: [TakeItem("coin", 4), GiveItem("mana_potion", 1)],
+                ),
+                Choice(
+                    text: "What will you give me for this seal?",
+                    next: "seal",
+                    condition: HasItem("warden_seal"),
+                    effects: [
+                        TakeItem("warden_seal", 1),
+                        GiveItem("coin", 20),
+                        SetFlag("quest.warden.stage", 2),
+                    ],
+                ),
+                Choice(
+                    text: "Heard anything?",
+                    next: "rumour",
+                    condition: FlagEq("quest.warden.stage", 0),
+                ),
+                // --- later stock, and later questions --------------------------
+                //
+                // Above the farewell, because a reply's place in this list is
+                // what a trace records; all hidden until the story gets here.
+                Choice(
+                    text: "A leather jerkin. (8 coins)",
+                    next: "sold",
+                    condition: All([FlagAtLeast("quest.east.stage", 1), HasItems("coin", 8)]),
+                    effects: [TakeItem("coin", 8), GiveItem("leather_jerkin", 1)],
+                ),
+                Choice(
+                    text: "A greater health potion. (7 coins)",
+                    next: "sold",
+                    condition: All([FlagAtLeast("quest.east.stage", 1), HasItems("coin", 7)]),
+                    effects: [TakeItem("coin", 7), GiveItem("greater_potion", 1)],
+                ),
+                Choice(
+                    text: "Who pays twenty coins for a seal?",
+                    next: "buyer",
+                    condition: All([FlagEq("quest.warden.stage", 2), FlagEq("quest.brann.stage", 0)]),
+                    effects: [SetFlag("quest.brann.stage", 1)],
+                ),
+                Choice(
+                    text: "You traded with them. The Vael.",
+                    next: "confession",
+                    condition: All([FlagAtLeast("quest.ark.choir", 1), Not(FlagEq("quest.brann.stage", 2))]),
+                    effects: [SetFlag("quest.brann.stage", 2), GiveItem("greater_potion", 2)],
+                ),
+                Choice(text: "Nothing today.", next: None),
+            ],
+        ),
+        "buyer": Node(
+            speaker: "Brann the Pedlar",
+            lines: [
+                "People who pay, friend. Sky-folk, if you want the old word - tall and quiet, and their coin is good.",
+                "Glass, potions, anything that mends. They never haggle, and they never say what it is for.",
+                "Go east if you want to meet them. That is where the lights come down.",
+            ],
+            choices: [
+                Choice(text: "Something else.", next: "greet"),
+                Choice(text: "Farewell.", next: None),
+            ],
+        ),
+        "confession": Node(
+            speaker: "Brann the Pedlar",
+            lines: [
+                "So you have been up there. Aye. Thirty years of honest glass, to a people who could not make their own.",
+                "I never asked what the potions were for. I did not want to know they were patching up the ones they took.",
+                "Take these. No charge. It is not enough, but it is what I have.",
+            ],
+            choices: [
+                Choice(text: "Something else.", next: "greet"),
+                Choice(text: "Farewell, Brann.", next: None),
+            ],
+        ),
+        "sold": Node(
+            speaker: "Brann the Pedlar",
+            lines: ["Pleasure doing business."],
+            choices: [
+                Choice(text: "Something else.", next: "greet"),
+                Choice(text: "That is all.", next: None),
+            ],
+        ),
+        "rumour": Node(
+            speaker: "Brann the Pedlar",
+            lines: [
+                "The knights did not come down out of the castle on their own.",
+                "Something under the old dungeon calls them. The Warden, they say. It keeps a crypt.",
+                "Bring me its seal and I will pay you well for it.",
+            ],
+            choices: [
+                Choice(
+                    text: "I will see.",
+                    next: "greet",
+                    effects: [SetFlag("quest.warden.stage", 1)],
+                ),
+            ],
+        ),
+        "seal": Node(
+            speaker: "Brann the Pedlar",
+            lines: [
+                "The Warden's own. So it is done.",
+                "Twenty, and my thanks. The village will sleep tonight.",
+            ],
+            choices: [
+                Choice(text: "Something else.", next: "greet"),
+                Choice(text: "Farewell.", next: None),
+            ],
+        ),
+    },
+)

@@ -1,0 +1,27 @@
+// An item icon: jerkin. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/jerkin
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (160, 90, 40),
+        'c': (140, 96, 64),
+        'd': (184, 136, 92),
+    },
+    frames: [
+        [
+            "..aa....aa..",
+            ".adda..adda.",
+            "adccdaadccda",
+            "adcccddcccda",
+            ".acccccccda.",
+            "..accbbbcca.",
+            "..acccbccda.",
+            "..acccbccda.",
+            "..accbbbcca.",
+            "..adccccdda.",
+            "..aaaaaaaaa.",
+            "............",
+        ],
+    ],
+)

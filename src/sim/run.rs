@@ -50,6 +50,21 @@ impl RunOutcome {
 /// Play a tape into a sim. The trace holds the state before the first tick
 /// plus one entry per tick, so it has `tape.ticks() + 1` entries.
 pub fn run_tape(sim: &mut Sim, tape: &Tape) -> RunOutcome {
+    run_tape_with(sim, tape, |_, _| {})
+}
+
+/// [`run_tape`], calling `on_tick` with the sim after each tick has been
+/// stepped and recorded — and once before the first, at tick 0.
+///
+/// This is how `cargo run --bin render` draws a tape: the same loop, the same
+/// seed, the same ticks, with a picture taken where it asks for one. One loop
+/// rather than a copy of it, so the tick the renderer draws is the tick the
+/// assertions were checked at.
+pub fn run_tape_with(
+    sim: &mut Sim,
+    tape: &Tape,
+    mut on_tick: impl FnMut(&Sim, usize),
+) -> RunOutcome {
     let mut trace = Trace::new();
     let mut failures = Vec::new();
     // Cumulative, so `expect` reads as "by this point in the tape".
@@ -92,11 +107,28 @@ pub fn run_tape(sim: &mut Sim, tape: &Tape) -> RunOutcome {
     // Assertions written before any input describe the starting state, when
     // nothing has happened yet.
     record(sim, 0, &counts, &mut trace, &mut failures);
+    on_tick(sim, 0);
 
     for (index, input) in tape.inputs().iter().enumerate() {
+        if let Some(&(_, line)) = tape.reloads.iter().find(|(at, _)| *at == index) {
+            let reloaded = sim
+                .save()
+                .map_err(anyhow::Error::from)
+                .and_then(|state| Sim::load_save(&mut crate::assets::Assets::new(), &state));
+            match reloaded {
+                Ok(reloaded) => *sim = reloaded,
+                Err(err) => failures.push(Failure {
+                    line,
+                    tick: index,
+                    assertion: "reload".to_string(),
+                    message: format!("{err:#}"),
+                }),
+            }
+        }
         sim.step(*input);
         counts.record(sim.events());
         record(sim, index + 1, &counts, &mut trace, &mut failures);
+        on_tick(sim, index + 1);
     }
 
     RunOutcome { trace, failures }

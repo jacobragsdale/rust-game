@@ -1,0 +1,19 @@
+// Ysolde of Varr — taken, like the player, from another world. The player's
+// art in pale blue; she stands and talks, so she needs what the patrol
+// selector asks for, and the player's set names two of them differently.
+ClipSet(
+    base: "player",
+    tint: (150, 200, 255),
+    clips: {
+        "death": Clip(
+            frames: [(6, 8), (0, 9), (1, 9), (2, 9), (3, 9), (4, 9), (5, 9)],
+            fps: 12.0,
+            looping: false,
+        ),
+        "attack": Clip(
+            frames: [(0, 6), (2, 6), (3, 6), (4, 6)],
+            fps: 15.0,
+            looping: false,
+        ),
+    },
+)

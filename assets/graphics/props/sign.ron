@@ -1,0 +1,30 @@
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Preview: cargo run --bin sheet -- --image props/sign
+Pixels(
+    palette: {
+        'O': (200, 125, 60),
+        'k': (24, 20, 37),
+        'n': (62, 39, 49),
+        'o': (160, 90, 40),
+    },
+    frames: [
+        [
+            "................",
+            ".kkkkkkkkkkkkkk.",
+            "kOOOOOOOOOOOOOOk",
+            "kOnnnOnnnnOnnnOk",
+            "kOOOOOOOOOOOOOOk",
+            "kOnnnnnOnnnnnOOk",
+            "kOOOOOOOOOOOOOOk",
+            "kooooooooooooook",
+            ".kkkkkkookkkkkk.",
+            "......kook......",
+            "......kook......",
+            "......kook......",
+            "......kook......",
+            "......kook......",
+            ".....kkookk.....",
+            "....kkkkkkkk....",
+        ],
+    ],
+)

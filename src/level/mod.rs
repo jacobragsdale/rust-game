@@ -22,14 +22,133 @@ use crate::physics::Aabb;
 /// that looks like a physics bug. `tests/assets.rs` checks the two agree.
 pub const ONE_WAY_THICKNESS: f32 = 8.0;
 
-/// NPC/door/etc. placements parsed from maps. Consumed in Phase 3 when NPCs
-/// spawn from data; until then only tests read it.
-#[derive(Clone, Debug)]
+/// An NPC the map places: which kind, and the top-left of the cell it stands
+/// in. The spawn index a tape addresses it by (`knight.0`) is its position in
+/// [`LevelData::entities`].
+#[derive(Clone, Debug, Default)]
 pub struct EntitySpawn {
-    #[allow(dead_code)]
     pub kind: String,
-    #[allow(dead_code)]
     pub pos: Vec2,
+    /// A conversation for this one NPC, instead of the one its kind offers —
+    /// so two villagers can say different things without being two kinds.
+    pub dialogue: Option<String>,
+    /// A flag set to 1 when this NPC dies — the sanctioned way to make a kill
+    /// matter to the rest of the game: a gate that opens, a line of dialogue
+    /// that changes, a boss that stays dead across a load. An NPC whose flag is
+    /// already set is spawned as the corpse it already is.
+    pub flag: Option<String>,
+}
+
+/// Something the map places that is not an NPC: the furniture of a level,
+/// every piece of which the player can act on or is acted on by.
+///
+/// Spawned after every NPC, so adding one to a map can never renumber the NPCs
+/// a tape addresses by index.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PropSpawn {
+    /// Top-left of the cell it was placed in.
+    pub cell: Vec2,
+    /// The cell as the map wrote it, for naming it: a chest with no `id` is
+    /// `chest_12_9`.
+    pub at: (u32, u32),
+    pub kind: PropKind,
+}
+
+impl PropSpawn {
+    /// The name this prop's state is filed under, unique within its map:
+    /// its `id` if the map gave it one, else its kind and cell.
+    pub fn name(&self) -> String {
+        let explicit = match &self.kind {
+            PropKind::Door { id, .. }
+            | PropKind::Chest { id, .. }
+            | PropKind::Item { id, .. }
+            | PropKind::Lever { id, .. }
+            | PropKind::Trigger { id, .. } => id.clone(),
+            _ => None,
+        };
+        explicit.unwrap_or_else(|| format!("{}_{}_{}", self.kind.word(), self.at.0, self.at.1))
+    }
+}
+
+/// What a [`PropSpawn`] is. `src/level/ascii.rs` documents the map syntax of
+/// each and its defaults.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PropKind {
+    /// Press `interact` to go through to `at` on the map `to`. `locked` names
+    /// an item that opens it — used up unless `keep_key` — and it stays open
+    /// once it has been. `art` is a tileset prop; `None` is the tileset's
+    /// `door`.
+    Door {
+        id: Option<String>,
+        to: String,
+        at: String,
+        locked: Option<String>,
+        keep_key: bool,
+        art: Option<String>,
+    },
+    /// Walk into this region (`size` in tiles, growing right and down from the
+    /// cell) to go through to `at` on `to`. The edge of a map, usually.
+    Exit {
+        size: (u32, u32),
+        to: String,
+        at: String,
+    },
+    /// A chest: press `interact` and its items go in the bag, once.
+    Chest {
+        id: Option<String>,
+        items: Vec<(String, u32)>,
+    },
+    /// An item lying on the floor from the start, collected once.
+    Item {
+        id: Option<String>,
+        item: String,
+        count: u32,
+    },
+    /// Touch it and it is where you come back to.
+    Checkpoint,
+    /// A sign: press `interact` to read the conversation it names.
+    Sign { dialogue: String },
+    /// Pull it and `flag` becomes 1, for good.
+    Lever { id: Option<String>, flag: String },
+    /// A barrier `height` tiles tall that is solid while `flag` is 0.
+    Gate { flag: String, height: u32 },
+    /// Walk into this region (`size` in tiles) and the conversation it names
+    /// opens, once — a story told where it happens rather than at a sign. With
+    /// `when`, only once that flag is set: the same doorway says something
+    /// different after the Warden is dead.
+    Trigger {
+        id: Option<String>,
+        size: (u32, u32),
+        dialogue: String,
+        when: Option<String>,
+    },
+}
+
+impl PropKind {
+    /// The word a map's default names are built from.
+    pub fn word(&self) -> &'static str {
+        match self {
+            PropKind::Door { .. } => "door",
+            PropKind::Exit { .. } => "exit",
+            PropKind::Chest { .. } => "chest",
+            PropKind::Item { .. } => "item",
+            PropKind::Checkpoint => "checkpoint",
+            PropKind::Sign { .. } => "sign",
+            PropKind::Lever { .. } => "lever",
+            PropKind::Gate { .. } => "gate",
+            PropKind::Trigger { .. } => "trigger",
+        }
+    }
+}
+
+/// A piece of tileset art placed for looks: a torch, a window, a barrel.
+/// Drawing only — nothing collides with it and nothing reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DecorSpawn {
+    /// Top-left of the cell whose floor it stands on.
+    pub cell: Vec2,
+    /// A name from the tileset's `props`.
+    pub prop: String,
 }
 
 /// A fire the map places: where it burns, and when.
@@ -129,8 +248,15 @@ pub struct LevelData {
     /// Not in `hazards` for the same reason fires are not.
     pub pendulums: Vec<PendulumSpawn>,
     pub player_spawn: Vec2,
-    #[allow(dead_code)]
     pub entities: Vec<EntitySpawn>,
+    /// Doors, exits, chests, items, checkpoints, signs, levers and gates.
+    pub props: Vec<PropSpawn>,
+    /// Named places to arrive at, from `Spawn(id:, cell:)`: where the player
+    /// stands when a door elsewhere says `at: "<id>"`.
+    pub spawns: Vec<(String, Vec2)>,
+    pub decor: Vec<DecorSpawn>,
+    /// What the map is called on screen — "The Village" — shown on arrival.
+    pub title: Option<String>,
 }
 
 impl LevelData {
@@ -171,6 +297,10 @@ impl LevelData {
             pendulums: vec![],
             player_spawn: Vec2::ZERO,
             entities: vec![],
+            props: vec![],
+            spawns: vec![],
+            decor: vec![],
+            title: None,
         }
     }
 
@@ -192,6 +322,43 @@ impl LevelData {
 
     pub fn pixel_height(&self) -> f32 {
         self.height as f32 * self.tile_size
+    }
+
+    /// Where a player arriving at `at` stands: a `Spawn` of that name, or in
+    /// front of the door of that id. `None` for a name the map does not have
+    /// — which `tests/data.rs` catches for every door in every shipped map.
+    pub fn arrival(&self, at: &str, player: Vec2) -> Option<Vec2> {
+        if let Some((_, pos)) = self.spawns.iter().find(|(id, _)| id == at) {
+            return Some(*pos);
+        }
+        // In front of a door: doors are two tiles wide, and the player stands
+        // across the middle of the pair on the floor of the door's cell.
+        self.props
+            .iter()
+            .find(|p| matches!(p.kind, PropKind::Door { .. }) && p.name() == at)
+            .map(|door| {
+                Vec2::new(
+                    door.cell.x + self.tile_size - player.x / 2.0,
+                    door.cell.y + self.tile_size - player.y,
+                )
+            })
+    }
+
+    /// A box of `size` standing on the floor of the cell whose top-left is
+    /// `cell`, centred on it.
+    pub fn stand_in_cell(&self, cell: Vec2, size: Vec2) -> Vec2 {
+        Vec2::new(
+            cell.x + (self.tile_size - size.x) / 2.0,
+            cell.y + self.tile_size - size.y,
+        )
+    }
+
+    /// The line below the map past which anything has fallen out of the
+    /// world: the player dies there, an NPC dies there, and an item that
+    /// drops past it is gone. One line for all three, so nothing can be
+    /// lost below the level while something else is still falling after it.
+    pub fn fall_limit(&self) -> f32 {
+        self.pixel_height() + 100.0
     }
 }
 

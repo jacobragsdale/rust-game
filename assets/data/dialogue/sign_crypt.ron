@@ -1,0 +1,14 @@
+// The first thing in the crypt: a warning, and a hint at what is past it.
+Dialogue(
+    id: "sign_crypt",
+    start: "read",
+    nodes: {
+        "read": Node(
+            speaker: "Words cut in the stone",
+            lines: [
+                "HERE THE WARDEN KEEPS WHAT THE KNIGHTS BRING DOWN.",
+                "Its gate answers the lever on the ledge. The second answers only its death.",
+            ],
+        ),
+    },
+)

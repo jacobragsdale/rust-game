@@ -14,8 +14,31 @@ cargo run --bin sim -- --tape tapes/wall_jump.tape
 
 Add `--trace out.jsonl` to record every tick, or `--trace -` for stdout.
 
-`--geometry` prints a map's collision rectangles, which is how you find the
-coordinates to write assertions against.
+`--geometry` prints a map's collision rectangles, platforms and NPCs (by the
+index a tape addresses them with), which is how you find the coordinates to
+write assertions against.
+
+`--fight <npc>` plays a fight after the tape — `--fight warden.0` — and prints
+the inputs that won as tape lines to append. The player is flown by the same
+brain the Proving Circle's champions fight with (`brain::step` in
+`src/systems/brain.rs`), given instant reactions: it closes in, swings, backs
+out of a blow, jumps bolts, goes over a shield and comes down on it, baits a
+heavy and punishes the whiff. It is how every fight in a real-level tape was
+written: a fight is the one thing a tape cannot sensibly be written by hand,
+and the sim is deterministic, so the recorded lines replay exactly. Record it
+again when balance moves.
+
+It does not platform. It will not climb to a flyer it cannot jump to, and it
+will chase an enemy over a spike pit; where a fight needs either, write the
+approach by hand and record from there, or time the blows yourself.
+
+To *see* a tick rather than read it, render it — the frame the game would draw,
+through the game's own draw code:
+
+```bash
+cargo run --bin render -- --tape tapes/crypt_run.tape --at 690
+cargo run --bin render -- --tape tapes/dungeon_run.tape --every 120
+```
 
 ## Golden traces
 
@@ -40,6 +63,13 @@ jump: behavior changed
 ```
 
 Re-recording is deliberate: the diff lands in the commit, where it can be read.
+**Never re-record a trace you have not accounted for.** Adding a probe field
+rewrites every baseline, which looks exactly like the game changing; prove it
+is only the new field by leaving it out of the comparison, then re-record:
+
+```bash
+TRACE_IGNORE=map,mana cargo test --test traces   # zero differences is the proof
+```
 
 ## Format
 
@@ -52,7 +82,14 @@ right+jump 1           # combine keys with '+'
 wait 30                # hold nothing
 assert x > 384         # check the player's state at this point in the tape
 assert !grounded
+reload                 # save, load the save, and carry on from it
 ```
+
+`reload` is a save and a load in the middle of a run: the sim is saved, a new
+one is built from the save, and the tape goes on in it. Whatever does not
+survive a load shows up as the assertions after it failing — which is how the
+two save desyncs the M3–M8 review found would have been caught, and why
+`world_props`, `world_travel` and `crypt_run` each do one.
 
 A count defaults to 1, and `#` starts a comment. `wait`, `none` and `idle` all
 mean "no input". Every other key is an action from the table below, which is
@@ -68,11 +105,11 @@ is defined, and what `tapes_readme_lists_every_action` checks this against.
 | `up` | Up, W | level |
 | `jump` | Up, W, Space | edge |
 | `attack` | J, X | edge |
-| `cast` | K | edge |
+| `cast` | C | edge |
 | `interact` | E | edge |
 | `inventory` | I | edge |
 | `confirm` | Enter | edge |
-| `cancel` | Backspace | edge |
+| `cancel` | Esc, Backspace | edge |
 <!-- actions:end -->
 
 Combined keys do double duty: `down+jump` while running is a slide, `down`
@@ -87,7 +124,7 @@ It is refused, loudly, if a swing or another cast is running, if the cooldown
 has not lapsed, or if the pool is short — see `cast_failed` below.
 
 `inventory` opens and closes the inventory screen, and `confirm` (Enter),
-`cancel` (Backspace) and the four directions drive it once it is open. See
+`cancel` (Esc or Backspace) and the four directions drive it once it is open. See
 [Modes](#modes) — the screen is simulation, so every one of those keys is a
 real key going through the real action table, and a tape can walk the whole UI.
 
@@ -248,10 +285,12 @@ assert quest.helm.stage == 2     # ...and finished
 - **An unset flag reads as `0`.** A quest has to be able to ask about a stage
   before it has one, so the assertion above resolves on the first tick of a run
   in which nothing has happened yet.
-- **`quest.` is a reserved root**, and the only path shape that means a flag.
-  Anything else dotted is still a probe path, so `assert knigt.0.hp == 3` is
-  still the parse error it always was rather than a flag quietly reading zero.
-  Flags in the game are all named `quest.<what>.<field>` already.
+- **`quest.` and `world.` are the reserved roots**, and the only path shapes
+  that mean a flag. Anything else dotted is still a probe path, so
+  `assert knigt.0.hp == 3` still fails as `does not resolve` rather than being
+  a flag quietly reading zero. Quest flags are named `quest.<what>.<field>`; the
+  level's furniture remembers itself as `world.<map>.<prop>` — see
+  [The world](#the-world).
 - Only what has been *set* reaches the trace, under a `flags` key that is
   absent when nothing has been set — so a run with no quest in it records
   exactly what it recorded before quests existed.
@@ -262,6 +301,30 @@ has set therefore says so and lists the flags that *are* set.
 
 `tapes/quest_fetch.tape` is the whole shape end to end, and
 `tapes/dialogue_branch.tape` asserts the stages of the errand it walks.
+
+## The world
+
+Doors, exits, chests, items lying about, checkpoints, signs, levers and gates
+are map entities (`src/level/ascii.rs` documents each), and what they have
+done is a flag: `world.<map>.<prop>`, where a prop's name is its `id:` or, for
+one without, its kind and cell — `chest_20_9`, `item_8_9`. A lever throws the
+flag it names, and a gate is shut while that flag is 0. An NPC can carry a
+death flag, set the tick it dies, and is spawned as a corpse on any later
+visit. So:
+
+```
+assert world.testbed_world.chest_20_9 == 1   # opened
+assert quest.crypt.gate == 1                 # the lever it answers to was thrown
+assert map == testbed_world_b                # which map the player is on now
+```
+
+`map` is the short name of the map the player is on, and moves when a door or
+an exit is taken. A save holds the player and the flags, never the rest of the
+world, so after a `reload` — or leaving a map and coming back — the chest is
+still open and the lever still thrown, and every ordinary enemy is back.
+
+`world_props.tape` is every prop on one map, and `world_travel.tape` every way
+between two; `crypt_run.tape` uses all of it in anger.
 
 ## Asserting on NPCs
 
@@ -280,6 +343,15 @@ assert player.grounded        # the long way round, if you want the symmetry
 - numeric: `x`, `y`, `vx`, `vy`, `dir`, `frame`, `hp`, `hitstun`
 - boolean: `grounded`, `facing_right`, `dead`
 - text: `clip`, `kind`
+
+The kinds are whatever `assets/data/stats.ron` defines, less the player.
+Today: the enemies `knight`, `bat`, `mage`, `warden`, `shieldbearer`, `wolf`,
+`brigand`, `archer`, `gorran`, `husk`, `sentinel`, `drone`, `wisp` and `choir`;
+the people `villager`, `pedlar`, `hermit`, `ysolde`, `archivist`, `arbiter` and
+`quartermaster`; and the rivals `kesh`, `brakka`, `morwen` and `nameless`. A
+rival is an avatar — the player's own controller, flown by a brain — and is
+addressed like any NPC (`kesh.0.hp`). A path naming an NPC the map does not
+have fails its assertion as `does not resolve`, rather than reading as zero.
 
 Spawn order is stable across a run even as components are added and removed —
 `Sim::npcs` sorts by entity id rather than trusting query order, and
@@ -324,13 +396,16 @@ Events: `jumped`, `double_jumped`, `wall_jumped`, `landed`, `dropped_through`,
 `slid`, `died`, `respawned`, `attacked`, `damaged`, `spell_cast`,
 `cast_failed`, `mode_changed`, `picked_up`, `inventory_full`, `item_used`,
 `equipped`, `unequipped`, `interact_prompted`, `interacted`, `dialogue_opened`,
-`choice_taken`, `dialogue_closed`.
+`choice_taken`, `dialogue_closed`, `traveled`, `travel_failed`, `locked`,
+`unlocked`, `chest_opened`, `lever_pulled`, `checkpoint`, `blocked`.
 
 Three things to know:
 
-**Narrow with `<name>.<event>`.** Sixteen events carry a discriminating name.
+**Narrow with `<name>.<event>`.** Seventeen events carry a discriminating name.
 `damaged` and `died` carry the victim, so `expect knight.damaged == 3` counts
 hits on the knight and `expect player.damaged == 4` counts hits on you.
+`blocked` carries the kind whose shield turned the blow — `expect
+gorran.blocked >= 1` says the tape found out the hard way.
 `attacked` carries the attack id, so `expect player_slash3.attacked >= 3` says
 the finisher actually saw use, and `expect no player_plunge.attacked` says a
 tape never plunged. `spell_cast` and `cast_failed` carry the spell id, so
@@ -341,7 +416,11 @@ counts openings rather than openings and closings. The four dialogue events
 carry the graph — `expect elder_intro.dialogue_opened == 2` — except
 `choice_taken`, which carries the *node*, because "how many replies were taken
 at this node" is the question worth asking of a conversation and the graph is
-already countable through `dialogue_opened`. A bare `expect damaged`
+already countable through `dialogue_opened`. `interact_prompted` and
+`interacted` carry what the press would do — a graph, or `door`, `chest`,
+`lever` — so `expect lever.interacted == 1`. `traveled` and `travel_failed`
+carry the map arrived at (`expect village.traveled == 1`), and `locked` and
+`unlocked` the key. A bare `expect damaged`
 counts every hit on anything, which is rarely what you mean now that both sides
 bleed — and a bare `expect no died` counts the knight's death as well as yours,
 so what you almost always want is `expect no player.died`.
@@ -406,6 +485,9 @@ do not move what is already there.
 | `testbed_swing.ron` | swinging hazards: one room with a spiked ball on a chain across the middle of it |
 | `testbed_village.ron` | interaction and dialogue: a long empty room with a step down into a bay, and Runa the Herbalist in it |
 | `testbed_quest.ron` | quests: the arena and the village spliced together — a knight to kill 159px away, and Runa in a bay at the other end to take the errand from and bring the helm back to |
+| `testbed_world.ron` | the level's furniture, left to right: a sign, a key, a checkpoint, two tiles of spikes, a chest, a lever and its gate, a door locked with the key, and an exit east |
+| `testbed_world_b.ron` | the other side of both: an exit west, and the far side of the locked door |
+| `testbed_secrets.ron` | secrets and story: a trigger, a trigger that waits on a flag, the bell lever that sets it, a false wall (`%`) with a chest behind it |
 
 Items have no fixture map of their own, and deliberately so: the only source of
 items in the game is a corpse, so `loot.tape` and `inventory_use.tape` both run
@@ -443,7 +525,7 @@ ball is only at body height near the bottom of its arc, so the room has a
 window rather than a safe route: `swing_dodge.tape` starts its run on the tick
 that leaves the widest clearance (66px), and starting twenty-two ticks later or
 sixty-five earlier is a death. That number came out of a sweep, not out of
-guessing — see "Balance by probing" in the dev skill.
+guessing — balance and timing by probing, as CLAUDE.md says.
 
 `testbed_village.ron`'s bay is the one piece of its geometry that is load-
 bearing. A villager has `Patrol` and no `Hostile`, so it paces, and a patroller
@@ -472,16 +554,24 @@ redesigning the castle cannot break it.
 
 ## Tapes that run on real levels
 
-Three do, and each has a reason to.
+Eleven do, and each has a reason to.
 
 | Tape | Map | What it is for |
 | --- | --- | --- |
 | `castle_spawn.tape` | `castle.ron` | the spawn point is solid ground and not a hazard, and nothing else |
 | `village_smoke.tape` | `village.ron` | the hub is walkable end to end, the elder is in reach, and nothing in it can hurt you |
 | `dungeon_run.tape` | `dungeon.ron` | a full traversal: both fires, both knights, the pit, the ride, the gallery, the loot, the way out |
+| `crypt_run.tape` | `crypt.ron`, then `village.ron` | the whole of the newer kit at once: bats, the mage, the warden, the planks and the double jump, both chests, the lever and both gates, a `reload`, the long stair up, and the pedlar's shop |
+| `keep_run.tape` | `keep.ron`, then `castle.ron` | a new game: the prologue opens by itself on the first tick, the footlocker, the door into the castle, and a `reload` that does not replay any of it |
+| `thornwood_run.tape` | `thornwood.ron` | Act II's first map from a fresh start: wolves, the ravine under an archer, the hermit, the grove inside the hill, the camp's armoury, a weapon worn with its own style, Gorran behind his shield, the palisade on his death flag, the arch to the Beacon |
+| `beacon_run.tape` | `beacon.ron`, then `ark_hold.ron` | the tower climbed ledge to ledge, a shield fought on a ledge, the shaft wall-jumped, the watchman's cubby behind its false wall, the light to the Ark and the voice that speaks as you land |
+| `ark_hold_run.tape` | `ark_hold.ron`, then `circle.ron` | the Holding: Ysolde, the Archivist's key, the lower hold fought through, the crawlspace secret, the star-sealed hatch |
+| `circle_run.tape` | `circle.ron`, then `engine_deep.ron` | three duels against rivals — Kesh, Brakka, Morwen — each gate on its champion's fall, each style left on the sand and worn, the Arbiter's reward, the hatch down |
+| `circle_secret.tape` | `circle.ron` | the gallery's false wall, and the Nameless waking behind it. Waking it is claimed; beating it is not |
+| `engine_deep_run.tape` | `engine_deep.ron`, `ark_heart.ron`, then `village.ron` | the end of the game: the gantry tome, the furnaces, the ferry and its wisps, the husk, the piston hall, the sentinel, the forge up the shaft, the Choir, the Archivist's thanks, and home to the ending |
 
 The rule the fixtures exist for still holds — a *mechanic* gets a testbed,
-because a real level will be redesigned — so these three assert what a level is
+because a real level will be redesigned — so these four assert what a level is
 for rather than what the physics does. `village_smoke` says the street has no
 gap in it and Runa is where the map says she is; `dungeon_run` says the level
 is completable and that its hazards are survivable *with correct play*, which
@@ -506,3 +596,27 @@ readable beat while costing the player one keypress. Runa is penned in a
 two-tile notch so that "walk east until the street drops out from under you"
 puts the player somewhere definite with her in reach; both dungeon knights are
 penned so that a fight stays in the room it was designed for.
+
+`crypt_run.tape` is written the same way, with one difference: the Warden
+fight in the middle of it was recorded with `sim --fight warden.0` rather than
+written, and says so where it starts and ends. Everything around it — which
+enemy is dead, what is in the bag, which flag is set, which map the player is
+on — is an outcome.
+
+The seven tapes after it follow the same rule, and every fight in them is
+recorded. Most assert `expect no player.died` across a fight, which makes the
+recording a claim about balance as well as a regression check: a bot with the
+tape's gear won it clean. Where that is not true it says so. `circle_secret`
+does not claim the Nameless can be beaten at all, and `engine_deep_run`'s
+Choir fight asserts `expect player.died <= 4`: the recorder, with five health
+and no potions, dies four times before the Choir does, each time back at the
+landing's brazier with the Choir still hurt. That is how a death against
+anything in this game works, and a bound that tightens when balance moves is
+the honest assertion.
+
+The timed crossings — the Deep's furnaces, ferry and pistons, the Thornwood's
+ravine — were found by searching a grid of waits, and each tape sits in the
+middle of a window rather than on its edge. Where the search found only a
+window a few ticks wide, the level changed rather than the tape: the Deep's
+pistons swung every 2.5 seconds, leaving a gap four ticks wide under the far
+ball, and swing every 3 now.

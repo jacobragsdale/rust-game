@@ -1,0 +1,18 @@
+// The Arbiter — a Vael, keeper of the Proving Circle, robed in gold.
+//
+// Art: assets/graphics/creatures/vael.ron — two 16x40 frames, the lamp
+// flickering. A Vael stands where it is put, so every state the patrol
+// selector can reach is the same slow flicker.
+ClipSet(
+    sheet: "creatures/vael",
+    frame_size: (16.0, 40.0),
+    tint: (255, 214, 140),
+    clips: {
+        "idle": Clip(frames: [(0, 0), (1, 0)], fps: 3.0, looping: true),
+        "run": Clip(frames: [(0, 0), (1, 0)], fps: 3.0, looping: true),
+        "jump": Clip(frames: [(0, 0)], fps: 1.0, looping: false),
+        "fall": Clip(frames: [(0, 0)], fps: 1.0, looping: false),
+        "attack": Clip(frames: [(0, 0)], fps: 1.0, looping: false),
+        "death": Clip(frames: [(0, 0)], fps: 1.0, looping: false),
+    },
+)

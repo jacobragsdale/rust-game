@@ -43,7 +43,7 @@ const FIELD_NAMES: &[&str] = &[
 ];
 
 /// Text fields addressable by tape assertions. Only `==` and `!=` apply.
-const TEXT_NAMES: &[&str] = &["clip", "mode", "pane", "prompt", "dialogue_node"];
+const TEXT_NAMES: &[&str] = &["clip", "mode", "map", "pane", "prompt", "dialogue_node"];
 
 /// Boolean fields addressable by tape assertions.
 const FLAG_NAMES: &[&str] = &[
@@ -104,6 +104,10 @@ pub struct Probe {
     pub inventory_count: usize,
     /// What the simulation is doing: `playing`, `inventory`, `dialogue`.
     pub mode: String,
+    /// Which map the player is on, by its short name — `dungeon` — or
+    /// `fixture` for an inline grid. What `assert map == dungeon` reads after
+    /// a door.
+    pub map: String,
     /// Which pane of the inventory screen has focus, and where the selection
     /// is in it. Both are meaningful whatever the mode — the screen remembers
     /// them while it is shut.
@@ -329,6 +333,8 @@ impl Probe {
             pickups,
             inventory_count,
             mode: mode.name().to_string(),
+            // Filled in by `Sim::probe`, which is the one that knows the map.
+            map: String::new(),
             pane: screen.pane.name().to_string(),
             selection: screen.selection,
             prompt: prompt
@@ -393,6 +399,7 @@ impl Probe {
         match name {
             "clip" => Some(&self.clip),
             "mode" => Some(&self.mode),
+            "map" => Some(&self.map),
             "pane" => Some(&self.pane),
             "prompt" => Some(&self.prompt),
             "dialogue_node" => Some(&self.dialogue_node),

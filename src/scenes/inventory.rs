@@ -1,150 +1,148 @@
 //! The inventory overlay. It draws, and it decides nothing.
 //!
-//! Every piece of state on this screen — which pane has focus, where the
-//! selection is, what `confirm` does to the item under it — lives on [`Sim`],
-//! in [`crate::systems::inventory`], because using a potion changes health and
-//! that is simulation rather than presentation. This file reads that state and
-//! turns it into rectangles. If anything here ever decides something, a tape
-//! stops being able to see it, and the largest system in the game becomes
-//! untestable in one commit.
+//! Which pane has focus, where the selection is, and what `confirm` does to
+//! the thing under it all live on [`Sim`], in [`crate::systems::inventory`],
+//! because drinking a potion changes health and wearing a helm changes how
+//! much of it you can have. This file reads that state and turns it into a
+//! picture.
 //!
-//! **Why this is not a [`crate::scenes::Scene`] on the stack.** A stack entry
-//! would be a second copy of "the inventory is open" living beside the sim's
-//! mode, and the two would eventually disagree — the sim would freeze the
-//! world while the stack drew the level, or the reverse. Instead
-//! [`crate::scenes::adventure::AdventureScene`] calls [`draw`] whenever the sim
-//! says the mode is [`crate::sim::Mode::Inventory`]. One source of truth, and
-//! the overlay is exactly as transparent as the mode is.
-//!
-//! Item art does not exist yet, so a row's icon is a coloured quad keyed off
-//! the item's kind. The `ItemDef` still names a sprite, so content authored
-//! today does not have to be rewritten the day `assets/graphics/items/` lands —
-//! only this file does.
+//! Like [`crate::scenes::dialogue`], this is not a stack entry: the sim's mode
+//! is the one record of "the bag is open", and [`crate::view::View`] draws
+//! this whenever it says so.
 
 use ggez::glam::Vec2;
-use ggez::graphics::{Canvas, Color, DrawParam, PxScale, Quad, Text, TextFragment};
 
-use crate::assets::{ItemKind, ItemTable, Slot};
+use crate::assets::{ItemTable, Slot};
 use crate::ecs::components::{Equipment, Inventory};
+use crate::render::{font, Color, Frame, Rect};
 use crate::sim::Sim;
 use crate::systems::inventory::{self, Pane};
 
-/// A scrim over the frozen world: dark enough to read against, light enough
-/// that the fight you stepped out of is still visible behind it.
+/// Much darker than the dialogue scrim: the bag is a screen of its own, and
+/// the world behind it is only there to say it is paused.
 const SCRIM: Color = Color::new(0.02, 0.02, 0.05, 0.72);
 const PANEL: Color = Color::new(0.07, 0.06, 0.11, 0.95);
 const BORDER: Color = Color::new(0.55, 0.55, 0.68, 1.0);
-/// The outline on whichever pane has focus. Without it, moving the selection
-/// between panes looks like the selection disappearing.
 const FOCUS: Color = Color::new(0.95, 0.85, 0.35, 1.0);
 const SELECTION: Color = Color::new(0.24, 0.22, 0.34, 1.0);
+const SLOT: Color = Color::new(0.12, 0.11, 0.18, 1.0);
 const TEXT: Color = Color::new(0.90, 0.90, 0.95, 1.0);
 const DIM_TEXT: Color = Color::new(0.52, 0.52, 0.62, 1.0);
 
-/// Item icons, by kind, until there is art.
-const WEAPON_TINT: Color = Color::new(0.70, 0.76, 0.86, 1.0);
-const EQUIPMENT_TINT: Color = Color::new(0.86, 0.72, 0.34, 1.0);
-const CONSUMABLE_TINT: Color = Color::new(0.85, 0.28, 0.32, 1.0);
-
 const MARGIN: f32 = 28.0;
 const PANE_GAP: f32 = 10.0;
-const ROW_H: f32 = 14.0;
+const ROW_H: f32 = 16.0;
 const ROW_PAD: f32 = 4.0;
-const ICON: f32 = 8.0;
 const TITLE_H: f32 = 16.0;
-const FONT: f32 = 10.0;
-const BORDER_W: f32 = 1.0;
+/// Room at the bottom of the panel for the selected item's description.
+const FOOTER_H: f32 = 26.0;
+const HINT: &str = "up/down select   left/right pane   enter use   I or Esc close";
 
-/// What colour a coloured quad should be for this item.
+/// Draw an item's icon with its top-left at `at`.
 ///
-/// Public because [`crate::scenes::adventure`] draws pickups lying on the
-/// floor with the same palette — a red square on the ground and a red square
-/// in the bag are the same potion, and that only reads if one function owns
-/// the mapping.
-pub fn tint(items: &ItemTable, id: &str) -> Color {
-    match items.get(id).map(|def| &def.kind) {
-        Some(ItemKind::Weapon { .. }) => WEAPON_TINT,
-        Some(ItemKind::Equipment { .. }) => EQUIPMENT_TINT,
-        Some(ItemKind::Consumable { .. }) => CONSUMABLE_TINT,
-        None => DIM_TEXT,
+/// Every item names a sprite, `tests/data.rs` insists it exists and is
+/// [`crate::ecs::spawn::PICKUP_SIZE`] square, and this draws its first frame —
+/// the same picture the item shows lying on the floor.
+pub fn icon(frame: &mut Frame, items: &ItemTable, id: &str, at: Vec2) {
+    let size = crate::ecs::spawn::PICKUP_SIZE;
+    match items.get(id) {
+        Some(def) => frame.image(
+            &def.sprite,
+            Rect::new(0.0, 0.0, size.x, size.y),
+            at.floor(),
+            false,
+            Color::WHITE,
+        ),
+        // Content naming an item nothing defines: visible, not blank.
+        None => frame.rect(at, size, DIM_TEXT),
     }
 }
 
-/// Draw the overlay over the frozen world. `view` is the internal canvas size.
-pub fn draw(canvas: &mut Canvas, sim: &Sim, view: Vec2) {
-    fill(canvas, Vec2::ZERO, view, SCRIM);
+pub fn draw(frame: &mut Frame, sim: &Sim, view: Vec2) {
+    frame.rect(Vec2::ZERO, view, SCRIM);
 
-    let size = Vec2::new(view.x - MARGIN * 2.0, view.y - MARGIN * 2.0);
+    let size = view - Vec2::splat(MARGIN * 2.0);
     let origin = Vec2::splat(MARGIN);
-    bordered(canvas, origin, size, PANEL);
+    frame.panel(origin, size, PANEL, BORDER);
 
-    label(
-        canvas,
-        origin + Vec2::new(ROW_PAD, ROW_PAD),
-        "INVENTORY",
-        TEXT,
-    );
-    label(
-        canvas,
-        origin + Vec2::new(size.x - 152.0, ROW_PAD),
-        "up/down select  left/right pane  enter use",
+    frame.text(origin + Vec2::splat(ROW_PAD), "INVENTORY", TEXT);
+    // Right-aligned by its measured width, so it can never run off the panel.
+    frame.text(
+        Vec2::new(
+            origin.x + size.x - ROW_PAD - font::width(HINT),
+            origin.y + ROW_PAD,
+        ),
+        HINT,
         DIM_TEXT,
     );
 
     let pane_w = (size.x - PANE_GAP) / 2.0;
-    let pane_size = Vec2::new(pane_w, size.y - TITLE_H - ROW_PAD);
+    let pane_size = Vec2::new(pane_w, size.y - TITLE_H - ROW_PAD - FOOTER_H);
     let bag_at = origin + Vec2::new(0.0, TITLE_H);
     let gear_at = bag_at + Vec2::new(pane_w + PANE_GAP, 0.0);
 
     let screen = sim.screen();
-    draw_bag(canvas, sim, bag_at, pane_size, screen.pane == Pane::Bag);
-    draw_gear(canvas, sim, gear_at, pane_size, screen.pane == Pane::Gear);
+    let selected = match screen.pane {
+        Pane::Bag => draw_bag(frame, sim, bag_at, pane_size, true),
+        Pane::Gear => {
+            draw_bag(frame, sim, bag_at, pane_size, false);
+            None
+        }
+    };
+    let worn = draw_gear(frame, sim, gear_at, pane_size, screen.pane == Pane::Gear);
+    let about = selected.or(worn);
+
+    // What the thing under the selection is, in the item's own words.
+    if let Some(def) = about.and_then(|id| sim.items.get(&id)) {
+        let footer = Vec2::new(origin.x + ROW_PAD, origin.y + size.y - FOOTER_H + 2.0);
+        frame.text(footer, &def.name, FOCUS);
+        let line = font::wrap(&def.description, size.x - ROW_PAD * 2.0)
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        frame.text(footer + Vec2::new(0.0, font::LINE_H), &line, DIM_TEXT);
+    }
 }
 
-fn draw_bag(canvas: &mut Canvas, sim: &Sim, origin: Vec2, size: Vec2, focused: bool) {
-    outline(canvas, origin, size, if focused { FOCUS } else { BORDER });
-    label(canvas, origin + Vec2::splat(ROW_PAD), "Bag", DIM_TEXT);
+/// The bag pane. Returns the id under the selection, if it has focus.
+fn draw_bag(
+    frame: &mut Frame,
+    sim: &Sim,
+    origin: Vec2,
+    size: Vec2,
+    focused: bool,
+) -> Option<String> {
+    frame.outline(origin, size, 1.0, if focused { FOCUS } else { BORDER });
+    frame.text(origin + Vec2::splat(ROW_PAD), "Bag", DIM_TEXT);
 
-    let Some(holder) = inventory::holder(&sim.world) else {
-        return;
-    };
-    let Ok(bag) = sim.world.get::<&Inventory>(holder) else {
-        return;
-    };
+    let holder = inventory::holder(&sim.world)?;
+    let bag = sim.world.get::<&Inventory>(holder).ok()?;
     let gear = sim.world.get::<&Equipment>(holder).ok();
     let selection = sim.screen().selection;
 
     if bag.slots.is_empty() {
-        label(
-            canvas,
+        frame.text(
             origin + Vec2::new(ROW_PAD, ROW_PAD + ROW_H),
             "(empty)",
             DIM_TEXT,
         );
-        return;
+        return None;
     }
 
+    let mut under = None;
     for (index, stack) in bag.slots.iter().enumerate() {
         let at = origin + Vec2::new(ROW_PAD, ROW_PAD + ROW_H * (index as f32 + 1.0));
         if focused && index == selection {
-            fill(
-                canvas,
-                at - Vec2::new(ROW_PAD / 2.0, 1.0),
+            frame.rect(
+                at - Vec2::new(ROW_PAD / 2.0, 2.0),
                 Vec2::new(size.x - ROW_PAD, ROW_H),
                 SELECTION,
             );
+            under = Some(stack.id.clone());
         }
-        fill(
-            canvas,
-            at + Vec2::new(0.0, 1.0),
-            Vec2::splat(ICON),
-            tint(&sim.items, &stack.id),
-        );
+        frame.rect(at - Vec2::splat(1.0), Vec2::splat(14.0), SLOT);
+        icon(frame, &sim.items, &stack.id, at);
 
-        // The worn marker matters: an equipped weapon is still listed here
-        // (it came out of the bag, so it is not — but a stack of two swords
-        // with one worn is), and "why can I not equip this again" needs an
-        // answer on screen.
         let worn = gear.as_ref().is_some_and(|gear| gear.holds(&stack.id));
         let text = format!(
             "{}{}{}",
@@ -156,129 +154,73 @@ fn draw_bag(canvas: &mut Canvas, sim: &Sim, origin: Vec2, size: Vec2, focused: b
             },
             if worn { "  [worn]" } else { "" },
         );
-        label(canvas, at + Vec2::new(ICON + 4.0, 0.0), &text, TEXT);
+        frame.text(at + Vec2::new(18.0, 2.0), &text, TEXT);
     }
+    under
 }
 
-fn draw_gear(canvas: &mut Canvas, sim: &Sim, origin: Vec2, size: Vec2, focused: bool) {
-    outline(canvas, origin, size, if focused { FOCUS } else { BORDER });
-    label(canvas, origin + Vec2::splat(ROW_PAD), "Worn", DIM_TEXT);
+/// The equipment pane. Returns the id worn in the selected slot, if it has
+/// focus and there is one.
+fn draw_gear(
+    frame: &mut Frame,
+    sim: &Sim,
+    origin: Vec2,
+    size: Vec2,
+    focused: bool,
+) -> Option<String> {
+    frame.outline(origin, size, 1.0, if focused { FOCUS } else { BORDER });
+    frame.text(origin + Vec2::splat(ROW_PAD), "Worn", DIM_TEXT);
 
-    // Cloned rather than borrowed: the borrow would be held across the whole
-    // loop below, and a draw pass has no business pinning a component.
     let gear = inventory::holder(&sim.world)
         .and_then(|holder| sim.world.get::<&Equipment>(holder).ok())
         .map(|gear| Equipment::clone(&gear));
     let selection = sim.screen().selection;
 
-    // Every slot, filled or not: an empty slot has to be visible, or "what can
-    // I still put on?" has no answer.
+    let mut under = None;
     for (index, slot) in Slot::ALL.iter().enumerate() {
         let at = origin + Vec2::new(ROW_PAD, ROW_PAD + ROW_H * (index as f32 + 1.0));
+        let worn = gear.as_ref().and_then(|gear| gear.get(*slot));
         if focused && index == selection {
-            fill(
-                canvas,
-                at - Vec2::new(ROW_PAD / 2.0, 1.0),
+            frame.rect(
+                at - Vec2::new(ROW_PAD / 2.0, 2.0),
                 Vec2::new(size.x - ROW_PAD, ROW_H),
                 SELECTION,
             );
+            under = worn.map(str::to_string);
         }
-
-        let worn = gear.as_ref().and_then(|gear| gear.get(*slot));
+        frame.rect(at - Vec2::splat(1.0), Vec2::splat(14.0), SLOT);
         if let Some(id) = worn {
-            fill(
-                canvas,
-                at + Vec2::new(0.0, 1.0),
-                Vec2::splat(ICON),
-                tint(&sim.items, id),
-            );
+            icon(frame, &sim.items, id, at);
         }
         let text = match worn {
             Some(id) => format!("{}: {}", slot.label(), sim.items.label(id)),
-            None => format!("{}: —", slot.label()),
+            None => format!("{}: -", slot.label()),
         };
-        label(
-            canvas,
-            at + Vec2::new(ICON + 4.0, 0.0),
+        frame.text(
+            at + Vec2::new(18.0, 2.0),
             &text,
             if worn.is_some() { TEXT } else { DIM_TEXT },
         );
     }
-}
-
-fn label(canvas: &mut Canvas, at: Vec2, text: &str, colour: Color) {
-    let text = Text::new(
-        TextFragment::new(text)
-            .scale(PxScale::from(FONT))
-            .color(colour),
-    );
-    canvas.draw(&text, DrawParam::default().dest(at.floor()));
-}
-
-/// A filled box with a one-pixel border, the same treatment the HUD's bars use.
-fn bordered(canvas: &mut Canvas, origin: Vec2, size: Vec2, colour: Color) {
-    fill(
-        canvas,
-        origin - Vec2::splat(BORDER_W),
-        size + Vec2::splat(BORDER_W * 2.0),
-        BORDER,
-    );
-    fill(canvas, origin, size, colour);
-}
-
-/// Four thin rectangles rather than a stroked mesh: a `Quad` needs no context.
-fn outline(canvas: &mut Canvas, origin: Vec2, size: Vec2, colour: Color) {
-    fill(canvas, origin, Vec2::new(size.x, BORDER_W), colour);
-    fill(
-        canvas,
-        origin + Vec2::new(0.0, size.y - BORDER_W),
-        Vec2::new(size.x, BORDER_W),
-        colour,
-    );
-    fill(canvas, origin, Vec2::new(BORDER_W, size.y), colour);
-    fill(
-        canvas,
-        origin + Vec2::new(size.x - BORDER_W, 0.0),
-        Vec2::new(BORDER_W, size.y),
-        colour,
-    );
-}
-
-fn fill(canvas: &mut Canvas, origin: Vec2, size: Vec2, colour: Color) {
-    canvas.draw(
-        &Quad,
-        DrawParam::new()
-            .dest(origin.floor())
-            .scale(size)
-            .color(colour),
-    );
+    under
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::VIEW;
 
-    /// The three kinds have to be told apart at a glance, on the floor and in
-    /// the bag alike — which is the whole of what a coloured quad can convey.
+    /// The key hint is right-aligned by its measured width, so it starts
+    /// inside the panel and ends inside it — it used to be placed by an
+    /// estimate of letter width and ran off the edge of the screen.
     #[test]
-    fn every_item_kind_gets_a_distinct_placeholder_colour() {
-        let items = ItemTable::shipped();
-        let channels = |c: Color| [c.r, c.g, c.b];
-        let mut seen: Vec<[f32; 3]> = Vec::new();
-        for id in items.ids() {
-            let colour = channels(tint(&items, id));
-            if !seen.contains(&colour) {
-                seen.push(colour);
-            }
-        }
+    fn the_hint_fits_inside_the_panel() {
+        let size = VIEW - Vec2::splat(MARGIN * 2.0);
+        let start = MARGIN + size.x - ROW_PAD - font::width(HINT);
         assert!(
-            seen.len() >= 3,
-            "the shipped items should span at least the three kinds: {seen:?}"
+            start > MARGIN + font::width("INVENTORY") + 8.0,
+            "overlaps the title"
         );
-        assert_ne!(
-            channels(tint(&items, "no_such_item")),
-            channels(CONSUMABLE_TINT),
-            "an unknown id should not be mistaken for a potion"
-        );
+        assert!(start + font::width(HINT) <= MARGIN + size.x);
     }
 }

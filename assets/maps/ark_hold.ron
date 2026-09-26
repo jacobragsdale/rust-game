@@ -1,0 +1,86 @@
+// The Holding — the Ark of the Vael, where the light sets the taken down.
+//
+// Act III's first map, in two decks:
+//
+//   upper deck (floor row 7)
+//     cols  2-6   the hatch back down to the Beacon, and where you arrive —
+//                 the Vael's voice speaks as you land (a trigger)
+//     col  13     a checkpoint
+//     cols 15-24  the pods: the ones the Choir did not get to, asleep. Some
+//                 of them are from Ashford
+//     col  26     Ysolde of Varr, taken like you
+//     col  33     the Archivist: what happened to the Vael, and the key on
+//     col  47     the Quartermaster's stores
+//     cols 36-41  a grate in the deck: the way down, and — up two rungs under
+//                 it (cols 37-39) and a double jump through it — back up
+//   lower hold (floor row 14) — "the song has got in there"
+//     husks and the Choir's drones all along it; a chest at col 40
+//     cols 52-57  the reactor housing, a jump high. The crawlspace inside it
+//                 is false wall (cols 52-56, rows 12-13), entered by walking
+//                 into its face; the circlet's chest shows through
+//     cols 58-62  a sentinel, and the star-sealed hatch to the Circle
+//
+// Tileset `ark`. 64x16 tiles.
+Level(
+    tileset: "ark",
+    name: "The Holding",
+    grid: [
+        "################################################################",
+        "################################################################",
+        "#..............................................................#",
+        "#..............................................................#",
+        "#..............................................................#",
+        "#..............................................................#",
+        "#..............................................................#",
+        "####################################======######################",
+        "#..............................................................#",
+        "#..............................................................#",
+        "#....................................===.......................#",
+        "#...................................................######.....#",
+        "#....................................===............%%%%%#.....#",
+        "#...................................................%%%%%#.....#",
+        "################################################################",
+        "################################################################",
+    ],
+    entities: [
+        // NPCs, in the order a tape addresses them.
+        Npc(kind: "ysolde", cell: (26, 6)),
+        Npc(kind: "archivist", cell: (33, 6)),
+        Npc(kind: "quartermaster", cell: (47, 6)),
+        Npc(kind: "husk", cell: (19, 13)),
+        Npc(kind: "drone", cell: (25, 10)),
+        Npc(kind: "husk", cell: (31, 13)),
+        Npc(kind: "drone", cell: (43, 10)),
+        Npc(kind: "husk", cell: (47, 13)),
+        Npc(kind: "sentinel", cell: (59, 13)),
+
+        // The upper deck: where the light sets you down.
+        Door(id: "pad", cell: (2, 6), to: "maps/beacon.ron", at: "beam", art: "hatch"),
+        Spawn(id: "beam", cell: (5, 6)),
+        Trigger(id: "arrival", cell: (4, 4), size: (3, 3), dialogue: "ark_arrival"),
+        Checkpoint(cell: (13, 6)),
+        Decor(cell: (15, 6), prop: "pod"),
+        Decor(cell: (17, 6), prop: "pod"),
+        Decor(cell: (19, 6), prop: "pod"),
+        Decor(cell: (21, 6), prop: "pod"),
+        Decor(cell: (23, 6), prop: "pod"),
+        Decor(cell: (29, 5), prop: "viewport"),
+        Decor(cell: (45, 6), prop: "console"),
+        Decor(cell: (50, 6), prop: "pod"),
+        Decor(cell: (52, 6), prop: "pod"),
+        Decor(cell: (54, 6), prop: "pod"),
+        Decor(cell: (8, 4), prop: "torch"),
+        Decor(cell: (39, 4), prop: "torch"),
+        Decor(cell: (58, 4), prop: "torch"),
+
+        // The lower hold, where the song has got in.
+        Chest(id: "hold_chest", cell: (40, 13), items: [("greater_potion", 1), ("coin", 6)]),
+        Chest(id: "secret_crawlspace", cell: (54, 13), items: [("lantern_circlet", 1)]),
+        Door(id: "circle_door", cell: (61, 13), to: "maps/circle.ron", at: "hold_door", locked: "star_key", keep_key: true, art: "hatch"),
+        Decor(cell: (15, 13), prop: "vent"),
+        Decor(cell: (28, 12), prop: "pipe"),
+        Decor(cell: (28, 13), prop: "pipe"),
+        Decor(cell: (35, 13), prop: "console"),
+        Decor(cell: (46, 12), prop: "torch"),
+    ],
+)

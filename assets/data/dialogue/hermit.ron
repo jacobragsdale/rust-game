@@ -1,0 +1,97 @@
+// Old Ossian, the hermit of the Thornwood: the first person who can tell the
+// player what the lights are, and the first teacher of magic in a game whose
+// premise is that magic is the one thing the abductors cannot do.
+//
+//   quest.hermit.stage  0 not asked, 1 asked for his staff, 2 taught
+Dialogue(
+    id: "hermit",
+    start: "greet",
+    nodes: {
+        "greet": Node(
+            speaker: "Ossian the Hermit",
+            lines: [
+                "Another one who hears no call. Sit, if you can stand the smoke.",
+            ],
+            choices: [
+                Choice(text: "Who are you?", next: "who"),
+                Choice(text: "What are the lights on the hill?", next: "lights"),
+                Choice(
+                    text: "Can you teach me?",
+                    next: "teach",
+                    condition: FlagEq("quest.hermit.stage", 0),
+                    effects: [SetFlag("quest.hermit.stage", 1)],
+                ),
+                Choice(
+                    text: "I have your staff.",
+                    next: "staff",
+                    condition: All([FlagEq("quest.hermit.stage", 1), HasItem("ossian_staff")]),
+                    effects: [
+                        TakeItem("ossian_staff", 1),
+                        GiveItem("tome_frost", 1),
+                        SetFlag("quest.hermit.stage", 2),
+                    ],
+                ),
+                Choice(
+                    text: "Where now?",
+                    next: "onward",
+                    condition: FlagAtLeast("quest.hermit.stage", 2),
+                ),
+                Choice(text: "Farewell.", next: None),
+            ],
+        ),
+        "who": Node(
+            speaker: "Ossian the Hermit",
+            lines: [
+                "A knight of that castle, once - sixty years gone. I walked away the night I found I could light a candle with a word.",
+                "You have it too. The spark. That is why the Warden's call slid off you like rain.",
+            ],
+            choices: [
+                Choice(text: "I have a question.", next: "greet"),
+            ],
+        ),
+        "lights": Node(
+            speaker: "Ossian the Hermit",
+            lines: [
+                "The sky-folk. They come down on the dark of the moon, onto the old beacon on the ridge.",
+                "A light takes up whatever the Warden sent them. Forty from Ashford this year alone. Up, into the dark.",
+                "I have watched it for thirty years and never once gone up. I am old, and a coward.",
+            ],
+            choices: [
+                Choice(text: "I have a question.", next: "greet"),
+            ],
+        ),
+        "teach": Node(
+            speaker: "Ossian the Hermit",
+            lines: [
+                "I will. But I teach nothing with an empty hand.",
+                "Gorran Redhand - the brigand who squats in the rangers' camp - took my staff when he took my goats.",
+                "Bring it back, and I will show you how to make ice out of air.",
+            ],
+            choices: [
+                Choice(text: "I will get it back.", next: None),
+            ],
+        ),
+        "staff": Node(
+            speaker: "Ossian the Hermit",
+            lines: [
+                "Ah. You found it holding up a tent, I expect.",
+                "Here, then. Frost - a lance of it, that goes through one foe and on into the next.",
+                "Wear the tome where your spark sits, and cast as you always have. Take it off and the old spark comes back.",
+                "The Beacon is past the camp, up the ridge. What goes up there does not come down. Go anyway - I think you were always going to.",
+            ],
+            choices: [
+                Choice(text: "Thank you, Ossian.", next: None),
+            ],
+        ),
+        "onward": Node(
+            speaker: "Ossian the Hermit",
+            lines: [
+                "The ridge. The Beacon. Whatever takes our people is up there, and so is the way to them.",
+            ],
+            choices: [
+                Choice(text: "I have a question.", next: "greet"),
+                Choice(text: "Farewell.", next: None),
+            ],
+        ),
+    },
+)

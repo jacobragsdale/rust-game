@@ -30,7 +30,9 @@
 // distinguishes one talking NPC from another is the conversation it carries,
 // not where it is stood, so it is an `Npc(kind:, cell:)` entry.
 //
-// 40x12 tiles at 32px = 1280x384 world pixels.
+// 48x12 tiles at 32px = 1536x384 world pixels. It was 40 wide until the east
+// gate: the eight columns added past the old road were added, not moved, so
+// everything below measured in columns 0-39 is where it always was.
 //
 //   ground       rows 10-11, the full width — surface y=320
 //   spawn        col 2, row 9    world (70, 286), feet on the ground, and
@@ -41,7 +43,10 @@
 //   market hall  cols 18-26  roof row 3, posts rows 4-7 at cols 19 and 25
 //   counter      cols 21-23, row 9   surface y=288 — the shop, such as it is
 //   gatehouse    cols 32-36  roof row 3, mass rows 4-7 at cols 33-35
-//   road east    cols 36-39, the exit toward the dungeon
+//   road east    cols 36-45, past the castle gate
+//   east gate    cols 44-45, a portcullis locked with `gate_key` — Runa's to
+//                give once the Warden is dead, and the way to the Thornwood
+//   town wall    cols 46-47, rows 2-9
 //
 // **Why nothing solid reaches the ground except the counter.** A building that
 // crossed the street at head height would close the hub: the player is 34px
@@ -63,23 +68,48 @@
 // impossible for the same reason: the street drops out from under you.
 Level(
     tileset: "castle",
+    name: "Ashford",
     grid: [
-        "........................................",
-        "........................................",
-        "........................................",
-        "..................#########.....#####...",
-        ".........######....#.....#.......###....",
-        ".........#....#....#.....#.......###....",
-        ".........#....#....#.....#.......###....",
-        ".........#....#....#.....#.......###....",
-        "........................................",
-        "..P..................###................",
-        "###########..###########################",
-        "########################################",
+        "................................................",
+        "................................................",
+        "..............................................##",
+        "..................#########.....#####.........##",
+        ".........######....#.....#.......###..........##",
+        ".........#....#....#.....#.......###..........##",
+        ".........#....#....#.....#.......###..........##",
+        ".........#....#....#.....#.......###..........##",
+        "..............................................##",
+        "..P..................###......................##",
+        "###########..###################################",
+        "################################################",
     ],
     entities: [
         // Runa, on her doorstep. The cell is the one whose *floor* she stands
         // on, which for a notch cut out of row 10 is row 10 itself.
         Npc(kind: "villager", cell: (11, 10)),
+        // Past the last prompt `tapes/village_smoke.tape` checks, so the walk
+        // it pins does not change what it asserts.
+        Npc(kind: "pedlar", cell: (31, 9)),
+        // The village is the hub: the stair down to the old dungeon — which
+        // the crypt's long stair also comes up by — and the castle's gate.
+        Door(id: "dungeon_stair", cell: (26, 9), to: "maps/dungeon.ron", at: "village_stair", art: "archway"),
+        Door(id: "castle_gate", cell: (37, 9), to: "maps/castle.ron", at: "shaft", art: "door"),
+        // The way to the Thornwood, barred since the knights came down. Runa
+        // gives the key once the Warden is dead (dialogue/elder.ron); it is
+        // kept, so the gate can be walked back through.
+        Door(
+            id: "east_gate",
+            cell: (44, 9),
+            to: "maps/thornwood.ron",
+            at: "village_gate",
+            locked: "gate_key",
+            keep_key: true,
+            art: "portcullis",
+        ),
+        // Where the light from the Ark sets the player down at the end, and
+        // what Ashford says about it — only once the Choir is dead, so every
+        // walk through the street before then is the walk it always was.
+        Spawn(id: "sky", cell: (6, 9)),
+        Trigger(id: "homecoming", cell: (5, 7), size: (3, 3), dialogue: "epilogue_home", when: "quest.ark.choir"),
     ],
 )

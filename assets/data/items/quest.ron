@@ -10,6 +10,7 @@
         id: "elder_charm",
         name: "Runa's Charm",
         sprite: "items/charm",
+        description: "Runa's mother's charm. +1 maximum mana.",
         kind: Equipment(
             slot: Trinket,
             // One point of mana: a single extra cast, which is the smallest
@@ -24,6 +25,7 @@
         id: "iron_band",
         name: "Runa's Iron Band",
         sprite: "items/band",
+        description: "Runa's husband's ring. +1 maximum health.",
         kind: Equipment(
             // The other Trinket, and deliberately so: the two quest rewards in
             // the game compete for one slot, so finishing both is a choice

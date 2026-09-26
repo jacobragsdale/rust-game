@@ -1,0 +1,12 @@
+// The testbed's triggers: a story told by walking somewhere, not by pressing
+// anything. One line each, so a tape closes them with one `confirm`.
+Dialogue(
+    id: "testbed_trigger",
+    start: "told",
+    nodes: {
+        "told": Node(
+            speaker: "A voice in the dark",
+            lines: ["You walked into a story. It will not tell itself twice."],
+        ),
+    },
+)

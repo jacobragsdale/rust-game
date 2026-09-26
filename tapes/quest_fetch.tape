@@ -142,10 +142,13 @@ interact 1
 assert mode == dialogue
 assert dialogue_node == greet
 
-# Five replies now, where there were three. The draught branch came back with
-# the knight's potion; the fourth is the one the errand unlocked, and it needed
-# both halves of its condition to be true at once.
-assert dialogue_choices == 5
+# Four replies now, where there were three: the new one is the errand's, and
+# it needed both halves of its condition to be true at once. The knight's
+# potion is in the bag too, and Runa does *not* take it for the draught she
+# lends — that reply is gated on having been lent one, which this run never
+# was. (It used to be gated on the potion alone, which let any potion off any
+# knight buy her charm, as often as you liked.)
+assert dialogue_choices == 4
 
 confirm 1
 wait 1
@@ -153,9 +156,7 @@ down 1
 wait 1
 down 1
 wait 1
-down 1
-wait 1
-assert dialogue_selection == 3
+assert dialogue_selection == 2
 confirm 1
 wait 1
 
@@ -181,12 +182,12 @@ expect elder_intro.dialogue_closed == 2
 # --- 5. and it stays done -----------------------------------------------
 #
 # The same node a third time. The errand's reply is gone — not because the bag
-# is empty (the potion is still in it, and its own branch is still offered) but
-# because the flag says the errand is finished.
+# is empty (the potion is still in it) but because the flag says the errand is
+# finished.
 interact 1
 assert mode == dialogue
 assert dialogue_node == greet
-assert dialogue_choices == 4
+assert dialogue_choices == 3
 assert quest.helm.stage == 2
 cancel 1
 

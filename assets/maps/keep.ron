@@ -1,0 +1,40 @@
+// The Barracks — where a new game starts, and where the story does.
+//
+// A room in the castle where the garrison slept. Every cot but yours is
+// empty. The prologue is a `Trigger` on the spawn, so it opens on the first
+// tick of a new game; the door on the right is the way into the castle, where
+// the player arrives at its `keep` spawn — beside the castle's own `P`, which
+// the castle's tapes still start from.
+//
+//   spawn     col 3, row 7 — inside the trigger (cols 2-4, rows 5-7)
+//   cots      crates along the floor, one of them yours: the footlocker
+//   door      cols 16-17 — into the castle
+Level(
+    tileset: "castle",
+    name: "The Barracks",
+    grid: [
+        "####################",
+        "####################",
+        "##................##",
+        "##................##",
+        "##................##",
+        "##................##",
+        "##................##",
+        "##.P..............##",
+        "####################",
+        "####################",
+    ],
+    entities: [
+        Trigger(id: "wake", cell: (2, 5), size: (3, 3), dialogue: "prologue"),
+        Chest(id: "footlocker", cell: (6, 7), items: [("minor_potion", 1)]),
+        Door(id: "out", cell: (15, 7), to: "maps/castle.ron", at: "keep", art: "door"),
+        Decor(cell: (8, 7), prop: "crate"),
+        Decor(cell: (10, 7), prop: "crate"),
+        Decor(cell: (12, 7), prop: "crate"),
+        Decor(cell: (9, 7), prop: "barrel"),
+        Decor(cell: (5, 4), prop: "window"),
+        Decor(cell: (9, 4), prop: "window"),
+        Decor(cell: (13, 4), prop: "window"),
+        Decor(cell: (2, 6), prop: "torch"),
+    ],
+)

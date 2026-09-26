@@ -1,0 +1,53 @@
+// The Quartermaster: a Vael shop, made of nothing but dialogue — the same shape
+// as Brann's (pedlar.ron) with Vael goods, and one line that ties the two
+// together.
+Dialogue(
+    id: "quartermaster",
+    start: "greet",
+    nodes: {
+        "greet": Node(
+            speaker: "The Quartermaster",
+            lines: [
+                "Stores, warrior. Your coin is accepted here - a trader from your world taught us its use.",
+            ],
+            choices: [
+                Choice(
+                    text: "A greater health potion. (6 coins)",
+                    next: "sold",
+                    condition: HasItems("coin", 6),
+                    effects: [TakeItem("coin", 6), GiveItem("greater_potion", 1)],
+                ),
+                Choice(
+                    text: "An elixir. (10 coins)",
+                    next: "sold",
+                    condition: HasItems("coin", 10),
+                    effects: [TakeItem("coin", 10), GiveItem("elixir", 1)],
+                ),
+                Choice(
+                    text: "Vael weave. (30 coins)",
+                    next: "sold",
+                    condition: HasItems("coin", 30),
+                    effects: [TakeItem("coin", 30), GiveItem("vael_weave", 1)],
+                ),
+                Choice(text: "Which trader?", next: "trader"),
+                Choice(text: "Nothing today.", next: None),
+            ],
+        ),
+        "sold": Node(
+            speaker: "The Quartermaster",
+            lines: ["Taken. May it keep you whole."],
+            choices: [
+                Choice(text: "Something else.", next: "greet"),
+                Choice(text: "That is all.", next: None),
+            ],
+        ),
+        "trader": Node(
+            speaker: "The Quartermaster",
+            lines: [
+                "A stout man with a cart. Brann, he calls himself. Thirty years he has sold us glass that mends.",
+                "He never asks what it is for. We have been grateful for that. We are less grateful for it now.",
+            ],
+            choices: [Choice(text: "Something else.", next: "greet")],
+        ),
+    },
+)

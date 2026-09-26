@@ -4,8 +4,8 @@ Every item in [ROADMAP.md](ROADMAP.md), broken into work a single engineer (or
 agent) can pick up cold and finish. The roadmap says *what and in what order*;
 this says *what done looks like*.
 
-Read [.claude/skills/supergame-dev/SKILL.md](.claude/skills/supergame-dev/SKILL.md)
-before starting any ticket. Two rules from it govern every ticket here:
+Read [CLAUDE.md](CLAUDE.md) before starting any ticket — it indexes the
+invariants and carries the workflow. Two rules from it govern every ticket here:
 
 - **Gameplay logic goes in `Sim`, never in `scenes/`.** Scenes draw; they do not
   decide. This is most tempting for inventory and dialogue, which are the two
@@ -20,7 +20,7 @@ before starting any ticket. Two rules from it govern every ticket here:
 1. `cargo test` green.
 2. `cargo clippy --all-targets` adds no new warnings.
 3. Golden traces: run
-   `uv run .claude/skills/supergame-dev/scripts/trace_diff.py --ignore <new probe fields>`
+   `TRACE_IGNORE=<new probe fields> cargo test --test traces`
    and account for **every** remaining difference in the ticket's writeup before
    re-recording with `UPDATE_TRACES=1 cargo test --test traces`. A trace diff you
    cannot explain is a bug you have not found yet.
@@ -95,7 +95,7 @@ Cover, with a one-line "why" and a file reference each:
 
 - The three-phase tick and which phase new work belongs in.
 - `Sim` vs `scenes/`: what may never move into a scene.
-- Verification: tapes, golden traces, `trace_diff.py`, `sheet`, `SUPERGAME_DEBUG=1`.
+- Verification: tapes, golden traces, `TRACE_IGNORE`, `sheet`, `SUPERGAME_DEBUG=1`.
 - Invariants: never despawn an NPC; `frozen` vs `hitstun`; `Sim::npcs` ordering;
   frozen testbed maps; strict AABB overlap; components must be `Send + Sync`;
   RON `implicit_some`; the player sheet's sequential-across-rows layout.
@@ -405,8 +405,8 @@ waiting.
 
 - Unit, in `Sim::fixture`: cast → mana drops; cast again immediately → refused;
   wait out the cooldown → allowed; mana regen reaches max and stops.
-- Probe gains `mana` and `cast_cooldown`; declared to `trace_diff.py --ignore
-  mana cast_cooldown` when re-recording.
+- Probe gains `mana` and `cast_cooldown`; proved with `TRACE_IGNORE=mana,cast_cooldown`
+  before re-recording.
 - Tape `tapes/spell_cast.tape` on `testbed_arena.ron`:
   `expect shock.spell_cast == 1`, `assert mana < 5`, and after regen
   `assert mana == 5`.
@@ -1319,6 +1319,214 @@ the id is not finished.
 
 ---
 
+# Workstream F — review and foundations
+
+A pass over everything M1–M8 built, done so that the next stretch of work can
+be level design, enemies, items and story rather than plumbing. Each ticket
+below is **done**; what it did not do is written down at its end.
+
+## F-1 — Bug sweep
+
+**Status:** done.
+
+Movement (a hitstun that left stale `Body` knobs, the slide bleeding the wrong
+speed, a death that could fire twice), combat (swing and bolt order sorted by
+entity id — R-1; knockback on the killing blow; enemies knocked into hazards or
+out of the world now die), AI (chasing faces the player, a blow starts a chase,
+walls block sight, a knight holds its ground in reach, a home across a drop is
+given up), inventory (loot marked dropped before the roll — R-2; a dead player
+picks nothing up; `Inventory::add` saturates), dialogue (an atomic reply that
+refuses as a whole when the bag is full; `HasItems`, `Not`, `Any`, `AddFlag`),
+the animation picker (a new swing restarts its clip; facing locked through a
+swing), saves (atomic writes, a version check that reads the header first),
+the menu clock (`Sim::world_tick`: opening the bag no longer moves a
+platform), and hitstop swallowing a buffered press. Every fix has a test that
+fails without it.
+
+## F-2 — Drawing as data, and a way to look
+
+**Status:** done. Tests: `tests/render.rs`.
+
+Every screen is a `Frame` of `Cmd`s built from a `Sim` with no graphics
+context; `render::gpu` draws it in the window and `render::cpu` draws it to an
+image, matching the GPU to within two levels per channel. One bitmap font serves
+both. `cargo run --bin render` draws any tick of any tape, the whole of a map,
+or a menu. Sprite art can be authored as text (`assets/graphics/**/*.ron`,
+`Pixels(palette, frames)`) wherever a PNG name is accepted; the item icons and
+the prop art are made that way.
+
+## F-3 — The level's furniture, and ways between maps
+
+**Status:** done. Tapes: `world_props.tape`, `world_travel.tape`. Tests: `tests/world.rs`.
+
+Doors (optionally locked with an item), exits, named spawn points, chests,
+items lying about, checkpoints (which heal), signs, levers and gates, and decor
+from the tileset — all map entities, all remembering what they have done as
+`world.<map>.<prop>` flags, so a load or a return rebuilds them as they were.
+Travel carries the player whole — health, mana, bag, gear — and fails loudly
+(`travel_failed`) rather than silently. NPCs can carry a death flag and are
+spawned as corpses once it is set. The tape language gained `reload` (R-5).
+
+## F-4 — Enemies that are only data, and effects
+
+**Status:** done. Tests: `tests/enemies.rs`, `tests/data.rs`.
+
+`spawn::entity` builds every kind from its stat block: `friendly`, an optional
+`attack`, a `spell` with `ai.cast_range`, a `contact` hit, `ai.flying`. The
+kinds a map may place are read from `stats.ron` rather than listed in code.
+Clip sets can build on another (`base:`). Three enemies exercise it: the bat (a
+flyer that bites and breaks off), the mage (keeps its distance and throws
+embers), the Warden (sword up close, embers from afar, and it closes in when out
+of mana). Presentation in `view/fx.rs`: particles from `effects.ron`, shake,
+fades, toasts, the map title, and the coin purse on the HUD.
+
+## F-5 — A connected slice of world
+
+**Status:** done. Tape: `crypt_run.tape`.
+
+Castle, village, dungeon and the new crypt joined by doors; the crypt built for
+F-4's enemies, with two chests, a lever and gate, a gate on the Warden's death
+flag, and a long stair back up to the village, where Brann the Pedlar sells
+potions and buys the Warden's seal through `dialogue/pedlar.ron`. The Warden
+fight in the tape was recorded with `sim --fight`, which exists for that.
+
+## F-6 — Next
+
+**Status:** superseded by workstream G, which did the first item; the rest
+moved to G-7.
+
+---
+
+# Workstream G — the game
+
+The advanced world and the story (M8's open half), made out of what F left
+lying ready: a game with a beginning, three acts and an end, harder enemies,
+single-player duels against champions, secrets on every map, and new weapons,
+armour and spells. Each ticket below is **done**; what it did not do is
+written down at its end, and G-7 collects it.
+
+## G-1 — Rivals, shields and heavies
+
+**Status:** done. Tests: `tests/enemies.rs` (the rival tests), the shield and
+steadfast tests in `src/systems/combat.rs`. Tapes: `circle_run`,
+`circle_secret`.
+
+A **rival** is an avatar — the player's own controller, body, combo engine and
+spell — whose input comes from a `Brain` instead of a keyboard. A stat block
+with `brain:` (sight, reaction, cast range, aerial) spawns one;
+`brain::think` runs first in the decide phase and writes the input
+`avatar::control` then reads. The player is now "the avatar without a brain"
+(`avatar::player`), and everything that meant the player says so. The brain
+wakes when it sees you, decides every `reaction` ticks and only steers in
+between, chains combos, casts from range, jumps bolts, goes over a shield and
+plunges on it, waits out a heavy's swing and punishes the whiff, and runs from
+a blow it can see coming. `sim --fight` flies the player with the same brain.
+
+A kind with `guard` holds a **shield**: a blow from the front while it stands
+ready is turned (`blocked`), and the one who swung is thrown back and
+staggered. From behind, from above — a plunge is never blocked — or while it is
+busy, it is open, and a bolt from the front stops on it. A kind with
+`steadfast` is a **heavy**: it takes the damage and the shove and never the
+stagger, so it swings back through your combo.
+
+Not done: the brain does not platform — it will not climb to a flyer out of
+jump reach, and it will chase over a pit.
+
+## G-2 — Aimed bolts, tomes, and the Spell slot
+
+**Status:** done. Tests: `an_aimed_bolt_flies_at_the_nearest_foe` in
+`src/systems/spell.rs`, `a_tome_changes_what_cast_throws_…` in
+`src/systems/inventory.rs`.
+
+A projectile can be `aimed`: released at the nearest living foe rather than
+straight ahead, which is what the drones, the Choir and the seeking tome
+throw. Equipment can carry a `spell:`, and a fifth slot, `Spell`, holds the
+tomes that use it — frost (pierces), embers (a slow, heavy fireball) and
+seeking (aimed). Taking one off restores the spark.
+
+## G-3 — Triggers, false walls, and re-lit tilesets
+
+**Status:** done. Tests: `tests/world.rs` over `testbed_secrets.ron`, the
+trigger checks in `tests/data.rs`, `a_wolf_bites_then_gives_ground_…` in
+`tests/enemies.rs`.
+
+A `Trigger` is a stretch of floor that opens a conversation when walked into,
+once — optionally only once a flag is set (`when:`) — and remembers it as its
+`world.` flag; the conversation opens at the end of the tick, after any
+travel, so one on a spawn is the first thing a map says. `%` in a grid is a
+false wall: drawn as the solid around it, walked through — every map from the
+Thornwood on hides something behind one. A tileset can `tint` another's atlas
+and set the `clear` colour, which is how the Beacon, the Engine Deep and the
+Heart get their light without new art. Smaller: a guard kind plays its guard
+clip while it stands ready, and a walking biter backs off while its bite
+recovers — the wolf's lunge and circle.
+
+## G-4 — Act I: the barracks, and what the old maps were for
+
+**Status:** done. Tape: `keep_run`. Traces re-recorded: `village_smoke`,
+`crypt_run` (content added along their routes; accounted for as additions
+only).
+
+A new game starts in the castle barracks (`keep.ron`, now `start_map`) with
+the prologue: the sky burned green, the garrison walked out of the gate, and
+you are the one left. The village grew an east gate, a portcullis Runa gives
+the key to once the Warden is dead; she also makes a hood of three wolf pelts,
+and Brann sells a jerkin and greater potions and has a confession. Every old
+map gained a secret: a cellar under the castle (a ring), a vault in the
+dungeon (an elixir), a hoard in the crypt's ceiling.
+
+## G-5 — Act II: the Thornwood and the Beacon
+
+**Status:** done. Tapes: `thornwood_run`, `beacon_run`.
+
+`thornwood.ron`, east of the village: wolves, a ravine of thorns crossed log to
+log under an archer, Ossian the hermit (bring back his staff and he teaches
+frost), a grove inside a hill, a brigands' camp with an armoury, and Gorran
+Redhand — shield, axe and a death flag — whose palisade opens on his fall and
+who has the staff. `beacon.ron`, the watch-tower on the ridge: a climb ledge
+to ledge past a shieldbearer and up a wall-jump shaft, a watchman's cubby in
+the wall, and the light at the top that takes you up.
+
+## G-6 — Act III: the Ark, and the ending
+
+**Status:** done. Tapes: `ark_hold_run`, `circle_run`, `circle_secret`,
+`engine_deep_run`.
+
+The Vael's Ark. The Holding: the taken asleep in pods, Ysolde, the Archivist
+(the truth about the Choir, and the star key), the Quartermaster's stores, a
+lower hold full of husks and drones, and a crawlspace. The Proving Circle:
+three duels against rivals — Kesh (quick, a glass saber), Brakka (a heavy with
+a maul) and Morwen (spell and sword) — each pit shut by a gate on its
+champion's death flag and each champion's weapon or tome left where they fall;
+the Arbiter rewards the Circle's champion; the Nameless waits behind a false
+wall over the second pit. The Engine Deep: furnaces, a ferry over coolant,
+pistons, drones, wisps, a husk and a sentinel, a tome on a gantry and the
+Starmetal Blade in a forge at the top of a shaft. The Heart: the Choir over
+two tiers of catwalks. Its death flag opens the way to the Archivist's thanks
+and a door home, where the ending is waiting in Ashford's square.
+
+Not done: the Nameless is never beaten on tape (`circle_secret` claims only
+that it wakes), and the recorded Choir fight dies four times (see G-7).
+
+## G-7 — Next
+
+**Status:** todo.
+
+- **Somebody plays it.** Every fight was judged by a bot with instant
+  reactions: the Circle's three duels each end with one heart left, and the
+  Choir costs the bot four deaths with base health and no potions. A person
+  with the world's armour and potions should do better; whether it is fun is
+  the open question, and the numbers to move are all in `stats.ron`,
+  `attacks.ron` and `spells.ron`.
+- **Audio**: no sound exists in the repo yet.
+- **Camera smoothing**: the camera snaps to the player; a lerp is a few lines
+  in `view/` once someone has played it and wants one.
+- **A brain that platforms**, if a rival ever needs catwalks — and the
+  recorder with it.
+- The remaining open findings below.
+
+---
+
 # Open findings from the M3–M8 review
 
 An adversarial review of the whole M3–M8 build confirmed five defects, all now
@@ -1329,6 +1537,9 @@ going unvalidated. What follows is everything it found that was **not** fixed,
 so none of it is lost. Nothing here is known to break the game today.
 
 ## R-1 — `combat::resolve` trusts hecs query order where the order is observable
+
+**Status:** fixed in F-1 — hits, bolts, bites, swings and casts all sort by
+entity id.
 
 **Severity:** latent. `src/systems/combat.rs`.
 
@@ -1347,6 +1558,8 @@ together.
 
 ## R-2 — `drop_loot`'s early `continue` makes the RNG draw count depend on components
 
+**Status:** fixed in F-1 — a corpse is marked dropped before anything can skip it.
+
 **Severity:** latent. `src/systems/inventory.rs`.
 
 `let Some(..) = drop_site(world, corpse) else { continue }` skips a corpse's
@@ -1357,6 +1570,10 @@ failure the function's own doc comment says it rules out. Unreachable today,
 because every `Loot` carrier also carries `Stats`.
 
 ## R-3 — save-scumming is a loot farm
+
+**Status:** decided in F-3, and written down in ROADMAP.md's open questions:
+ordinary enemies come back on a load, as on a return; a death flag is how
+anything stays dead.
 
 **Severity:** design question, not a bug. The RNG *position* survives a save;
 corpses and `Loot.dropped` do not. Kill, loot, save, load: the knight is alive
@@ -1381,6 +1598,8 @@ inherent to scripted combat; worth knowing before the next balance pass.
 
 ## R-5 — no tape covers save/load
 
+**Status:** fixed in F-3 — the `reload` directive, used by three tapes.
+
 `tests/save.rs` is thorough, but the skill's own checklist item ("a tape covers
 the new behaviour") is unmet for M6's persistence. Defensible — a tape cannot
 express "write a file, reload, continue" — but the two save bugs the review
@@ -1388,6 +1607,10 @@ found lived precisely in that gap. Consider a tape directive that saves and
 reloads mid-run.
 
 ## R-6 — smaller items
+
+**Status:** partly fixed — the first and fifth bullets are done (every placeable
+kind's clip set is checked, and every item has an icon a test checks); the rest
+stand.
 
 - `tests/assets.rs` checks clip sets for `player` and `knight` only; the list is
   hand-written and did not grow when `villager` shipped. A missing

@@ -1,0 +1,26 @@
+// A brigand archer — the knight's art in forest green, with a cast to loose
+// from and the arrow it looses (a spell's projectile is drawn from the
+// caster's own clip set; see assets/data/spells.ron).
+ClipSet(
+    base: "knight",
+    tint: (150, 204, 116),
+    clips: {
+        // The attack sheet's wind-up, held for the length of the cast — the
+        // same pose the mage throws from.
+        "cast": Clip(
+            sheet: "knight/knightAttack",
+            frame_size: (144.0, 64.0),
+            offset: (5.0, 0.0),
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0)],
+            fps: 8.0,
+            looping: false,
+        ),
+        "arrow_bolt": Clip(
+            sheet: "creatures/arrow",
+            frame_size: (14.0, 4.0),
+            frames: [(0, 0)],
+            fps: 1.0,
+            looping: true,
+        ),
+    },
+)

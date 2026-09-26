@@ -1,0 +1,28 @@
+// An item icon: tome seeking. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/tome_seeking
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (130, 50, 170),
+        'c': (206, 120, 240),
+        'd': (254, 231, 97),
+        'e': (255, 250, 236),
+    },
+    frames: [
+        [
+            "..aaaaaaaa..",
+            ".abbbbbbbca.",
+            ".abbbdbbbca.",
+            ".abbbdbbbca.",
+            ".abdddddbca.",
+            ".abbdddbbca.",
+            ".abbdbdbbca.",
+            ".abbbbbbbca.",
+            ".abbbbbbbca.",
+            ".aeeeeeeeea.",
+            ".aaaaaaaaaa.",
+            "............",
+        ],
+    ],
+)

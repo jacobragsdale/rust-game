@@ -1,0 +1,17 @@
+// A sentinel — a husk in Vael plate, in steel blue, behind a shield.
+ClipSet(
+    base: "knight",
+    tint: (132, 164, 236),
+    clips: {
+        // knightShield frames 0-2: the shield held square in front — what the
+        // patrol selector shows while a kind with `guard` stands ready.
+        "guard": Clip(
+            sheet: "knight/knightShield",
+            frame_size: (96.0, 64.0),
+            offset: (-2.0, 0.0),
+            frames: [(0, 0), (1, 0), (2, 0), (1, 0)],
+            fps: 6.0,
+            looping: true,
+        ),
+    },
+)

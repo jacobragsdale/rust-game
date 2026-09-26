@@ -1,0 +1,51 @@
+// The Arbiter: keeper of the Proving Circle. Explains the three duels, and
+// rewards the champion once all three are down.
+//
+//   quest.circle.kesh / .brakka / .morwen  death flags of the three champions
+//   quest.circle.stage                     1 once the blade has been given
+Dialogue(
+    id: "arbiter",
+    start: "greet",
+    nodes: {
+        "greet": Node(
+            speaker: "The Arbiter",
+            lines: [
+                "The Circle is open. Three champions stand in it. Stand over all three and you go down into the deep.",
+            ],
+            choices: [
+                Choice(text: "Tell me about the champions.", next: "champions"),
+                Choice(
+                    text: "All three are down.",
+                    next: "champion",
+                    condition: All([
+                        FlagAtLeast("quest.circle.kesh", 1),
+                        FlagAtLeast("quest.circle.brakka", 1),
+                        FlagAtLeast("quest.circle.morwen", 1),
+                        FlagEq("quest.circle.stage", 0),
+                    ]),
+                    effects: [GiveItem("circle_blade", 1), SetFlag("quest.circle.stage", 1)],
+                ),
+                Choice(text: "I am ready.", next: None),
+            ],
+        ),
+        "champions": Node(
+            speaker: "The Arbiter",
+            lines: [
+                "Kesh of the Glass Dunes: fast, and she knows it. Let her come to you.",
+                "Brakka the Unbroken: slow, and he does not need to be fast. Be elsewhere when the maul lands.",
+                "Morwen of the Hollow Hills: spell and sword both. Close the distance and she swings; keep it and she burns you.",
+                "They fight as you fight. They were taken as you were. When they fall, the pods will mend them.",
+            ],
+            choices: [Choice(text: "I see.", next: "greet")],
+        ),
+        "champion": Node(
+            speaker: "The Arbiter",
+            lines: [
+                "It is so. You are the Circle's champion.",
+                "Take the Circle's blade - four cuts where you had three. The way to the deep is open.",
+                "One more thing. The Circle keeps something high in its walls that it does not speak of. We never had the courage to put it down.",
+            ],
+            choices: [Choice(text: "Then I will.", next: None)],
+        ),
+    },
+)

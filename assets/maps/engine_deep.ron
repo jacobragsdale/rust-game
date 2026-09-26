@@ -1,0 +1,90 @@
+// The Engine Deep — the dead heart of the Ark's machinery, where the Choir's
+// song is loudest. A gauntlet of everything that moves on its own:
+//
+//   cols  1-10   the landing: the hatch back up to the Circle, a warning, a
+//                checkpoint. Rungs at cols 5-7 climb to the gantry
+//   cols  9-19   the gantry (row 8), over the first furnaces, to a chest with
+//                the Tome of Embers in it — and a wall at col 20: down you go
+//   cols 11-30   the furnaces: six fires in two beats, three tiles apart. Go
+//                when the one ahead goes out, stop on the clear tile, go again;
+//                a drone hangs over them throwing bolts at you while you wait
+//   cols 33-46   the coolant trench: spikes, and a ferry that stops a tile
+//                short of each lip with a plank over the tile (the dungeon's
+//                ferry, and the same argument — see dungeon.ron). Two wisps
+//                work the crossing
+//   cols 47-72   the piston hall: two balls on long chains, half a period out
+//                of step, swinging down to head height; a drone over them,
+//                and a husk penned short of them by a step at col 52 (a ball
+//                kills anything it touches — the step at col 73 keeps the
+//                sentinel out of them too)
+//   cols 73-84   the exit hall, under a heavy roof: a sentinel before the
+//                hatch into the Heart. The shaft at cols 83-84 is a wall-jump
+//                climb, and at its top the roof is not roof: the forge (cols
+//                75-81, rows 3-4) is false wall, and the Starmetal Blade
+//                shows through it
+//
+// Tileset `ark_deep`: the Ark's plate by furnace light. 86x16 tiles; the
+// floor is row 13, surface y=416.
+Level(
+    tileset: "ark_deep",
+    name: "The Engine Deep",
+    grid: [
+        "######################################################################################",
+        "######################################################################################",
+        "#...................#....................................................#############",
+        "#...................#....................................................##%%%%%%%...#",
+        "#...................#....................................................##%%%%%%%%..#",
+        "#...................#....................................................##########..#",
+        "#...................#....................................................##########..#",
+        "#...................#....................................................##########..#",
+        "#........===========#.............................................................#..#",
+        "#....===............#.............................................................#..#",
+        "#.................................................................................#..#",
+        "#....===.............................................................................#",
+        "#...................................................#....................#...........#",
+        "#################################=............=#######################################",
+        "#################################^^^^^^^^^^^^^^#######################################",
+        "######################################################################################",
+    ],
+    entities: [
+        // NPCs, in the order a tape addresses them.
+        Npc(kind: "drone", cell: (22, 7)),
+        Npc(kind: "wisp", cell: (38, 8)),
+        Npc(kind: "wisp", cell: (43, 6)),
+        Npc(kind: "husk", cell: (50, 12)),
+        Npc(kind: "drone", cell: (62, 5)),
+        Npc(kind: "sentinel", cell: (76, 12)),
+
+        Door(id: "top", cell: (2, 12), to: "maps/circle.ron", at: "deep_door", art: "hatch"),
+        Spawn(id: "landing", cell: (5, 12)),
+        Sign(cell: (8, 12), dialogue: "sign_deep"),
+        Checkpoint(cell: (10, 12)),
+        Chest(id: "gantry_chest", cell: (17, 7), items: [("tome_fire", 1)]),
+        // The furnaces, in two beats: go when the one ahead goes out, stop on the
+        // clear tile, go again.
+        Fire(cell: (13, 12), phase: 0),
+        Fire(cell: (16, 12), phase: 60),
+        Fire(cell: (19, 12), phase: 0),
+        Fire(cell: (22, 12), phase: 60),
+        Fire(cell: (25, 12), phase: 0),
+        Fire(cell: (28, 12), phase: 60),
+        Checkpoint(cell: (31, 12)),
+        // The ferry: a tile short of each lip, with a plank over the tile.
+        Platform(from: (34, 13), to: (43, 13), tiles: 3, speed: 72.0, phase: 0),
+        Checkpoint(cell: (49, 12)),
+        // The pistons.
+        Swing(anchor: (57, 4), length: 250.0, amplitude: 38.0, period: 180, phase: 0),
+        Swing(anchor: (66, 4), length: 250.0, amplitude: 38.0, period: 180, phase: 90),
+        Checkpoint(cell: (71, 12)),
+        Door(id: "heart_door", cell: (79, 12), to: "maps/ark_heart.ron", at: "entry", art: "hatch"),
+        Chest(id: "secret_forge", cell: (77, 4), items: [("starmetal_blade", 1)]),
+        Decor(cell: (3, 10), prop: "torch"),
+        Decor(cell: (12, 5), prop: "pipe"),
+        Decor(cell: (12, 6), prop: "pipe"),
+        Decor(cell: (30, 9), prop: "vent"),
+        Decor(cell: (40, 10), prop: "torch"),
+        Decor(cell: (53, 9), prop: "console"),
+        Decor(cell: (61, 11), prop: "vent"),
+        Decor(cell: (70, 9), prop: "torch"),
+    ],
+)

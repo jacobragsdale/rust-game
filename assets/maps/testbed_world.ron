@@ -1,0 +1,51 @@
+// Fixture for the level's furniture: doors and exits, a locked door and its
+// key, a chest, a checkpoint, a sign, and a lever wired to a gate — one of
+// each, in a straight corridor, in the order a player meets them.
+//
+// FROZEN like every testbed: tapes encode its pixels. Add to it; do not move
+// what is here.
+//
+// 40x12 tiles at 32px = 1280x384. Floor surface y=320 the whole way across.
+//
+//   col  2   P, spawn
+//   col  5   sign          `sign_proving_hall`
+//   col  8   iron key      lying on the floor
+//   col 11   checkpoint
+//   cols 14-15  spikes on the floor — jump them; walk in and die
+//   col 20   chest         5 coins and a mana draught
+//   col 23   lever         throws quest.testbed.gate
+//   col 26   gate          two tiles tall, shut until the lever is thrown
+//   cols 29-30  door       `cellar`, locked with the iron key, to the annex
+//   col 36   Spawn "east"  where the annex's exit puts you back
+//   cols 38-39  exit       walk off the east edge into the annex
+Level(
+    tileset: "castle",
+    name: "The Proving Hall",
+    grid: [
+        "########################################",
+        "#......................................#",
+        "#......................................#",
+        "#......................................#",
+        "#......................................#",
+        "#......................................#",
+        "#......................................#",
+        "#.......................................",
+        "#.......................................",
+        "#.P...........^^........................",
+        "########################################",
+        "########################################",
+    ],
+    entities: [
+        Sign(cell: (5, 9), dialogue: "sign_proving_hall"),
+        Item(cell: (8, 9), item: "iron_key"),
+        Checkpoint(cell: (11, 9)),
+        Chest(cell: (20, 9), items: [("coin", 5), ("mana_potion", 1)]),
+        Lever(cell: (23, 9), flag: "quest.testbed.gate"),
+        Gate(cell: (26, 9), flag: "quest.testbed.gate"),
+        Door(cell: (29, 9), id: "cellar", to: "maps/testbed_world_b.ron", at: "cellar", locked: "iron_key"),
+        Spawn(id: "east", cell: (36, 9)),
+        Exit(cell: (39, 7), size: (1, 3), to: "maps/testbed_world_b.ron", at: "west"),
+        Decor(cell: (4, 6), prop: "torch"),
+        Decor(cell: (33, 6), prop: "torch"),
+    ],
+)

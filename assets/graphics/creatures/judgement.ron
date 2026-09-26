@@ -1,0 +1,44 @@
+// The Choir's own bolt. 14x14 frames.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image creatures/judgement
+Pixels(
+    palette: {
+        'a': (140, 50, 190),
+        'b': (230, 140, 255),
+        'c': (255, 240, 255),
+    },
+    frames: [
+        [
+            "..............",
+            "....aaaaaa....",
+            "..aaaaaaaaaa..",
+            "..aabbbbbaaa..",
+            ".aabbbbbbbbaa.",
+            ".aabbccccbbaa.",
+            ".aabbccccbbaa.",
+            ".aabbccccbbaa.",
+            ".aabbccccbbaa.",
+            ".aaabbbbbbba..",
+            "..aabbbbbbaa..",
+            "..aaaaaaaaaa..",
+            "....aaaaa.....",
+            "..............",
+        ],
+        [
+            "..............",
+            ".....aaaaa....",
+            "..aaaaaaaaaa..",
+            "..aabbbbbbaa..",
+            "..abbbbbbbaaa.",
+            ".aabbccccbbaa.",
+            ".aabbccccbbaa.",
+            ".aabbccccbbaa.",
+            ".aabbccccbbaa.",
+            ".aabbbbbbbbaa.",
+            "..aaabbbbbaa..",
+            "..aaaaaaaaaa..",
+            "....aaaaaa....",
+            "..............",
+        ],
+    ],
+)

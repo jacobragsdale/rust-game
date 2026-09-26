@@ -59,7 +59,7 @@ use crate::ecs::components::{
     DerivedStats, Equipment, Health, Inventory, Loot, Mana, Pickup, Position, Size, Stats, Team,
 };
 use crate::ecs::spawn;
-use crate::physics::Aabb;
+use crate::physics::{Aabb, SolidQuery};
 use crate::sim::event::GameEvent;
 use crate::sim::rng::Rng;
 use crate::systems::input::{Action, ActionSet, PlayerInput};
@@ -105,18 +105,26 @@ pub fn effective(
                 // The weapon's chain replaces the opener; the rest of it
                 // follows `chain` in the attack table from there.
                 if let Some(opener) = combo.first() {
-                    out.attack.clone_from(opener);
+                    out.attack = Some(opener.clone());
                 }
             }
-            ItemKind::Equipment { modifiers, .. } => {
+            ItemKind::Equipment {
+                modifiers, spell, ..
+            } => {
                 for modifier in modifiers {
                     apply(&mut out, *modifier);
+                }
+                // A tome is a spell, not a number: it replaces the one the
+                // wearer knows rather than adding to it, and taking it off
+                // hands back exactly the spell the base block names.
+                if let Some(spell) = spell {
+                    out.spell = Some(spell.clone());
                 }
             }
             // Not equippable, so it cannot be in a slot. Skipped rather than
             // rejected: the check that an item is wearable belongs at the
             // point it is put on, not at every read of it.
-            ItemKind::Consumable { .. } => {}
+            ItemKind::Consumable { .. } | ItemKind::Carried => {}
         }
     }
     Arc::new(out)
@@ -183,13 +191,22 @@ pub fn holder(world: &World) -> Option<hecs::Entity> {
 /// Runs in the resolve phase, so the test is against where the bodies actually
 /// finished the tick. A bag with no room leaves the item on the floor and says
 /// so once — silence would be indistinguishable from the pickup not existing.
-pub fn collect_pickups(world: &mut World, events: &mut Vec<GameEvent>) {
+///
+/// Returns the world flags of the items taken that a map placed, for the sim
+/// to set: the map is built from its flags, and a flag is what stops a taken
+/// item being put back the next time it is.
+pub fn collect_pickups(world: &mut World, events: &mut Vec<GameEvent>) -> Vec<String> {
+    let mut remembered = Vec::new();
     let Some(holder) = holder(world) else {
-        return;
+        return remembered;
     };
     let Some(reach) = entity_box(world, holder) else {
-        return;
+        return remembered;
     };
+    // Dead hands pick nothing up.
+    if world.get::<&Health>(holder).is_ok_and(|h| h.dead()) {
+        return remembered;
+    }
 
     // Collected first because the loop below mutates the world, and sorted by
     // entity id because two drops in a heap must go into the bag in an order
@@ -227,6 +244,13 @@ pub fn collect_pickups(world: &mut World, events: &mut Vec<GameEvent>) {
 
         if taken {
             events.push(GameEvent::PickedUp { item, count });
+            if let Some(flag) = world
+                .get::<&Pickup>(entity)
+                .ok()
+                .and_then(|p| p.flag.clone())
+            {
+                remembered.push(flag);
+            }
             collected.push(entity);
         } else if let Ok(mut pickup) = world.get::<&mut Pickup>(entity) {
             if !pickup.refused {
@@ -242,6 +266,7 @@ pub fn collect_pickups(world: &mut World, events: &mut Vec<GameEvent>) {
         // leaving.
         let _ = world.despawn(entity);
     }
+    remembered
 }
 
 /// Roll every dead thing's loot table once and put the results on the floor.
@@ -254,7 +279,11 @@ pub fn collect_pickups(world: &mut World, events: &mut Vec<GameEvent>) {
 /// same seed produce different loot depending on which components happened to
 /// have been added that run, which is exactly the kind of irreproducibility
 /// tapes and golden traces exist to rule out.
-pub fn drop_loot(world: &mut World, rng: &mut Rng) {
+///
+/// Drops are laid out side by side from the corpse, and a spot that would put
+/// one inside a wall puts it on the corpse instead: a knight killed against a
+/// wall used to leave its third drop embedded in the stone, uncollectable.
+pub fn drop_loot<Q: SolidQuery + ?Sized>(world: &mut World, solids: &Q, rng: &mut Rng) {
     let mut corpses: Vec<hecs::Entity> = world
         .query::<(&Health, &Loot)>()
         .iter()
@@ -264,12 +293,16 @@ pub fn drop_loot(world: &mut World, rng: &mut Rng) {
     corpses.sort_by_key(|entity| entity.id());
 
     for corpse in corpses {
-        let Some((drops, origin, gravity, max_fall)) = drop_site(world, corpse) else {
-            continue;
-        };
+        // Marked first, whatever happens next: a corpse that could not be
+        // placed used to be retried every tick, which made how many numbers
+        // the generator gave up depend on which components it happened to
+        // carry — the irreproducibility this function exists to rule out.
         if let Ok(mut loot) = world.get::<&mut Loot>(corpse) {
             loot.dropped = true;
         }
+        let Some((drops, origin, gravity, max_fall)) = drop_site(world, corpse) else {
+            continue;
+        };
 
         let mut placed = 0u32;
         for drop in &drops {
@@ -277,7 +310,13 @@ pub fn drop_loot(world: &mut World, rng: &mut Rng) {
             if !landed || drop.count == 0 {
                 continue;
             }
-            let at = origin + Vec2::new(placed as f32 * DROP_SPACING, 0.0);
+            let mut at = origin + Vec2::new(placed as f32 * DROP_SPACING, 0.0);
+            let box_ = Aabb::new(at.x, at.y, spawn::PICKUP_SIZE.x, spawn::PICKUP_SIZE.y);
+            let mut near = Vec::new();
+            solids.overlapping(box_, &mut near);
+            if near.iter().any(|s| !s.one_way && s.rect.overlaps(&box_)) {
+                at = origin;
+            }
             spawn::pickup(world, &drop.item, drop.count, at, gravity, max_fall);
             placed += 1;
         }
@@ -344,18 +383,69 @@ pub fn give_item(
     added
 }
 
-/// Take `count` of `item` out of `holder`'s bag. Returns whether they were all
-/// there to take; changes nothing if they were not.
+/// How many of `item` `holder` owns: what is in the bag plus anything worn.
+pub fn owned(world: &World, holder: hecs::Entity, item: &str) -> u32 {
+    let in_bag = world
+        .get::<&Inventory>(holder)
+        .map_or(0, |bag| bag.count(item));
+    let worn = world.get::<&Equipment>(holder).map_or(0, |gear| {
+        gear.slots.values().filter(|id| *id == item).count() as u32
+    });
+    in_bag + worn
+}
+
+/// Take `count` of `item` from `holder` — out of the bag first, then off
+/// their body. Returns whether there were that many to take; changes nothing
+/// if there were not.
 ///
-/// The counterpart of [`give_item`], and dialogue's `TakeItem`. Silent: handing
-/// something over is already reported by the `ChoiceTaken` that caused it, and
-/// an item leaving the bag is visible in `item.<id>.count` on the very next
-/// frame of the trace.
-pub fn take_item(world: &mut World, holder: hecs::Entity, item: &str, count: u32) -> bool {
-    world
-        .get::<&mut Inventory>(holder)
-        .map(|mut bag| bag.remove(item, count))
-        .unwrap_or(false)
+/// The counterpart of [`give_item`], and dialogue's `TakeItem`. Worn items
+/// count because [`owned`] counts them, and a condition that says "you have
+/// the helm" has to be backed by an effect that can take the helm. Taking one
+/// off the body is announced as the `Unequipped` it is; taking one out of the
+/// bag is silent, because the `ChoiceTaken` that caused it already says so and
+/// `item.<id>.count` shows it on the next frame.
+pub fn take_item(
+    world: &mut World,
+    holder: hecs::Entity,
+    item: &str,
+    count: u32,
+    events: &mut Vec<GameEvent>,
+) -> bool {
+    if owned(world, holder, item) < count {
+        return false;
+    }
+    let from_bag = world
+        .get::<&Inventory>(holder)
+        .map_or(0, |bag| bag.count(item))
+        .min(count);
+    if from_bag > 0 {
+        if let Ok(mut bag) = world.get::<&mut Inventory>(holder) {
+            bag.remove(item, from_bag);
+        }
+    }
+    let mut still_owed = count - from_bag;
+    if still_owed > 0 {
+        if let Ok(mut gear) = world.get::<&mut Equipment>(holder) {
+            let slots: Vec<Slot> = gear
+                .slots
+                .iter()
+                .filter(|(_, id)| *id == item)
+                .map(|(slot, _)| *slot)
+                .collect();
+            for slot in slots {
+                if still_owed == 0 {
+                    break;
+                }
+                gear.slots.remove(&slot);
+                still_owed -= 1;
+                events.push(GameEvent::Unequipped {
+                    item: item.to_string(),
+                    slot,
+                });
+            }
+        }
+    }
+    true
 }
 
 /// Restore health, clamped to the derived maximum.
@@ -366,6 +456,22 @@ pub fn take_item(world: &mut World, holder: hecs::Entity, item: &str, count: u32
 pub fn heal(world: &mut World, entity: hecs::Entity, amount: i32) {
     if let Ok(mut health) = world.get::<&mut Health>(entity) {
         health.current = (health.current + amount).min(health.max);
+    }
+}
+
+/// Remove every item that has fallen past `limit` — off the bottom of the map,
+/// where nothing can ever reach it. A dropped potion over a pit used to fall
+/// for the rest of the run, counted in `pickups` forever.
+pub fn cull_fallen(world: &mut World, limit: f32) {
+    let gone: Vec<hecs::Entity> = world
+        .query::<(&Pickup, &Position)>()
+        .iter()
+        .filter(|(_, (_, pos))| pos.0.y > limit)
+        .map(|(entity, _)| entity)
+        .collect();
+    for entity in gone {
+        // Despawning a pickup is allowed; see the module doc.
+        let _ = world.despawn(entity);
     }
 }
 
@@ -718,7 +824,7 @@ mod tests {
             panic!("iron_sword should be a weapon");
         };
         assert_eq!(derived.damage_bonus, base.damage_bonus + damage);
-        assert_eq!(&derived.attack, &combo[0]);
+        assert_eq!(derived.attack.as_ref(), Some(&combo[0]));
     }
 
     /// The test the whole `DerivedStats` split exists for. Over a long random
@@ -773,7 +879,7 @@ mod tests {
                             }
                         }
                     }
-                    ItemKind::Consumable { .. } => {}
+                    ItemKind::Consumable { .. } | ItemKind::Carried => {}
                 }
             }
 
@@ -1053,6 +1159,65 @@ mod tests {
         assert!(grounded, "and landed rather than hovering");
     }
 
+    /// A corpse against a wall must not leave drops inside it: the spacing
+    /// that lays them out side by side is pulled back onto the corpse rather
+    /// than into the stone, where nothing could ever pick one up.
+    #[test]
+    fn a_drop_that_would_land_in_a_wall_lands_on_the_corpse_instead() {
+        let mut sim = Sim::fixture(&["..........#", "..P.......#", "###########"]);
+        for _ in 0..30 {
+            sim.step(PlayerInput::default());
+        }
+        let corpse = corpse_with(
+            &mut sim,
+            vec![
+                drop("knight_helm", 1.0),
+                drop("minor_potion", 1.0),
+                drop("iron_sword", 1.0),
+            ],
+        );
+        // Flush against the wall at x = 320.
+        let width = sim
+            .world
+            .get::<&crate::ecs::components::Size>(corpse)
+            .unwrap()
+            .0
+            .x;
+        sim.world.get::<&mut Position>(corpse).unwrap().0.x = 320.0 - width;
+        sim.step(PlayerInput::default());
+
+        let wall = Aabb::new(320.0, 0.0, 32.0, 64.0);
+        for (_, (pickup, pos)) in sim.world.query::<(&Pickup, &Position)>().iter() {
+            let box_ = Aabb::new(pos.0.x, pos.0.y, spawn::PICKUP_SIZE.x, spawn::PICKUP_SIZE.y);
+            assert!(
+                !box_.overlaps(&wall),
+                "{} landed inside the wall",
+                pickup.item
+            );
+        }
+        assert_eq!(pickup_count(&sim.world), 3, "nothing was lost either");
+    }
+
+    /// An item dropped over a pit falls out of the world and is gone, rather
+    /// than falling for the rest of the run and being counted forever.
+    #[test]
+    fn an_item_that_falls_out_of_the_world_is_removed() {
+        let mut sim = Sim::fixture(&["..P.......", "###....###"]);
+        spawn::pickup(
+            &mut sim.world,
+            "minor_potion",
+            1,
+            Vec2::new(150.0, 0.0),
+            1400.0,
+            900.0,
+        );
+        assert_eq!(pickup_count(&sim.world), 1);
+        for _ in 0..240 {
+            sim.step(PlayerInput::default());
+        }
+        assert_eq!(pickup_count(&sim.world), 0);
+    }
+
     /// The property the whole seeded-RNG rule exists for: the same seed and
     /// the same fight produce the same drops, every time.
     #[test]
@@ -1288,6 +1453,44 @@ mod tests {
             bare + sword_damage,
             "the sword's own damage should be what changed"
         );
+    }
+
+    /// A tome in the Spell slot is what `cast` throws, and taking it off puts
+    /// the spark back: the spell is a derived stat like the combo's opener.
+    #[test]
+    fn a_tome_changes_what_cast_throws_and_taking_it_off_restores_the_spark() {
+        let first_cast = |tome: Option<&str>| -> String {
+            let mut sim =
+                Sim::fixture(&["................", "..P.............", "################"]);
+            if let Some(id) = tome {
+                let holder = holder(&sim.world).unwrap();
+                let mut equipment = sim.world.get::<&mut Equipment>(holder).unwrap();
+                equipment.slots.insert(Slot::Spell, id.to_string());
+            }
+            for tick in 0..120 {
+                let input = if tick == 30 {
+                    PlayerInput::from_actions(&[Action::Cast])
+                } else {
+                    PlayerInput::default()
+                };
+                sim.step(input);
+                if let Some(spell) = sim.events().iter().find_map(|e| match e {
+                    GameEvent::SpellCast { spell } => Some(spell.clone()),
+                    _ => None,
+                }) {
+                    return spell;
+                }
+            }
+            panic!("never cast");
+        };
+
+        let items = items();
+        let ItemKind::Equipment { spell, .. } = &items.get("tome_frost").expect("shipped").kind
+        else {
+            panic!("tome_frost should be equipment");
+        };
+        assert_eq!(first_cast(Some("tome_frost")), spell.clone().unwrap());
+        assert_eq!(first_cast(None), "shock");
     }
 
     // --- selection --------------------------------------------------------

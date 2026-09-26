@@ -58,7 +58,13 @@ Dialogue(
                 Choice(
                     text: "I brought your draught back.",
                     next: "thanks",
-                    condition: HasItem("minor_potion"),
+                    // Only a draught she lent you: any potion off a knight
+                    // used to unlock this, and asking, returning and asking
+                    // again handed out a charm every time round.
+                    condition: All([
+                        FlagEq("quest.draught.stage", 1),
+                        HasItem("minor_potion"),
+                    ]),
                     effects: [
                         TakeItem("minor_potion", 1),
                         GiveItem("elder_charm", 1),
@@ -88,7 +94,80 @@ Dialogue(
                         SetFlag("quest.helm.stage", 2),
                     ],
                 ),
+                // --- after the crypt ------------------------------------------
+                //
+                // Everything below is gated on the story having got somewhere,
+                // so the greeting the M5 and M6 tapes count is the greeting it
+                // always was. New replies go here, above the farewell — a
+                // reply's position in this list is what a trace records.
+
+                // The hand-off to the Thornwood: the Warden is dead, the call
+                // has stopped, and Runa opens the east gate.
+                Choice(
+                    text: "The Warden is dead.",
+                    next: "warden_dead",
+                    condition: All([
+                        FlagAtLeast("quest.crypt.warden", 1),
+                        FlagEq("quest.east.stage", 0),
+                    ]),
+                ),
+                Choice(
+                    text: "Could you make something of these pelts?",
+                    next: "hood",
+                    condition: All([HasItems("wolf_pelt", 3), FlagEq("quest.hood.stage", 0)]),
+                    effects: [
+                        TakeItem("wolf_pelt", 3),
+                        GiveItem("wolf_hood", 1),
+                        SetFlag("quest.hood.stage", 1),
+                    ],
+                ),
+                // The homecoming: once the Choir is dead, the taken come back.
+                Choice(
+                    text: "Did they come home?",
+                    next: "home",
+                    condition: FlagAtLeast("quest.ark.choir", 1),
+                ),
                 Choice(text: "Not now.", next: None),
+            ],
+        ),
+        "warden_dead": Node(
+            speaker: "Runa the Herbalist",
+            lines: [
+                "Then that is why the night went quiet. I felt the call stop, like a held breath let go.",
+                "But the ones it took are not coming back up those stairs, are they. Forty of us went down.",
+                "There is a man in the Thornwood, east of here - Ossian. He was a knight before any of us were born.",
+                "He watches the lights that come down on the hill. If anyone knows where our people went, he does.",
+                "The east gate has been barred since the knights came down. Here - the key.",
+            ],
+            choices: [
+                Choice(
+                    text: "I will find them.",
+                    next: None,
+                    effects: [GiveItem("gate_key", 1), SetFlag("quest.east.stage", 1)],
+                ),
+            ],
+        ),
+        "hood": Node(
+            speaker: "Runa the Herbalist",
+            lines: [
+                "Wolf. Good thick winter coats, too. Give me a moment and a needle.",
+                "There. It will keep your ears warm, and it is lighter than any helm.",
+            ],
+            choices: [
+                Choice(text: "Thank you, Runa.", next: None),
+            ],
+        ),
+        "home": Node(
+            speaker: "Runa the Herbalist",
+            lines: [
+                "The sky opened over the hill this morning and let them down, slowly, like a mother setting down a child.",
+                "Thirty-eight walked into Ashford at noon. Two we will bury. Thirty-eight.",
+                "My husband among them. Without his helm, and without his ring - I gave both away, thinking him dead.",
+                "He laughed at that. He does not remember where he has been. I think that is a mercy.",
+                "Whatever you are now - whatever they made of you up there - you will always have a place at my fire.",
+            ],
+            choices: [
+                Choice(text: "It is good to be home.", next: None),
             ],
         ),
         "who": Node(

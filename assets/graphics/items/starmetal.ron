@@ -1,0 +1,28 @@
+// An item icon: starmetal. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/starmetal
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (130, 50, 170),
+        'c': (206, 120, 240),
+        'd': (150, 236, 255),
+        'e': (240, 246, 255),
+    },
+    frames: [
+        [
+            ".........aaa",
+            "........adea",
+            ".......adeda",
+            "......adeda.",
+            ".....adeda..",
+            "....adeda...",
+            ".aa.aeda....",
+            ".abadda.....",
+            "..aba.......",
+            ".acaba......",
+            "aca.aa......",
+            "aa..........",
+        ],
+    ],
+)

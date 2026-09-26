@@ -1,0 +1,38 @@
+// A frost lance, flying right. 20x10 frames.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image creatures/frost
+Pixels(
+    palette: {
+        'a': (110, 180, 240),
+        'b': (150, 210, 250),
+        'c': (180, 230, 255),
+        'd': (200, 240, 255),
+        'e': (240, 252, 255),
+    },
+    frames: [
+        [
+            "....................",
+            "............c.......",
+            "d.....d..ccccccc....",
+            "....d.cccccccccceee.",
+            "..dccccccccccccceee.",
+            "..baaaaaaaaaaaaaeee.",
+            "....b.aaaaaaaaaaeee.",
+            "b.....b..aaaaaaa....",
+            "............a.......",
+            "....................",
+        ],
+        [
+            "....................",
+            "............c.......",
+            ".d.....d.ccccccc....",
+            ".....dcccccccccceee.",
+            "...dcccccccccccceee.",
+            "...baaaaaaaaaaaaeee.",
+            ".....baaaaaaaaaaeee.",
+            ".b.....b.aaaaaaa....",
+            "............a.......",
+            "....................",
+        ],
+    ],
+)

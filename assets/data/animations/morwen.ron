@@ -1,0 +1,8 @@
+// Morwen of the Hollow Hills — a champion of the Proving Circle, in the
+// player's art gone violet. Her hex is the player's shock bolt, and her tint
+// is on it too.
+ClipSet(
+    base: "player",
+    tint: (184, 140, 255),
+    clips: {},
+)

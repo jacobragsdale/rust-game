@@ -1,0 +1,15 @@
+// A sign: a conversation with one node and nothing to say back. Signs are
+// `Sign(cell:, dialogue:)` in a map, and read with `interact` like anyone.
+Dialogue(
+    id: "sign_proving_hall",
+    start: "read",
+    nodes: {
+        "read": Node(
+            speaker: "A worn sign",
+            lines: [
+                "THE PROVING HALL. Key, chest, lever, gate, door.",
+                "Mind the spikes. The fire in the brazier remembers you.",
+            ],
+        ),
+    },
+)

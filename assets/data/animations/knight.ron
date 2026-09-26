@@ -16,6 +16,15 @@
 // the character across the cell (its head drifts from -4 to +60 px of centre),
 // so once it is airborne for real the sprite will slide relative to a position
 // that comes from physics. Fine while it only walks.
+// **Per-clip offsets.** The pack does not keep the body in the same place
+// across its files: measured against the torso and legs, idle stands 3px right
+// of its cell's centre, the attack wind-up 5px left of it, and the fall frames
+// a full 46px to the right — the jump sheet carries the character across the
+// cell as it rises. With only the set's offset, a knight lurched backwards
+// every time it started a swing and was drawn most of a tile away from its
+// own collider whenever it was knocked into the air. Each clip's `offset`
+// (x measured facing right, mirrored facing left) puts that clip's body back
+// over the collider. The villager shares the art, and so the numbers.
 ClipSet(
     // Every knight animation draws the feet at row 44 of its 64px cell,
     // leaving 20px of empty space below. Push the art down by that much so it
@@ -25,6 +34,7 @@ ClipSet(
         "idle": Clip(
             sheet: "knight/knightIdle",
             frame_size: (64.0, 64.0),
+            offset: (-3.0, 0.0),
             frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0),
                      (8, 0), (9, 0), (10, 0), (11, 0), (12, 0), (13, 0), (14, 0)],
             fps: 10.0,
@@ -33,6 +43,7 @@ ClipSet(
         "run": Clip(
             sheet: "knight/knightRun",
             frame_size: (96.0, 64.0),
+            offset: (-2.0, 0.0),
             frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0)],
             fps: 12.0,
             looping: true,
@@ -51,6 +62,7 @@ ClipSet(
         "fall": Clip(
             sheet: "knight/knightJumpAndFall",
             frame_size: (144.0, 64.0),
+            offset: (-46.0, 0.0),
             frames: [(7, 0), (8, 0), (9, 0)],
             fps: 8.0,
             looping: true,
@@ -61,6 +73,7 @@ ClipSet(
         "attack": Clip(
             sheet: "knight/knightAttack",
             frame_size: (144.0, 64.0),
+            offset: (5.0, 0.0),
             frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0),
                      (6, 0), (7, 0), (8, 0), (9, 0), (10, 0), (11, 0)],
             fps: 20.0,
@@ -69,6 +82,7 @@ ClipSet(
         "death": Clip(
             sheet: "knight/knightDeath",
             frame_size: (96.0, 64.0),
+            offset: (-1.0, 0.0),
             frames: [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0),
                      (8, 0), (9, 0), (10, 0), (11, 0), (12, 0), (13, 0), (14, 0)],
             fps: 12.0,

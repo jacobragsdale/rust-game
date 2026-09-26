@@ -1,0 +1,15 @@
+// The top of the Beacon: the Taking. A trigger in front of the light.
+Dialogue(
+    id: "beacon_top",
+    start: "light",
+    nodes: {
+        "light": Node(
+            speaker: "The Beacon",
+            lines: [
+                "The fire on the tower is not fire. It is a column of white light, and it goes straight up into a hole in the sky.",
+                "Something up there is looking down at you. It has been looking for a long time.",
+                "Forty went up from Ashford. Step into the light, and you will be forty-one.",
+            ],
+        ),
+    },
+)

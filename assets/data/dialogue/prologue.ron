@@ -1,0 +1,19 @@
+// The first thing the game says: a trigger in the barracks, on the spawn, so
+// it opens the moment a new game starts. What happened, who you are, and why
+// you are the only one left.
+Dialogue(
+    id: "prologue",
+    start: "wake",
+    nodes: {
+        "wake": Node(
+            speaker: "The barracks",
+            lines: [
+                "Three nights ago the sky over the castle burned green.",
+                "By dawn every knight in the garrison had walked out of the gate with nothing in their eyes, answering a call you could not hear.",
+                "You heard nothing. You never have - not since the night you lit a candle with a word and told no one.",
+                "The cots around you are empty. The castle is silent.",
+                "Find out where they went.",
+            ],
+        ),
+    },
+)

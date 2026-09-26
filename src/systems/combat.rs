@@ -15,9 +15,10 @@ use hecs::World;
 
 use crate::assets::AttackTable;
 use crate::ecs::components::{
-    Attacking, Avatar, Body, DerivedStats, Health, Kind, Patrol, Position, Size, Team, Velocity,
+    Attacking, Avatar, Body, Casting, Contact, DerivedStats, Health, Hostile, Kind, Patrol,
+    Position, Size, Team, Velocity,
 };
-use crate::physics::Aabb;
+use crate::physics::{Aabb, HazardQuery};
 use crate::sim::event::{DeathCause, GameEvent};
 
 /// Count down the per-tick combat timers.
@@ -123,6 +124,12 @@ pub fn resolve(world: &mut World, attacks: &AttackTable, events: &mut Vec<GameEv
         }
     }
 
+    // Entity order, not archetype order. Two blows reaching one target on the
+    // same tick are resolved first-come, and the first grants the i-frames
+    // that turn the second away — so which knockback the victim takes, and
+    // the order `Damaged` goes into the trace, have to be facts about the
+    // world rather than about which entity last gained a component.
+    landed.sort_by_key(|(attacker, target, _)| (target.id(), attacker.id()));
     for (attacker, target, id) in landed {
         let Some(def) = attacks.get(&id) else {
             continue;
@@ -135,9 +142,68 @@ pub fn resolve(world: &mut World, attacks: &AttackTable, events: &mut Vec<GameEv
             attacking.hit.push(target);
         }
 
+        // A plunge comes down on top of a shield, never into its face.
+        let from_above = matches!(def.anchor, crate::assets::HitboxAnchor::Down);
+        if !from_above && guarded(world, target, centre_x(world, attacker)) {
+            rebuff(world, attacker, target, events);
+            continue;
+        }
+
         let damage = melee_damage(world, attacker, def.damage);
         apply_hit(world, target, damage, impulse, def.hitstun, events);
     }
+}
+
+/// How long a blow that meets a shield staggers the one who threw it, and how
+/// hard it throws them back. A shield that only absorbed would be a wall to
+/// hit until it broke; one that throws you off is a door to wait at — the
+/// answer is to hit it while it swings.
+const REBUFF_HITSTUN: u32 = 10;
+const REBUFF: Vec2 = Vec2::new(160.0, -60.0);
+
+/// Would a blow arriving from `from_x` meet `target`'s shield?
+///
+/// Only a kind whose block says `guard`, only from the side it faces, and
+/// only while it is ready: a swing or a cast of its own, or reeling from a
+/// hit, leaves it open — which is the whole of how a shield is fought.
+pub fn guarded(world: &World, target: hecs::Entity, from_x: f32) -> bool {
+    let guards = world
+        .get::<&DerivedStats>(target)
+        .is_ok_and(|stats| stats.0.guard);
+    if !guards {
+        return false;
+    }
+    let ready = world
+        .get::<&Health>(target)
+        .is_ok_and(|h| !h.dead() && h.hitstun == 0)
+        && world.get::<&Attacking>(target).map_or(true, |a| !a.busy())
+        && world.get::<&Casting>(target).map_or(true, |c| !c.busy());
+    let in_front = (from_x > centre_x(world, target)) == facing_right(world, target);
+    ready && in_front
+}
+
+/// A blow turned by a shield: nothing lands, the attacker is thrown back off
+/// it and staggered, and it says so.
+pub fn rebuff(
+    world: &mut World,
+    attacker: hecs::Entity,
+    target: hecs::Entity,
+    events: &mut Vec<GameEvent>,
+) {
+    let away = if centre_x(world, attacker) < centre_x(world, target) {
+        -1.0
+    } else {
+        1.0
+    };
+    if let Ok(mut vel) = world.get::<&mut Velocity>(attacker) {
+        vel.0 = Vec2::new(away * REBUFF.x, REBUFF.y);
+    }
+    if let Ok(mut health) = world.get::<&mut Health>(attacker) {
+        health.hitstun = health.hitstun.max(REBUFF_HITSTUN);
+    }
+    events.push(GameEvent::Blocked {
+        who: kind_of(world, target),
+    });
 }
 
 /// What a swing is actually worth: the attack's own damage plus whatever the
@@ -175,6 +241,10 @@ pub fn apply_hit(
 ) -> bool {
     let who = kind_of(world, target);
     let mut died = false;
+    // Too heavy to stagger: the blow hurts and shoves, and does not stun.
+    let steadfast = world
+        .get::<&DerivedStats>(target)
+        .is_ok_and(|stats| stats.0.steadfast);
 
     if let Ok(mut health) = world.get::<&mut Health>(target) {
         if !health.vulnerable() {
@@ -182,7 +252,7 @@ pub fn apply_hit(
         }
         health.current -= damage;
         health.iframes = health.iframe_ticks;
-        health.hitstun = hitstun;
+        health.hitstun = if steadfast { 0 } else { hitstun };
         died = health.dead();
 
         events.push(GameEvent::Damaged {
@@ -192,6 +262,7 @@ pub fn apply_hit(
         });
     }
 
+    // Thrown either way: steadfast is not being stunned, not being immovable.
     if let Ok(mut vel) = world.get::<&mut Velocity>(target) {
         vel.0 = impulse;
     }
@@ -203,6 +274,61 @@ pub fn apply_hit(
         });
     }
     true
+}
+
+/// Everything that hurts by touching lands on whatever of the other side it
+/// is touching: a bat's bite, a slime's burn.
+///
+/// Tested at final positions beside the sword and the bolt, and through the
+/// same [`apply_hit`], so i-frames are what stop a body resting against a bat
+/// from being bitten every tick. Something dead or reeling does not bite —
+/// a bat knocked into you by your own sword has not attacked you. A bite that
+/// lands starts the biter's cooldown, which is what a flyer breaks off for.
+pub fn contact_hits(world: &mut World, events: &mut Vec<GameEvent>) {
+    let mut landed: Vec<(hecs::Entity, hecs::Entity, Vec2, i32, u32)> = Vec::new();
+    for (toucher, (contact, pos, size, team, health)) in world
+        .query::<(&Contact, &Position, &Size, &Team, &Health)>()
+        .iter()
+    {
+        if health.dead() || health.hitstun > 0 {
+            continue;
+        }
+        let body = Aabb::new(pos.0.x, pos.0.y, size.0.x, size.0.y);
+        for (target, (their_pos, their_size, their_team, their_health)) in
+            world.query::<(&Position, &Size, &Team, &Health)>().iter()
+        {
+            if target == toucher || their_team == team || !their_health.vulnerable() {
+                continue;
+            }
+            let theirs = Aabb::new(their_pos.0.x, their_pos.0.y, their_size.0.x, their_size.0.y);
+            if !body.overlaps(&theirs) {
+                continue;
+            }
+            let away = if theirs.x + theirs.w / 2.0 >= body.x + body.w / 2.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            let def = &contact.0;
+            let impulse = Vec2::new(away * def.knockback.0, def.knockback.1);
+            landed.push((toucher, target, impulse, def.damage, def.hitstun));
+        }
+    }
+    // Entity order, for the reason `resolve` sorts.
+    landed.sort_by_key(|(toucher, target, ..)| (target.id(), toucher.id()));
+    for (toucher, target, impulse, damage, hitstun) in landed {
+        if apply_hit(world, target, damage, impulse, hitstun, events) {
+            let cooldown = world
+                .get::<&DerivedStats>(toucher)
+                .ok()
+                .and_then(|stats| stats.0.ai.as_ref().map(|ai| ai.cooldown));
+            if let (Ok(mut hostile), Some(cooldown)) =
+                (world.get::<&mut Hostile>(toucher), cooldown)
+            {
+                hostile.cooldown = cooldown;
+            }
+        }
+    }
 }
 
 /// The horizontal centre of an entity's collider, or 0 for something that has
@@ -219,6 +345,65 @@ fn centre_x(world: &World, entity: hecs::Entity) -> f32 {
     pos.0.x + half
 }
 
+/// Kill every NPC that has walked, been knocked or fallen into something
+/// lethal — the same hazards and the same bottom of the world the player dies
+/// to.
+///
+/// Before this, a knight knocked into a spike pit fell forever and never
+/// died, never dropped its loot, and read as alive in every trace; knocking an
+/// enemy into the spikes is also the most satisfying way to kill one, and a
+/// level designer should be able to build around it. The player's own version
+/// of this lives in [`crate::systems::avatar::after_move`], which owns the
+/// respawn that follows.
+pub fn environmental_deaths<H: HazardQuery + ?Sized>(
+    world: &mut World,
+    hazards: &H,
+    fall_limit: f32,
+    events: &mut Vec<GameEvent>,
+) {
+    let mut dead: Vec<(hecs::Entity, String, DeathCause)> = Vec::new();
+    for (entity, (kind, pos, size, health)) in world
+        .query::<(&Kind, &Position, &Size, &Health)>()
+        .without::<&Avatar>()
+        .iter()
+    {
+        if health.dead() {
+            continue;
+        }
+        let body = Aabb::new(pos.0.x, pos.0.y, size.0.x, size.0.y);
+        let cause = if pos.0.y > fall_limit {
+            DeathCause::FellOutOfWorld
+        } else if hazards.hazard_overlapping(body) {
+            DeathCause::Hazard
+        } else {
+            continue;
+        };
+        dead.push((entity, kind.0.clone(), cause));
+    }
+    // Entity order, so two deaths on one tick are reported the same way every
+    // run rather than in archetype order.
+    dead.sort_by_key(|(entity, ..)| entity.id());
+    for (entity, who, cause) in dead {
+        if let Ok(mut health) = world.get::<&mut Health>(entity) {
+            health.current = 0;
+        }
+        events.push(GameEvent::Died { who, cause });
+    }
+}
+
+/// The death flags of everything that is dead, for the sim to set. Cheap to
+/// ask every tick: only the handful of NPCs a map marks carry one.
+pub fn death_flags(world: &World) -> Vec<String> {
+    let mut flags: Vec<(u32, String)> = world
+        .query::<(&Health, &crate::ecs::components::DeathFlag)>()
+        .iter()
+        .filter(|(_, (health, _))| health.dead())
+        .map(|(entity, (_, flag))| (entity.id(), flag.0.clone()))
+        .collect();
+    flags.sort();
+    flags.into_iter().map(|(_, flag)| flag).collect()
+}
+
 /// Stop the dead: a corpse keeps its position but does nothing further.
 ///
 /// Deliberately not a despawn. NPCs are addressed by spawn index in traces and
@@ -230,8 +415,10 @@ pub fn settle_dead(world: &mut World) {
         if !health.dead() {
             continue;
         }
-        // Let the knockback play out, then stay put.
-        if body.grounded {
+        // Let the knockback play out, then stay put. "Grounded" alone froze a
+        // body on the very tick the killing blow threw it up off the floor,
+        // so the last hit of a fight never knocked anything anywhere.
+        if body.grounded && vel.0.y >= 0.0 {
             vel.0 = Vec2::ZERO;
             body.frozen = true;
         }
@@ -247,8 +434,8 @@ fn kind_of(world: &World, entity: hecs::Entity) -> String {
         .unwrap_or_else(|_| "player".to_string())
 }
 
-/// Which way an attacker is facing, for aiming its hitbox.
-fn facing_right(world: &World, entity: hecs::Entity) -> bool {
+/// Which way an attacker is facing, for aiming its hitbox — or its spell.
+pub(crate) fn facing_right(world: &World, entity: hecs::Entity) -> bool {
     if let Ok(avatar) = world.get::<&Avatar>(entity) {
         return avatar.facing_right;
     }
@@ -366,6 +553,120 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    /// Too heavy to stagger: the blow still hurts and still shoves — only the
+    /// hitstun, the part that takes steering away, never lands. An ordinary
+    /// victim beside it is the control.
+    #[test]
+    fn a_steadfast_heavy_is_hurt_and_shoved_but_never_staggered() {
+        let mut world = World::new();
+        let stats = StatTable::shipped().get("brakka").unwrap();
+        assert!(stats.steadfast, "the shipped brakka is steadfast");
+        let heavy = victim(&mut world, 122.0, 10);
+        world.insert_one(heavy, DerivedStats(stats)).unwrap();
+        let a = attacker(&mut world, 100.0, true);
+        world.get::<&mut Attacking>(a).unwrap().start("swing");
+        let mut control = World::new();
+        let plain = victim(&mut control, 122.0, 10);
+        let b = attacker(&mut control, 100.0, true);
+        control.get::<&mut Attacking>(b).unwrap().start("swing");
+
+        run(&mut world, 4);
+        run(&mut control, 4);
+        assert_eq!(hp(&world, heavy), 8, "hurt");
+        assert!(world.get::<&Velocity>(heavy).unwrap().0.x > 0.0, "shoved");
+        assert_eq!(
+            world.get::<&Health>(heavy).unwrap().hitstun,
+            0,
+            "not staggered"
+        );
+        assert!(
+            control.get::<&Health>(plain).unwrap().hitstun > 0,
+            "the control is"
+        );
+    }
+
+    /// A shield-bearer: the victim, facing `facing_right`, with the shipped
+    /// block of a kind that guards.
+    fn shield(world: &mut World, x: f32, facing_right: bool) -> hecs::Entity {
+        let v = victim_with(world, x, 10, iframes("shieldbearer"));
+        let stats = StatTable::shipped().get("shieldbearer").unwrap();
+        assert!(stats.guard, "the shipped shieldbearer guards");
+        world
+            .insert(
+                v,
+                (
+                    DerivedStats(stats),
+                    Patrol::new(if facing_right { 1.0 } else { -1.0 }, 0.0),
+                    Attacking::default(),
+                ),
+            )
+            .unwrap();
+        v
+    }
+
+    /// Into a shield's face while it stands ready: nothing lands, the one who
+    /// swung is thrown back off it and staggered, and it says so.
+    #[test]
+    fn a_swing_into_a_ready_shield_is_turned_and_throws_the_attacker_back() {
+        let mut world = World::new();
+        let v = shield(&mut world, 122.0, false); // faces left, at the attacker
+        let a = attacker(&mut world, 100.0, true);
+        world.get::<&mut Attacking>(a).unwrap().start("swing");
+
+        let events = run(&mut world, 10);
+        assert_eq!(hp(&world, v), 10, "nothing got through");
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, GameEvent::Blocked { who } if who == "knight")));
+        assert!(world.get::<&Velocity>(a).unwrap().0.x < 0.0, "thrown back");
+        assert!(
+            !world.get::<&Attacking>(a).unwrap().busy(),
+            "and the swing dropped"
+        );
+    }
+
+    /// The three ways past a shield: from behind, from above, and while it
+    /// is busy swinging itself.
+    #[test]
+    fn a_shield_is_open_from_behind_from_above_and_while_it_swings() {
+        // Behind: it faces away.
+        let mut world = World::new();
+        let v = shield(&mut world, 122.0, true);
+        let a = attacker(&mut world, 100.0, true);
+        world.get::<&mut Attacking>(a).unwrap().start("swing");
+        run(&mut world, 10);
+        assert_eq!(hp(&world, v), 8, "behind it, the blow lands");
+
+        // Committed: its own swing is up.
+        let mut world = World::new();
+        let v = shield(&mut world, 122.0, false);
+        world.get::<&mut Attacking>(v).unwrap().start("swing");
+        assert!(!guarded(&world, v, 100.0), "swinging, it is open");
+        world.get::<&mut Attacking>(v).unwrap().stop();
+        assert!(guarded(&world, v, 100.0) && !guarded(&world, v, 200.0));
+        world.get::<&mut Health>(v).unwrap().hitstun = 5;
+        assert!(!guarded(&world, v, 100.0), "reeling, it is open");
+
+        // From above: a `Down`-anchored blow is never into its face.
+        let mut world = World::new();
+        let v = shield(&mut world, 100.0, false);
+        let a = attacker(&mut world, 100.0, true);
+        world.get::<&mut Position>(a).unwrap().0.y = 80.0;
+        let mut attacks = table();
+        let mut plunge = attacks.0["swing"].clone();
+        plunge.anchor = crate::assets::HitboxAnchor::Down;
+        plunge.offset = (0.0, 24.0);
+        attacks.0.insert("plunge".to_string(), plunge);
+        world.get::<&mut Attacking>(a).unwrap().start("plunge");
+        let mut events = Vec::new();
+        for _ in 0..10 {
+            tick_timers(&mut world);
+            advance_attacks(&mut world, &attacks, &mut events);
+            resolve(&mut world, &attacks, &mut events);
+        }
+        assert_eq!(hp(&world, v), 8, "a plunge comes down on top of it");
     }
 
     #[test]
@@ -580,5 +881,60 @@ mod tests {
         run(&mut world, 10);
         assert_eq!(hp(&world, v), 10);
         assert!(!world.get::<&Attacking>(a).unwrap().busy());
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use crate::sim::event::{DeathCause, GameEvent};
+    use crate::sim::Sim;
+    use crate::systems::input::PlayerInput;
+
+    /// A knight that walks into spikes dies of them, exactly as the player
+    /// would — and says so, so the kill is countable in a tape.
+    #[test]
+    fn an_npc_that_walks_into_a_hazard_dies_of_it() {
+        let mut sim = Sim::fixture(&["..........", "..P..K.^..", "##########"]);
+        let mut died = None;
+        for _ in 0..240 {
+            sim.step(PlayerInput::default());
+            if let Some(event) = sim
+                .events()
+                .iter()
+                .find(|e| matches!(e, GameEvent::Died { who, .. } if who == "knight"))
+            {
+                died = Some(event.clone());
+                break;
+            }
+        }
+        assert_eq!(
+            died,
+            Some(GameEvent::Died {
+                who: "knight".to_string(),
+                cause: DeathCause::Hazard
+            })
+        );
+        assert!(sim.npc_probes()[0].dead);
+    }
+
+    /// ...and one that falls out of the bottom of the map is dead rather than
+    /// falling for the rest of the run.
+    #[test]
+    fn an_npc_that_falls_out_of_the_world_dies() {
+        let mut sim = Sim::fixture(&["..P.......", "####......", ".........K"]);
+        // The knight stands on nothing at all: its cell is the bottom row.
+        let mut causes = Vec::new();
+        for _ in 0..240 {
+            sim.step(PlayerInput::default());
+            for event in sim.events() {
+                if let GameEvent::Died { who, cause } = event {
+                    causes.push((who.clone(), *cause));
+                }
+            }
+        }
+        assert_eq!(
+            causes,
+            vec![("knight".to_string(), DeathCause::FellOutOfWorld)]
+        );
     }
 }

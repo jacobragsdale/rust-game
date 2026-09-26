@@ -31,6 +31,16 @@ pub struct Clip {
     pub sheet: Option<String>,
     #[serde(default)]
     pub frame_size: Option<(f32, f32)>,
+    /// Drawing nudge for this clip alone, on top of the set's, measured facing
+    /// right and mirrored facing left.
+    ///
+    /// Art packs rarely keep a body in the same place across animations: the
+    /// knight's run is drawn ten pixels ahead of where its attack wind-up is,
+    /// so with one offset for the whole set it lurched backwards every time
+    /// it started a swing. A per-clip nudge puts each animation's body back
+    /// over the collider it belongs to.
+    #[serde(default)]
+    pub offset: Option<(f32, f32)>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -49,10 +59,39 @@ pub struct ClipSet {
     /// ground it is standing on.
     #[serde(default)]
     pub offset: Option<(f32, f32)>,
+    /// A colour every frame of this set is multiplied by, as 0-255 RGB.
+    ///
+    /// For art borrowed from another kind: the villager is drawn from the
+    /// knight's sheets, and without a tint the thing you talk to and the thing
+    /// that stabs you would be the same pixels. Content rather than a special
+    /// case in the renderer, so the next borrowed look is a line of RON.
+    #[serde(default)]
+    pub tint: Option<(u8, u8, u8)>,
+    /// Another clip set, by name, to start from: every clip and default this
+    /// file does not give is that set's. A kind drawn from another's art —
+    /// the villager, the mage, the warden are all the knight's sheets — is
+    /// then a tint and whatever it does differently, rather than a copy of
+    /// sixty lines that drifts from the original. One level only, so a chain
+    /// can never loop.
+    #[serde(default)]
+    pub base: Option<String>,
+    #[serde(default)]
     pub clips: HashMap<String, Clip>,
 }
 
 impl ClipSet {
+    /// Fill in everything this set leaves out from `from`, the set it names
+    /// as its `base`. What this set says wins, clip by clip.
+    fn inherit(&mut self, from: ClipSet) {
+        self.sheet = self.sheet.take().or(from.sheet);
+        self.frame_size = self.frame_size.or(from.frame_size);
+        self.offset = self.offset.or(from.offset);
+        self.tint = self.tint.or(from.tint);
+        for (name, clip) in from.clips {
+            self.clips.entry(name).or_insert(clip);
+        }
+    }
+
     pub fn clip(&self, name: &str) -> Option<&Clip> {
         self.clips.get(name)
     }
@@ -60,6 +99,27 @@ impl ClipSet {
     /// Drawing nudge for this art, or none.
     pub fn offset(&self) -> (f32, f32) {
         self.offset.unwrap_or((0.0, 0.0))
+    }
+
+    /// The nudge for one clip: the set's plus the clip's own.
+    pub fn offset_of(&self, clip: &Clip) -> (f32, f32) {
+        let (sx, sy) = self.offset();
+        let (cx, cy) = clip.offset.unwrap_or((0.0, 0.0));
+        (sx + cx, sy + cy)
+    }
+
+    /// The set's tint as a colour to multiply by, white for none.
+    pub fn tint(&self) -> ggez::graphics::Color {
+        match self.tint {
+            Some((r, g, b)) => ggez::graphics::Color::from_rgb(r, g, b),
+            None => ggez::graphics::Color::WHITE,
+        }
+    }
+
+    /// The pixel rectangle one frame of a clip occupies on its sheet.
+    pub fn frame_rect(&self, clip: &Clip, frame: (u32, u32)) -> Rect {
+        let (fw, fh) = self.frame_size_of(clip);
+        Rect::new(frame.0 as f32 * fw, frame.1 as f32 * fh, fw, fh)
     }
 
     /// The sheet a clip's frames live on. The result borrows from whichever of
@@ -111,6 +171,27 @@ impl ClipSet {
             "clip set `{name}`: clips {missing:?} have no sheet or frame_size, \
              and the set does not provide a default"
         );
+
+        // A clip with nothing in it passes every headless check — the
+        // animator skips it — and then crashes the first draw that reaches it.
+        let mut clips: Vec<(&String, &Clip)> = self.clips.iter().collect();
+        clips.sort_by_key(|(clip_name, _)| *clip_name);
+        for (clip_name, clip) in clips {
+            anyhow::ensure!(
+                !clip.frames.is_empty(),
+                "clip set `{name}`: clip `{clip_name}` has no frames"
+            );
+            anyhow::ensure!(
+                clip.fps > 0.0,
+                "clip set `{name}`: clip `{clip_name}` has fps {}, which never advances",
+                clip.fps
+            );
+            let (w, h) = self.frame_size_of(clip);
+            anyhow::ensure!(
+                w >= 1.0 && h >= 1.0,
+                "clip set `{name}`: clip `{clip_name}` has a {w}x{h} frame"
+            );
+        }
         Ok(())
     }
 }
@@ -311,6 +392,10 @@ pub enum SpellEffect {
         /// Carry on through whatever it hits, rather than expiring on contact.
         #[serde(default)]
         pierces: bool,
+        /// Flown at the nearest foe rather than straight ahead: a drone
+        /// hanging in the air has nothing level with it to shoot at.
+        #[serde(default)]
+        aimed: bool,
     },
 }
 
@@ -371,6 +456,10 @@ pub struct ItemDef {
     /// `tests/data.rs` checks `sheet:` and `image:` for existence but not
     /// `sprite:`.
     pub sprite: String,
+    /// One line the inventory shows for the selected item. Optional, because
+    /// a potion that says "Minor Health Potion" has already said most of it.
+    #[serde(default)]
+    pub description: String,
     pub kind: ItemKind,
 }
 
@@ -382,7 +471,7 @@ impl ItemDef {
         match &self.kind {
             ItemKind::Weapon { .. } => Some(Slot::Weapon),
             ItemKind::Equipment { slot, .. } => Some(*slot),
-            ItemKind::Consumable { .. } => None,
+            ItemKind::Consumable { .. } | ItemKind::Carried => None,
         }
     }
 
@@ -414,11 +503,20 @@ pub enum ItemKind {
     },
     /// Spent from the bag for an immediate effect.
     Consumable { effects: Vec<ItemEffect> },
-    /// Worn in a slot, contributing [`StatModifier`]s for as long as it is.
+    /// Worn in a slot, contributing [`StatModifier`]s for as long as it is —
+    /// and, for a tome, the spell its wearer casts instead of their own.
     Equipment {
         slot: Slot,
         modifiers: Vec<StatModifier>,
+        #[serde(default)]
+        spell: Option<String>,
     },
+    /// Only carried: a key a door asks for, the coin a merchant takes, a
+    /// letter someone is waiting on. What it is *for* is written wherever it is
+    /// asked for — a door's `locked:`, a reply's `HasItems` — so pressing
+    /// `confirm` on one in the bag does nothing, rather than spending it the
+    /// way it would spend an effect-less consumable.
+    Carried,
 }
 
 /// Where a piece of equipment is worn.
@@ -438,11 +536,21 @@ pub enum Slot {
     Body,
     Weapon,
     Trinket,
+    /// The spell the player casts. Empty is the spark they were born with —
+    /// the player's own `spell` — and a tome worn here replaces it. Last, so
+    /// every save and every sum that walked four slots walks them unchanged.
+    Spell,
 }
 
 impl Slot {
     /// Every slot, in the order the equipment pane lists them.
-    pub const ALL: [Slot; 4] = [Slot::Head, Slot::Body, Slot::Weapon, Slot::Trinket];
+    pub const ALL: [Slot; 5] = [
+        Slot::Head,
+        Slot::Body,
+        Slot::Weapon,
+        Slot::Trinket,
+        Slot::Spell,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -450,6 +558,7 @@ impl Slot {
             Slot::Body => "Body",
             Slot::Weapon => "Weapon",
             Slot::Trinket => "Trinket",
+            Slot::Spell => "Spell",
         }
     }
 }
@@ -571,8 +680,15 @@ pub struct DialogueChoice {
 /// to someone who was never asked for it, and duplicating the whole node.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub enum DialogueCondition {
-    /// The player is carrying at least one of this item.
+    /// The player has at least one of this item, in the bag or worn.
     HasItem(String),
+    /// The player has at least this many — `HasItems("coin", 10)` is a price.
+    HasItems(String, u32),
+    /// The inner condition does not hold: "has not been asked yet".
+    Not(Box<DialogueCondition>),
+    /// At least one of these holds. An empty list does not, which is the
+    /// identity of an `any`.
+    Any(Vec<DialogueCondition>),
     /// A quest flag is exactly this. An unset flag reads as 0.
     FlagEq(String, i64),
     /// A quest flag has reached at least this stage.
@@ -597,6 +713,8 @@ pub enum DialogueCondition {
 pub enum DialogueEffect {
     /// Set a quest flag to a stage.
     SetFlag(String, i64),
+    /// Add to a flag — a count rather than a stage: "the third bell rung".
+    AddFlag(String, i64),
     /// Put items in the bag, exactly as walking over them would.
     GiveItem(String, u32),
     /// Take items out of it. Does nothing if they are not there.
@@ -723,8 +841,31 @@ pub struct StatBlock {
     /// of a combo ever lands.
     pub iframe_ticks: u32,
     /// The attack this kind opens with, from `assets/data/attacks.ron`. The
-    /// rest of a combo is data: each attack names its own successor.
-    pub attack: String,
+    /// rest of a combo is data: each attack names its own successor. Absent
+    /// for a kind with no sword to swing — a bat bites by touching, a mage
+    /// casts.
+    #[serde(default)]
+    pub attack: Option<String>,
+    /// On the player's side: cannot be hurt by the player, is never hunted by
+    /// an enemy's AI, and does not hunt. A villager. Everything else a map
+    /// places is an enemy.
+    #[serde(default)]
+    pub friendly: bool,
+    /// A hit dealt just by touching — a bat's bite, a slime's burn.
+    #[serde(default)]
+    pub contact: Option<ContactDef>,
+    /// Carries a shield: a blow or a bolt from in front does nothing while it
+    /// is ready — not swinging, not casting, not reeling — and throws the
+    /// attacker back off it. From behind, from above, or while it is
+    /// committed to a swing of its own, it is as open as anything. See
+    /// `combat::guarded`.
+    #[serde(default)]
+    pub guard: bool,
+    /// Too heavy to stagger: a blow still hurts and still shoves, but it does
+    /// not stun — so a combo does not keep it helpless, and it swings back
+    /// through yours. See `combat::apply_hit`.
+    #[serde(default)]
+    pub steadfast: bool,
     /// Flat damage added to every melee hit this kind lands, on top of the
     /// attack's own.
     ///
@@ -770,6 +911,51 @@ pub struct StatBlock {
     /// Present only for a kind that walks a route and hunts.
     #[serde(default)]
     pub ai: Option<AiStats>,
+    /// Present only for a kind that fights with the player's own kit — a
+    /// rival champion. With an `avatar` group beside it, a map places one as
+    /// an avatar with a brain at its controls rather than as something that
+    /// walks a route.
+    #[serde(default)]
+    pub brain: Option<BrainStats>,
+}
+
+/// How a fighter with the player's kit decides what to press. Spelled
+/// `BrainStats(...)` in the RON file; [`crate::systems::brain`] is what reads
+/// it.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "BrainStats")]
+pub struct BrainStats {
+    /// It wakes when the other side comes this close, centre to centre, and
+    /// fights until one of them is down.
+    pub sight: f32,
+    /// Ticks between decisions. It holds what it chose in between, so this is
+    /// its reaction time: 10 is a sixth of a second, about a person's; lower
+    /// is harder.
+    pub reaction: u32,
+    /// Throws its spell at anything inside this gap and out of sword reach.
+    /// Zero for a fighter that never casts.
+    #[serde(default)]
+    pub cast_range: f32,
+    /// Takes to the air: jumps up to a target above it, and plunges onto one
+    /// below.
+    #[serde(default)]
+    pub aerial: bool,
+}
+
+/// What touching one of these does to the other side. Spelled
+/// `Contact(...)` in the RON file.
+///
+/// Dealt through the same `combat::apply_hit` a sword and a bolt go through,
+/// so a bite respects i-frames and emits `damaged` like any other blow. After
+/// landing one, a hostile kind backs off for its `ai.cooldown` — which is what
+/// turns "stuck to the player" into a swoop.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "Contact")]
+pub struct ContactDef {
+    pub damage: i32,
+    /// Impulse on whatever it touches, pointing away from it.
+    pub knockback: (f32, f32),
+    pub hitstun: u32,
 }
 
 /// The knobs [`crate::systems::avatar`] steers with. Spelled
@@ -799,7 +985,7 @@ pub struct AvatarStats {
     /// clipping a corner, or bouncing off on the way up — and without a grace
     /// window the wall jump only exists while a slide is held.
     pub wall_coyote_ticks: u32,
-    /// One-way platforms are ignored for this long after down+jump.
+    /// One-way platforms are ignored for this long after pressing down on one.
     pub drop_ticks: u32,
     /// How long a slide lasts, matching the `slide` clip.
     pub slide_ticks: u32,
@@ -857,6 +1043,10 @@ pub struct AiStats {
     /// Gives up once the player is this far away — wider than `sight`, so an
     /// enemy at the edge of its vision does not flicker between states.
     pub lose: f32,
+    /// ...or this far above or below. Much looser than `sight_height`, which
+    /// is roughly a body: a chase that ended the moment the player jumped was
+    /// a chase any player could end at will.
+    pub lose_height: f32,
     /// Close enough to swing.
     pub reach: f32,
     /// Ticks between swings. Long enough that closing in, landing a hit and
@@ -873,6 +1063,15 @@ pub struct AiStats {
     pub lookahead: f32,
     /// How far below the feet counts as "there is still floor here".
     pub floor_probe: f32,
+    /// Flies: no gravity while alive, no ledges to turn at, and the player is
+    /// seen in every direction rather than only in front. Dies and falls like
+    /// anything else.
+    #[serde(default)]
+    pub flying: bool,
+    /// Casts its `spell` at a player within this many pixels, and does not
+    /// close further than this to do it. Zero for a kind that never casts.
+    #[serde(default)]
+    pub cast_range: f32,
 }
 
 impl StatBlock {
@@ -956,6 +1155,66 @@ impl<'de> Deserialize<'de> for StatTable {
     }
 }
 
+/// One burst of particles: what a hit, a death or a landing looks like.
+/// Spelled `Burst(...)` in `assets/data/effects.ron`.
+///
+/// Every range is picked from uniformly, per particle, off the view's own
+/// generator — presentation never draws on [`crate::sim::rng`], so tuning an
+/// effect cannot move a trace.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "Burst")]
+pub struct EffectDef {
+    pub count: u32,
+    /// Launch speed, px/s.
+    pub speed: (f32, f32),
+    /// Launch direction in degrees, screen-wise: 0 is right, 90 down, 270 up.
+    pub angle: (f32, f32),
+    /// How many ticks each particle lives. It fades over the second half.
+    pub life: (u32, u32),
+    /// Each particle is a square this many pixels across.
+    pub size: (f32, f32),
+    /// px/s², down. Negative rises — smoke, sparks off a flame.
+    pub gravity: f32,
+    /// Each particle is one of these, 0-255 RGB.
+    pub colours: Vec<(u8, u8, u8)>,
+}
+
+/// Every effect, by the name the view asks for it by. Spelled
+/// `Effects({...})` in the RON file; [`crate::view::fx::CUES`] lists the
+/// names, and `tests/data.rs` checks each is here.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename = "Effects")]
+pub struct EffectTable(pub HashMap<String, EffectDef>);
+
+impl EffectTable {
+    pub fn get(&self, name: &str) -> Option<&EffectDef> {
+        self.0.get(name)
+    }
+
+    /// Ranges the right way round, and something to draw.
+    fn validate(&self) -> anyhow::Result<()> {
+        let mut names: Vec<&String> = self.0.keys().collect();
+        names.sort();
+        for name in names {
+            let def = &self.0[name];
+            anyhow::ensure!(
+                def.count > 0 && !def.colours.is_empty(),
+                "effect `{name}` has no particles, or no colours to draw them in"
+            );
+            anyhow::ensure!(
+                def.speed.0 <= def.speed.1
+                    && def.angle.0 <= def.angle.1
+                    && def.life.0 <= def.life.1
+                    && def.size.0 <= def.size.1
+                    && def.life.0 > 0
+                    && def.size.0 > 0.0,
+                "effect `{name}`: every range is (low, high), and a particle needs life and size"
+            );
+        }
+        Ok(())
+    }
+}
+
 /// How a logical map cell maps onto tiles of the atlas, chosen by looking at
 /// a solid cell's neighbors. All values are 0-based tile indices.
 /// Spelled `Rules(...)` in the RON files.
@@ -984,9 +1243,53 @@ pub struct TilesetDef {
     /// Pixels of exactly this color become transparent (e.g. magenta keys).
     pub transparent_color: Option<(u8, u8, u8)>,
     pub rules: AutotileRules,
+    /// Named pieces of the atlas a map can place by name — `Decor(prop:
+    /// "torch")`, a door's `art:` — as `(column, row, width, height)` in
+    /// tiles. The same rule autotiling keeps: maps never contain tile indices,
+    /// so repainting a tileset never means editing a map.
+    #[serde(default)]
+    pub props: HashMap<String, (u32, u32, u32, u32)>,
+    /// Multiplies every tile, prop and piece of decor drawn from this set:
+    /// the same stone in another light. Absent is the art as painted.
+    #[serde(default)]
+    pub tint: Option<(u8, u8, u8)>,
+    /// What shows where nothing is drawn — a night sky, the dark of a hold.
+    /// Absent is the view's default dusk.
+    #[serde(default)]
+    pub clear: Option<(u8, u8, u8)>,
 }
 
 impl TilesetDef {
+    /// The colour everything drawn from this set is multiplied by.
+    pub fn tint_color(&self) -> crate::render::Color {
+        self.tint.map_or(crate::render::Color::WHITE, |(r, g, b)| {
+            crate::render::Color::from_rgb(r, g, b)
+        })
+    }
+
+    /// The pixel rectangle a named prop occupies on the tileset's image.
+    pub fn prop_rect(&self, name: &str) -> Option<Rect> {
+        let &(col, row, w, h) = self.props.get(name)?;
+        let ts = self.tile_size as f32;
+        Some(Rect::new(
+            col as f32 * ts,
+            row as f32 * ts,
+            w as f32 * ts,
+            h as f32 * ts,
+        ))
+    }
+
+    /// The pixel rectangle a tile index occupies on the tileset's image.
+    pub fn tile_rect(&self, tile: u32) -> Rect {
+        let ts = self.tile_size as f32;
+        Rect::new(
+            (tile % self.columns) as f32 * ts,
+            (tile / self.columns) as f32 * ts,
+            ts,
+            ts,
+        )
+    }
+
     /// Normalized source rect for a tile index.
     pub fn src_rect(&self, tile: u32, sheet_w: f32, sheet_h: f32) -> Rect {
         let ts = self.tile_size as f32;
@@ -1011,6 +1314,7 @@ pub struct Assets {
     stats: Option<Arc<StatTable>>,
     items: Option<Arc<ItemTable>>,
     dialogue: Option<Arc<DialogueTable>>,
+    effects: Option<Arc<EffectTable>>,
 }
 
 impl Default for Assets {
@@ -1049,6 +1353,7 @@ impl Assets {
             stats: None,
             items: None,
             dialogue: None,
+            effects: None,
         }
     }
 
@@ -1056,8 +1361,14 @@ impl Assets {
         &self.base
     }
 
-    /// Decode `assets/graphics/{name}.png` to RGBA, applying an optional
-    /// color key.
+    /// Decode the image called `name` to RGBA, applying an optional color key.
+    ///
+    /// An image is `assets/graphics/{name}.png` or, failing that,
+    /// `assets/graphics/{name}.ron` — pixel art written as text, see
+    /// [`PixelArt`]. One namespace for both, so a clip set, an item's `sprite:`
+    /// or a tileset names an image without knowing which kind it is, and art
+    /// drawn as text today can be replaced by a PNG tomorrow without touching
+    /// anything that names it.
     ///
     /// Split out of [`Assets::image`] because it needs no graphics context,
     /// which lets asset checks inspect exactly the pixels the game uploads.
@@ -1067,6 +1378,13 @@ impl Assets {
         color_key: Option<(u8, u8, u8)>,
     ) -> anyhow::Result<image::RgbaImage> {
         let path = self.base.join("graphics").join(format!("{name}.png"));
+        let pixels = self.base.join("graphics").join(format!("{name}.ron"));
+        if !path.exists() && pixels.exists() {
+            let art: PixelArt = load_ron(&pixels)?;
+            return art
+                .to_image()
+                .with_context(|| format!("invalid pixel art {}", pixels.display()));
+        }
         let bytes =
             fs::read(&path).with_context(|| format!("failed to read image {}", path.display()))?;
         let decoded = image::load_from_memory(&bytes)
@@ -1108,11 +1426,25 @@ impl Assets {
         if let Some(set) = self.clip_sets.get(name) {
             return Ok(set.clone());
         }
-        let path = self
-            .base
-            .join("data/animations")
-            .join(format!("{name}.ron"));
-        let set: ClipSet = load_ron(&path)?;
+        let read = |name: &str| -> anyhow::Result<ClipSet> {
+            load_ron(
+                &self
+                    .base
+                    .join("data/animations")
+                    .join(format!("{name}.ron")),
+            )
+        };
+        let mut set = read(name)?;
+        if let Some(base) = set.base.clone() {
+            let from =
+                read(&base).with_context(|| format!("clip set `{name}` is built on `{base}`"))?;
+            anyhow::ensure!(
+                from.base.is_none(),
+                "clip set `{name}` is built on `{base}`, which is built on another in turn — \
+                 one level only"
+            );
+            set.inherit(from);
+        }
         set.validate(name)?;
         let set = Arc::new(set);
         self.clip_sets.insert(name.to_string(), set.clone());
@@ -1138,6 +1470,21 @@ impl Assets {
         let table: SpellTable = load_ron(&self.base.join("data/spells.ron"))?;
         let table = Arc::new(table);
         self.spells = Some(table.clone());
+        Ok(table)
+    }
+
+    /// Load `assets/data/effects.ron`. One table for the whole game.
+    pub fn effects(&mut self) -> anyhow::Result<Arc<EffectTable>> {
+        if let Some(table) = &self.effects {
+            return Ok(table.clone());
+        }
+        let path = self.base.join("data/effects.ron");
+        let table: EffectTable = load_ron(&path)?;
+        table
+            .validate()
+            .with_context(|| path.display().to_string())?;
+        let table = Arc::new(table);
+        self.effects = Some(table.clone());
         Ok(table)
     }
 
@@ -1311,17 +1658,162 @@ fn validate_dialogue(graph: &DialogueGraph, path: &std::path::Path) -> anyhow::R
     Ok(())
 }
 
+/// An image drawn as text: a palette of characters and the frames they paint.
+/// Spelled `Pixels(...)` in `assets/graphics/**/*.ron`.
+///
+/// This is the art pipeline for an author who cannot open a paint program.
+/// Every pixel is a character an agent can write, diff and review, and the
+/// result is an ordinary image to everything downstream — a clip set names it
+/// as `sheet: "bat"` exactly as it would name a PNG. `cargo run --bin sheet --
+/// --image <name>` draws one large enough to look at.
+///
+/// ```ron
+/// Pixels(
+///     palette: { 'k': (24, 20, 37), 'r': (190, 38, 51) },
+///     frames: [
+///         [".kk.", "krrk", "krrk", ".kk."],
+///     ],
+/// )
+/// ```
+///
+/// `.` and space are transparent in every palette. Frames are laid left to
+/// right in one strip, so frame *i* is at cell `(i, 0)` of a clip whose
+/// `frame_size` is one frame's size. Every frame and every row must be the same
+/// size, and a character missing from the palette is an error naming it —
+/// a typo in art should fail the load, not draw a hole.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename = "Pixels")]
+pub struct PixelArt {
+    pub palette: HashMap<char, (u8, u8, u8)>,
+    pub frames: Vec<Vec<String>>,
+}
+
+impl PixelArt {
+    /// Paint the frames into one strip.
+    pub fn to_image(&self) -> anyhow::Result<image::RgbaImage> {
+        let first = self.frames.first().context("pixel art has no frames")?;
+        let height = first.len();
+        let width = first.first().map_or(0, |row| row.chars().count());
+        anyhow::ensure!(width > 0 && height > 0, "a frame must have pixels in it");
+
+        let mut image = image::RgbaImage::new((width * self.frames.len()) as u32, height as u32);
+        for (index, frame) in self.frames.iter().enumerate() {
+            anyhow::ensure!(
+                frame.len() == height,
+                "frame {index} is {} rows tall; frame 0 is {height}",
+                frame.len()
+            );
+            for (y, row) in frame.iter().enumerate() {
+                anyhow::ensure!(
+                    row.chars().count() == width,
+                    "frame {index}, row {y} is {} wide; frame 0 is {width}: {row:?}",
+                    row.chars().count()
+                );
+                for (x, ch) in row.chars().enumerate() {
+                    if ch == '.' || ch == ' ' {
+                        continue;
+                    }
+                    let Some(&(r, g, b)) = self.palette.get(&ch) else {
+                        let mut known: Vec<char> = self.palette.keys().copied().collect();
+                        known.sort_unstable();
+                        anyhow::bail!(
+                            "frame {index}, row {y}, column {x}: `{ch}` is not in the palette \
+                             (it has {known:?}; `.` and space are transparent)"
+                        );
+                    };
+                    image.put_pixel(
+                        (index * width + x) as u32,
+                        y as u32,
+                        image::Rgba([r, g, b, 255]),
+                    );
+                }
+            }
+        }
+        Ok(image)
+    }
+}
+
 /// Parse a RON data file.
 ///
 /// `implicit_some` is on so that an optional field can be written as
 /// `sheet: "knight/knightIdle"` rather than `sheet: Some("knight/knightIdle")`.
 /// These files are hand-authored content; making every optional field announce
 /// its optionality is noise for whoever is writing the twentieth NPC.
-fn load_ron<T: serde::de::DeserializeOwned>(path: &std::path::Path) -> anyhow::Result<T> {
+pub(crate) fn load_ron<T: serde::de::DeserializeOwned>(
+    path: &std::path::Path,
+) -> anyhow::Result<T> {
     let text =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     ron::Options::default()
         .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME)
         .from_str(&text)
         .with_context(|| format!("failed to parse {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn art(text: &str) -> PixelArt {
+        ron::from_str(text).expect("pixel art parses")
+    }
+
+    #[test]
+    fn pixel_art_paints_its_frames_into_one_strip() {
+        let image = art(r#"Pixels(
+                palette: { 'r': (255, 0, 0), 'b': (0, 0, 255) },
+                frames: [["r.", ".r"], ["b.", " b"]],
+            )"#)
+        .to_image()
+        .unwrap();
+        assert_eq!(image.dimensions(), (4, 2), "two 2x2 frames side by side");
+        assert_eq!(image.get_pixel(0, 0).0, [255, 0, 0, 255]);
+        assert_eq!(image.get_pixel(1, 0).0[3], 0, "`.` is transparent");
+        assert_eq!(
+            image.get_pixel(3, 1).0,
+            [0, 0, 255, 255],
+            "frame 1 at x 2..4"
+        );
+        assert_eq!(image.get_pixel(2, 1).0[3], 0, "space is transparent");
+    }
+
+    #[test]
+    fn a_character_missing_from_the_palette_names_itself() {
+        let err = art(r#"Pixels(palette: { 'r': (1, 2, 3) }, frames: [["rq"]])"#)
+            .to_image()
+            .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("`q`") && text.contains("column 1"), "{text}");
+    }
+
+    /// An empty clip passes every headless check — the animator skips it —
+    /// and then crashes the first draw that reaches it, so it fails at load.
+    #[test]
+    fn a_clip_with_no_frames_or_no_speed_is_rejected_at_load() {
+        for clip in [
+            "Clip(frames: [], fps: 8.0, looping: true)",
+            "Clip(frames: [(0, 0)], fps: 0.0, looping: true)",
+            "Clip(frames: [(0, 0)], fps: 8.0, looping: true, frame_size: (0.0, 4.0))",
+        ] {
+            let set: ClipSet = ron::Options::default()
+                .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME)
+                .from_str(&format!(
+                    r#"ClipSet(sheet: "x", frame_size: (8.0, 8.0), clips: {{ "idle": {clip} }})"#
+                ))
+                .unwrap();
+            assert!(set.validate("test").is_err(), "{clip} was accepted");
+        }
+    }
+
+    #[test]
+    fn ragged_frames_are_rejected() {
+        assert!(art(r#"Pixels(palette: {}, frames: [["..", "..."]])"#)
+            .to_image()
+            .is_err());
+        assert!(
+            art(r#"Pixels(palette: {}, frames: [[".."], ["..", ".."]])"#)
+                .to_image()
+                .is_err()
+        );
+    }
 }

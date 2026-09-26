@@ -1,0 +1,14 @@
+// At the foot of the Beacon.
+Dialogue(
+    id: "sign_beacon",
+    start: "read",
+    nodes: {
+        "read": Node(
+            speaker: "Words cut in the old stone",
+            lines: [
+                "THE WATCH-TOWER OF THE RIDGE. Light the fire if the east is burning.",
+                "Beneath it, newer and neater, in a script you should not be able to read and somehow can: GATHERING POINT SEVEN.",
+            ],
+        ),
+    },
+)

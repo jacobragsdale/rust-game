@@ -1,0 +1,29 @@
+// Mage — a caster. The knight's art (`base`), robed in violet, with a cast of
+// its own and the ember it throws.
+//
+// A spell's `clip` is played on the caster and its projectile is drawn from
+// the caster's set too (see assets/data/spells.ron), so both live here.
+ClipSet(
+    base: "knight",
+    tint: (176, 128, 255),
+    clips: {
+        // The attack sheet's wind-up alone — arm drawn back — held for the
+        // length of the cast: 4 frames at 8 fps is 30 ticks, `ember`'s
+        // cast_ticks plus recovery.
+        "cast": Clip(
+            sheet: "knight/knightAttack",
+            frame_size: (144.0, 64.0),
+            offset: (5.0, 0.0),
+            frames: [(0, 0), (1, 0), (2, 0), (3, 0)],
+            fps: 8.0,
+            looping: false,
+        ),
+        "ember_bolt": Clip(
+            sheet: "creatures/ember",
+            frame_size: (10.0, 8.0),
+            frames: [(0, 0), (1, 0)],
+            fps: 10.0,
+            looping: true,
+        ),
+    },
+)

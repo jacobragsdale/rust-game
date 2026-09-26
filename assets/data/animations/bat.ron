@@ -1,0 +1,20 @@
+// Bat — a flyer. Its own pixel art: assets/graphics/creatures/bat.ron, four
+// 16x12 frames — wings up, level, down, and dead.
+//
+// A flyer is never grounded while it lives, so the selector only ever asks it
+// for `jump` (rising) or `fall` (sinking) — both are the same flap. `idle`
+// and `run` are there for the tick it brushes a floor, and `attack` because
+// every walker's selector can reach it; a bat has no swing, so it never
+// plays.
+ClipSet(
+    sheet: "creatures/bat",
+    frame_size: (16.0, 12.0),
+    clips: {
+        "idle": Clip(frames: [(0, 0), (1, 0), (2, 0), (1, 0)], fps: 12.0, looping: true),
+        "run": Clip(frames: [(0, 0), (1, 0), (2, 0), (1, 0)], fps: 14.0, looping: true),
+        "jump": Clip(frames: [(0, 0), (1, 0), (2, 0), (1, 0)], fps: 16.0, looping: true),
+        "fall": Clip(frames: [(0, 0), (1, 0), (2, 0), (1, 0)], fps: 12.0, looping: true),
+        "attack": Clip(frames: [(2, 0)], fps: 1.0, looping: false),
+        "death": Clip(frames: [(3, 0)], fps: 1.0, looping: false),
+    },
+)

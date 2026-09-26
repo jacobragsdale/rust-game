@@ -1,0 +1,26 @@
+// An item icon: vael weave. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/vael_weave
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (38, 170, 210),
+        'c': (150, 236, 255),
+    },
+    frames: [
+        [
+            "..aa....aa..",
+            ".abba..abba.",
+            "abcbbaabcbba",
+            "abcbbccbbcba",
+            ".abbbbbbbbba",
+            "..abbabbabba",
+            "..abbcbbcbba",
+            "..abbabbabba",
+            "..abbcbbcbba",
+            "..abbbbbbbbb",
+            "..aaaaaaaaa.",
+            "............",
+        ],
+    ],
+)

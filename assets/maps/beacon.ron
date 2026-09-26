@@ -1,0 +1,84 @@
+// The Beacon — the old watch-tower on the ridge, where the light comes down.
+//
+// A climb. The tower is hollow, and the way up zig-zags from wall to wall,
+// every hop two tiles (a single jump is three, just):
+//
+//   row 34   the ground floor: the arch back to the wood, a sign, and a thrall
+//            penned under ledge 1 between the step and the wall
+//   row 30   ledge 1 (right), up a two-tile step
+//   row 26   ledge 2 (left), across a plank — a chest with a hauberk in it,
+//            and a bat hanging over it
+//   row 22   ledge 3 (right), across another plank; a shieldbearer holds it
+//   rows 12-21  the shaft: the inner wall (col 20) and the tower's own
+//            (col 23), a wall-jump climb
+//   row 12   ledge 4, over the shaft: a checkpoint, and a thrall
+//   rows 8-10  two planks stacked (cols 5-7). Level with the upper one, the
+//            wall to the left is not wall: the watchman's cubby (cols 1-4,
+//            rows 6-7) is false wall, and its chest shows through
+//   row 6    the top: the light, and the door that is the light
+//
+// Tileset `beacon`: the castle's stone under a cold moon. 24x36 tiles; the
+// camera climbs with you.
+Level(
+    tileset: "beacon",
+    name: "The Beacon",
+    grid: [
+        "########################",
+        "########################",
+        "#####..................#",
+        "#####..................#",
+        "#####..................#",
+        "#####..................#",
+        "#%%%%....#########.....#",
+        "#%%%%....#########.....#",
+        "#####===...............#",
+        "#####..................#",
+        "#....===...............#",
+        "#......................#",
+        "#........############..#",
+        "#........############..#",
+        "#...................#..#",
+        "#...................#..#",
+        "#...................#..#",
+        "#...................#..#",
+        "#...................#..#",
+        "#...................#..#",
+        "#......................#",
+        "#......................#",
+        "#.............##########",
+        "#.............##########",
+        "#........====..........#",
+        "#......................#",
+        "########...............#",
+        "########...............#",
+        "#........=====.........#",
+        "#......................#",
+        "#...............########",
+        "#...............########",
+        "#...........###........#",
+        "#...........###........#",
+        "########################",
+        "########################",
+    ],
+    entities: [
+        // NPCs, in the order a tape addresses them.
+        Npc(kind: "knight", cell: (18, 33)),
+        Npc(kind: "bat", cell: (4, 23)),
+        Npc(kind: "shieldbearer", cell: (16, 21)),
+        Npc(kind: "knight", cell: (16, 11)),
+
+        Door(id: "base", cell: (2, 33), to: "maps/thornwood.ron", at: "beacon_path", art: "archway"),
+        Spawn(id: "foot", cell: (5, 33)),
+        Sign(cell: (8, 33), dialogue: "sign_beacon"),
+        Chest(id: "ledge_chest", cell: (2, 25), items: [("thrall_mail", 1)]),
+        Checkpoint(cell: (17, 11)),
+        Chest(id: "secret_cubby", cell: (2, 7), items: [("elixir", 2), ("coin", 8)]),
+        Trigger(id: "light", cell: (9, 3), size: (2, 3), dialogue: "beacon_top"),
+        Door(id: "beam", cell: (14, 5), to: "maps/ark_hold.ron", at: "beam", art: "archway"),
+        Decor(cell: (3, 33), prop: "torch"),
+        Decor(cell: (19, 29), prop: "window_lit"),
+        Decor(cell: (4, 24), prop: "window"),
+        Decor(cell: (15, 20), prop: "torch"),
+        Decor(cell: (11, 3), prop: "window_lit"),
+    ],
+)

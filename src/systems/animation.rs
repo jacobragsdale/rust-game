@@ -5,7 +5,8 @@ use hecs::World;
 
 use crate::assets::{AttackTable, SpellTable};
 use crate::ecs::components::{
-    AnimationState, Attacking, Avatar, Body, Casting, Health, Patrol, Plunge, Sprite, Velocity,
+    AnimationState, Attacking, Avatar, Body, Casting, DerivedStats, Health, Patrol, Plunge, Sprite,
+    Velocity,
 };
 
 /// Every clip [`select_avatar_clip`] can ask for. A clip set that is missing
@@ -93,7 +94,18 @@ pub fn select_avatar_clip(world: &mut World, attacks: &AttackTable, spells: &Spe
         } else {
             "idle"
         };
-        anim.switch_to(clip);
+        // A swing or a cast started this very tick plays from its first frame
+        // even when it is the same clip as the one it follows — pressing
+        // attack on the tick slash1 lets go starts a fresh slash1, and
+        // `switch_to` alone would have left it frozen on the last frame of the
+        // old one for all twenty ticks.
+        let fresh = attacking.busy() && attacking.elapsed == 0
+            || casting.is_some_and(|c| c.busy() && c.elapsed == 0);
+        if fresh && avatar.plunge == Plunge::None {
+            anim.restart(clip);
+        } else {
+            anim.switch_to(clip);
+        }
     }
 }
 
@@ -115,19 +127,43 @@ fn plunge_clip(plunge: Plunge) -> Option<&'static str> {
 pub const PATROL_CLIPS: &[&str] = &["idle", "run", "jump", "fall", "death", "attack"];
 
 /// Map a patroller's movement state to a clip name.
-pub fn select_patrol_clip(world: &mut World) {
-    for (_, (_, body, vel, anim, health, attacking)) in world.query_mut::<(
+///
+/// A swing plays the clip its attack names, exactly as the player's does, so a
+/// kind with two attacks can animate them differently; a cast plays its
+/// spell's clip, falling back to the attack clip for art with no cast of its
+/// own. `hurt` is optional: a kind whose art has one plays it through hitstun,
+/// and a kind whose art does not (the knight) keeps moving and flashes.
+pub fn select_patrol_clip(world: &mut World, attacks: &AttackTable, spells: &SpellTable) {
+    #[allow(clippy::type_complexity)]
+    for (_, (_, body, vel, anim, health, attacking, casting, sprite, stats)) in world.query_mut::<(
         &Patrol,
         &Body,
         &Velocity,
         &mut AnimationState,
         &Health,
         &Attacking,
+        Option<&Casting>,
+        &Sprite,
+        Option<&DerivedStats>,
     )>() {
+        let swing = attacking
+            .attack
+            .as_deref()
+            .and_then(|id| attacks.get(id))
+            .map(|def| def.clip.as_str());
+        let cast = casting
+            .and_then(|c| c.spell.as_deref())
+            .and_then(|id| spells.get(id))
+            .map(|def| def.clip.as_str())
+            .filter(|clip| sprite.clips.clip(clip).is_some());
         let clip = if health.dead() {
             "death"
-        } else if attacking.busy() {
-            "attack"
+        } else if let Some(clip) = swing {
+            clip
+        } else if casting.is_some_and(|c| c.busy()) {
+            cast.unwrap_or("attack")
+        } else if health.hitstun > 0 && sprite.clips.clip("hurt").is_some() {
+            "hurt"
         } else if !body.grounded {
             if vel.0.y < 0.0 {
                 "jump"
@@ -136,10 +172,20 @@ pub fn select_patrol_clip(world: &mut World) {
             }
         } else if vel.0.x.abs() > 5.0 {
             "run"
+        } else if stats.is_some_and(|s| s.0.guard) && sprite.clips.clip("guard").is_some() {
+            // Standing ready behind a shield shows the shield: the pose is
+            // the tell for when a blow will be turned.
+            "guard"
         } else {
             "idle"
         };
-        anim.switch_to(clip);
+        let fresh = attacking.busy() && attacking.elapsed == 0
+            || casting.is_some_and(|c| c.busy() && c.elapsed == 0);
+        if fresh {
+            anim.restart(clip);
+        } else {
+            anim.switch_to(clip);
+        }
     }
 }
 
@@ -185,6 +231,7 @@ mod tests {
                 looping: true,
                 sheet: None,
                 frame_size: None,
+                offset: None,
             },
         );
         clips.insert(
@@ -195,12 +242,15 @@ mod tests {
                 looping: false,
                 sheet: None,
                 frame_size: None,
+                offset: None,
             },
         );
         ClipSet {
             sheet: Some("test".to_string()),
             frame_size: Some((50.0, 37.0)),
             offset: None,
+            tint: None,
+            base: None,
             clips,
         }
     }

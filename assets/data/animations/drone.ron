@@ -1,0 +1,24 @@
+// One of the Choir's eyes. Its own pixel art: assets/graphics/creatures/
+// drone.ron — fins up, level, down, and dead, 18x18 — and the bolt it throws.
+// A flyer is never grounded while it lives, so `jump` and `fall` are its
+// flight; `cast` is the eye flaring white.
+ClipSet(
+    sheet: "creatures/drone",
+    frame_size: (18.0, 18.0),
+    clips: {
+        "idle": Clip(frames: [(0, 0), (1, 0)], fps: 8.0, looping: true),
+        "run": Clip(frames: [(0, 0), (1, 0)], fps: 10.0, looping: true),
+        "jump": Clip(frames: [(0, 0), (1, 0)], fps: 10.0, looping: true),
+        "fall": Clip(frames: [(0, 0), (1, 0)], fps: 8.0, looping: true),
+        "attack": Clip(frames: [(2, 0)], fps: 1.0, looping: false),
+        "cast": Clip(frames: [(2, 0)], fps: 1.0, looping: false),
+        "death": Clip(frames: [(3, 0)], fps: 1.0, looping: false),
+        "zap_bolt": Clip(
+            sheet: "creatures/zap",
+            frame_size: (8.0, 8.0),
+            frames: [(0, 0), (1, 0)],
+            fps: 12.0,
+            looping: true,
+        ),
+    },
+)

@@ -1,0 +1,28 @@
+// An item icon: circle blade. 12x12.
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Generated, then kept as text. Preview: cargo run --bin sheet -- --image items/circle_blade
+Pixels(
+    palette: {
+        'a': (24, 20, 37),
+        'b': (230, 170, 40),
+        'c': (192, 203, 220),
+        'd': (254, 231, 97),
+        'e': (240, 246, 255),
+    },
+    frames: [
+        [
+            "..........aa",
+            ".........aea",
+            "........aeda",
+            ".......aeda.",
+            "......aeda..",
+            ".....aeda...",
+            ".aa.aeda....",
+            ".abacda.....",
+            "..aba.......",
+            ".ababa......",
+            "aba.aa......",
+            "aa..........",
+        ],
+    ],
+)

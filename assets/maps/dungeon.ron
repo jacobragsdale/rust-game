@@ -102,12 +102,13 @@
 // "the item at the end" can mean without a code change.
 Level(
     tileset: "castle",
+    name: "The Old Dungeon",
     grid: [
         "####################################################################",
-        "#..................................................................#",
-        "#..................................................................#",
-        "#..................................................................#",
-        "#..................................................................#",
+        "#.........................................................##########",
+        "#.........................................................#%%%%%%%%#",
+        "#.........................................................#%%%%%%%%#",
+        "#..........................................................========#",
         "#..................................................................#",
         "#...................................................===============#",
         "#..................................................................#",
@@ -130,5 +131,15 @@ Level(
         // and walked over arrives, so the ride is waited for and then boarded
         // rather than jumped at.
         Platform(from: (35, 10), to: (42, 10), tiles: 3, speed: 75.0, phase: 274),
+        // Up to the village, where the map starts.
+        Door(id: "village_stair", cell: (1, 9), to: "maps/village.ron", at: "dungeon_stair", art: "archway"),
+        // Down to the crypt, in the pit at the far end. A door rather than an
+        // exit, so standing in the pit — where `tapes/dungeon_run.tape` ends —
+        // offers the way down rather than taking it.
+        Door(id: "crypt_stair", cell: (65, 10), to: "maps/crypt.ron", at: "stair", art: "archway"),
+        // The vault over the gallery (cols 59-66, rows 2-3): false wall, on a
+        // plank floor — jump up through the plank from the gallery and you are
+        // inside. The chest shows through the stone.
+        Chest(id: "secret_vault", cell: (62, 3), items: [("elixir", 1), ("coin", 12)]),
     ],
 )

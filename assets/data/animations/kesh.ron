@@ -1,0 +1,9 @@
+// Kesh of the Glass Dunes — a champion of the Proving Circle. The player's
+// own art (`base`), in sun-bleached sand: a rival is an avatar like the
+// player, so it animates through the same selector and needs every clip the
+// player has, which building on the player's set gives it for nothing.
+ClipSet(
+    base: "player",
+    tint: (255, 214, 150),
+    clips: {},
+)

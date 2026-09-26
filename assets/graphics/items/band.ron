@@ -1,0 +1,25 @@
+// Pixel art, one character per pixel — see `PixelArt` in src/assets.rs.
+// Preview: cargo run --bin sheet -- --image items/band
+Pixels(
+    palette: {
+        'G': (192, 203, 220),
+        'g': (139, 155, 180),
+        'k': (24, 20, 37),
+    },
+    frames: [
+        [
+            "............",
+            "............",
+            "...kkkkkk...",
+            "..kgGGGGgk..",
+            ".kgGkkkkGgk.",
+            ".kGk....kGk.",
+            ".kgk....kgk.",
+            ".kgGkkkkGgk.",
+            "..kggGGggk..",
+            "...kkkkkk...",
+            "............",
+            "............",
+        ],
+    ],
+)
